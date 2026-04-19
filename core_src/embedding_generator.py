@@ -98,8 +98,27 @@ class EmbeddingGenerator:
             dim = self.config.get("embedding_dim", 512)
             return np.zeros((len(frames), dim), dtype=np.float32)
 
+    @staticmethod
+    def _to_tensor(feats, import_torch=None):
+        """
+        transformers 버전에 따라 get_image/text_features()가
+        tensor 대신 BaseModelOutputWithPooling 등 객체를 반환할 수 있음.
+        항상 tensor로 추출한다.
+        """
+        import torch
+        if isinstance(feats, torch.Tensor):
+            return feats
+        # dataclass / named output 객체: pooler_output 또는 last_hidden_state CLS 토큰 사용
+        if hasattr(feats, "pooler_output") and feats.pooler_output is not None:
+            return feats.pooler_output
+        if hasattr(feats, "last_hidden_state"):
+            return feats.last_hidden_state[:, 0]
+        # 최후 수단: 첫 번째 요소
+        return feats[0]
+
     def _run_batch_inference(self, frames: List[np.ndarray]) -> np.ndarray:
         import torch
+        import torch.nn.functional as F
         from PIL import Image
 
         all_embeddings = []
@@ -112,33 +131,32 @@ class EmbeddingGenerator:
                     imgs = imgs.half()
                 with torch.no_grad(), torch.amp.autocast("cuda", enabled=(self.device == "cuda")):
                     feats = self._model.encode_image(imgs)
-                    feats = feats / feats.norm(dim=-1, keepdim=True)
             else:
                 inputs = self._processor(images=batch, return_tensors="pt", padding=True).to(self.device)
                 with torch.no_grad():
-                    feats = self._model.get_image_features(**inputs)
-                    feats = feats / feats.norm(dim=-1, keepdim=True)
+                    feats = self._to_tensor(self._model.get_image_features(**inputs))
 
-            all_embeddings.append(feats.cpu().float().numpy())
+            feats = F.normalize(feats.float(), dim=-1)
+            all_embeddings.append(feats.cpu().numpy())
         return np.concatenate(all_embeddings, axis=0)
 
     def generate_text_embedding(self, text: str) -> np.ndarray:
         if self._model is None:
             return np.random.randn(self.config.get("embedding_dim", 512)).astype(np.float32)
         import torch
+        import torch.nn.functional as F
 
         if self._backend == "open_clip":
             tokens = self._tokenizer([text]).to(self.device)
             with torch.no_grad(), torch.amp.autocast("cuda", enabled=(self.device == "cuda")):
                 feats = self._model.encode_text(tokens)
-                feats = feats / feats.norm(dim=-1, keepdim=True)
         else:
             inputs = self._processor(text=[text], return_tensors="pt", padding=True).to(self.device)
             with torch.no_grad():
-                feats = self._model.get_text_features(**inputs)
-                feats = feats / feats.norm(dim=-1, keepdim=True)
+                feats = self._to_tensor(self._model.get_text_features(**inputs))
 
-        return feats.cpu().float().numpy()[0]
+        feats = F.normalize(feats.float(), dim=-1)
+        return feats.cpu().numpy()[0]
 
     def compute_similarity(self, query_embedding: np.ndarray, embeddings: np.ndarray) -> np.ndarray:
         q = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
