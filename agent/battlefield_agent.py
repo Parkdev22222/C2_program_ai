@@ -88,6 +88,7 @@ class BattlefieldAgent:
 
         # 툴 초기화
         self._tools = self._build_tools()
+        self._prepend_instructions = False  # system_prompt 미지원 시 True로 설정됨
 
         # smolagents CodeAgent 초기화
         self._agent = self._init_code_agent()
@@ -176,17 +177,46 @@ class BattlefieldAgent:
 
     def _init_code_agent(self):
         from smolagents import CodeAgent
+        import inspect
 
         ca_cfg = self._agent_config.get("code_agent", {})
-        return CodeAgent(
-            tools=self._tools,
-            model=self._exaone4_model,
-            max_steps=ca_cfg.get("max_steps", 20),
-            planning_interval=ca_cfg.get("planning_interval", 3),
-            stream_outputs=ca_cfg.get("stream_outputs", False),
-            additional_authorized_imports=ca_cfg.get("authorized_imports", []),
-            system_prompt=self._custom_instructions or None,
-        )
+
+        # smolagents 버전마다 허용 파라미터가 다르므로 실제 시그니처 확인 후 전달
+        valid_params = inspect.signature(CodeAgent.__init__).parameters
+
+        kwargs = {
+            "tools": self._tools,
+            "model": self._exaone4_model,
+            "max_steps": ca_cfg.get("max_steps", 20),
+            "planning_interval": ca_cfg.get("planning_interval", 3),
+            "additional_authorized_imports": ca_cfg.get("authorized_imports", []),
+        }
+
+        # stream_outputs: 구버전에만 존재
+        if "stream_outputs" in valid_params:
+            kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
+
+        # system_prompt: smolagents 1.x에서 제거됨 → prompt_templates 또는 미전달
+        if self._custom_instructions:
+            if "system_prompt" in valid_params:
+                kwargs["system_prompt"] = self._custom_instructions
+            else:
+                # 신버전: prompt_templates 방식으로 시도
+                try:
+                    from smolagents import PromptTemplates
+                    kwargs["prompt_templates"] = PromptTemplates(
+                        system_prompt=self._custom_instructions
+                    )
+                    logger.info("Custom instructions set via prompt_templates")
+                except Exception:
+                    # 미지원 버전: run() 시 쿼리에 지시사항 직접 첨부로 대체
+                    logger.info(
+                        "system_prompt/prompt_templates not supported; "
+                        "custom instructions will be prepended per query"
+                    )
+                    self._prepend_instructions = True
+
+        return CodeAgent(**kwargs)
 
     # ─────────────────────────────────────────────────────────────
     # 공개 API
@@ -211,6 +241,14 @@ class BattlefieldAgent:
             augmented_query = self._augment_strategy_query(query)
         else:
             augmented_query = query
+
+        # system_prompt 미지원 버전: 첫 쿼리에 커스텀 지시사항 첨부
+        if self._prepend_instructions and self._custom_instructions:
+            augmented_query = (
+                f"[시스템 지시사항]\n{self._custom_instructions}\n\n"
+                f"[사용자 쿼리]\n{augmented_query}"
+            )
+            self._prepend_instructions = False  # 이후 쿼리에는 중복 첨부 방지
 
         logger.info(f"Running agent with query: {query[:80]}...")
         result = self._agent.run(augmented_query, reset=reset)
