@@ -30,27 +30,29 @@ event_description:
 
 # ===== EXAONE4 메인 에이전트 모델 =====
 # 상황 분석, 비디오 이해, 최종 응답 생성 담당
+# A100 80GB 단일 GPU 기준: AWQ 4bit → 실사용 ~20GB
 agent_model:
   model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
   quantization: "awq"
   model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
-  tensor_parallel_size: 2
-  gpu_memory_utilization: 0.60
+  tensor_parallel_size: 1          # A100 1장
+  gpu_memory_utilization: 0.35     # 80GB × 0.35 = 28GB 예약 (실사용 ~20GB)
   dtype: "float16"
   max_model_len: 32768
   trust_remote_code: true
   # 주의: temperature, max_tokens는 VLLMModel.__init__()에 전달하지 말 것
-  # 이 값들은 generate() 호출 시 사용됨
   generation:
     temperature: 0.1
     max_tokens: 4096
 
 # ===== EXAONE Deep 전략/전술 전문 모델 =====
 # 군사 전략 및 전술 추천 생성 전담
+# A100 80GB 단일 GPU 기준: 7.8B BF16 → 실사용 ~16GB
+# 32B BF16은 ~64GB로 80GB 단일 GPU에서 EXAONE4와 동시 로딩 불가
 strategy_model:
-  model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
-  tensor_parallel_size: 2
-  gpu_memory_utilization: 0.60
+  model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
+  tensor_parallel_size: 1          # A100 1장
+  gpu_memory_utilization: 0.55     # 80GB × 0.55 = 44GB 예약 (실사용 ~16GB)
   dtype: "bfloat16"
   max_model_len: 32768
   trust_remote_code: true
@@ -58,3 +60,17 @@ strategy_model:
   generation:
     temperature: 0.2
     max_tokens: 8192
+
+# ===== GPU 구성별 권장 설정 참고 =====
+# A100 80GB × 1장 (현재):
+#   EXAONE-4.0-32B-AWQ (gpu_util 0.35) + EXAONE-Deep-7.8B (gpu_util 0.55) = ~36GB 사용
+#
+# A100 80GB × 2장:
+#   agent_model:   tensor_parallel_size: 2, gpu_memory_utilization: 0.45
+#   strategy_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.45
+#   → EXAONE-Deep-32B (BF16) 사용 가능 (~64GB / 2장 = 32GB/장)
+#
+# A100 80GB × 4장:
+#   strategy_model.model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
+#   tensor_parallel_size: 4, gpu_memory_utilization: 0.90
+#   → 두 모델 모두 32B 사용 가능
