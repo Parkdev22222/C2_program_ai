@@ -148,13 +148,21 @@ class SAM3ObjectDetector:
             from sam3.model_builder import build_sam3_image_model, build_sam3_video_predictor
             from sam3.model.sam3_image_processor import Sam3Processor
 
-            logger.info(f"SAM3 image model 로딩: {self.checkpoint_path}")
+            # config dtype: "bfloat16"(기본) 또는 "float16" / "float32"
+            dtype_str = self.config.get("dtype", "bfloat16")
+            dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+            torch_dtype = dtype_map.get(dtype_str, torch.bfloat16)
+
+            logger.info(f"SAM3 image model 로딩 ({dtype_str}): {self.checkpoint_path}")
             self._image_model = build_sam3_image_model(checkpoint_path=self.checkpoint_path)
-            self._image_model = self._image_model.to(self.device).eval()
+            self._image_model = self._image_model.to(device=self.device, dtype=torch_dtype).eval()
             self._processor = Sam3Processor(self._image_model)
 
-            logger.info("SAM3 video predictor 로딩")
+            logger.info(f"SAM3 video predictor 로딩 ({dtype_str})")
             self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
+            # bias를 포함한 전체 파라미터를 동일 dtype으로 통일 → BFloat16/float 불일치 경고 제거
+            if hasattr(self._video_predictor, "to"):
+                self._video_predictor = self._video_predictor.to(dtype=torch_dtype)
             logger.info("SAM3 models loaded successfully")
         except ModuleNotFoundError as e:
             logger.error(f"SAM3 모듈 없음: {e}  →  sam3_path 확인 필요")

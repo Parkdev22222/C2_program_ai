@@ -5,6 +5,7 @@ object_detection:
   # SAM3 모델 가중치 파일 경로
   checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights/sam3.pt"
   device: "cuda"
+  dtype: "bfloat16"          # bfloat16 | float16 | float32 (A100은 bfloat16 권장)
   target_classes:
     - "soldier"
     - "tank"
