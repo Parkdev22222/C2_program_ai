@@ -21,7 +21,7 @@ object_detection:
 embedding:
   model_name: "apple/MobileCLIP-S2"
   image_size: 336
-  embedding_dim: 1024
+  embedding_dim: 512        # open_clip MobileCLIP-S2: 512 / CLIP-ViT-L/14 fallback: 768
   device: "cuda"
   batch_size: 8
 
