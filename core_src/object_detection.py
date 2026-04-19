@@ -203,7 +203,19 @@ class SAM3ObjectDetector:
         from PIL import Image
 
         pil_image = Image.fromarray(frame).convert("RGB")
-        h, w = frame.shape[:2]
+        img_w, img_h = pil_image.size  # PIL: (width, height)
+
+        # SAM3 is optimized for ~1024px input; full HD frames cause 0 detections
+        sam3_size = self.config.get("sam3_input_size", 1024)
+        if max(img_w, img_h) > sam3_size:
+            scale = sam3_size / max(img_w, img_h)
+            det_w = int(img_w * scale)
+            det_h = int(img_h * scale)
+            pil_image = pil_image.resize((det_w, det_h), Image.BILINEAR)
+            logger.debug(f"SAM3 입력 리사이즈: {img_w}×{img_h} → {det_w}×{det_h}")
+        else:
+            det_w, det_h = img_w, img_h
+
         all_dets: List[Detection] = []
 
         for class_name in self.target_classes:
@@ -211,7 +223,7 @@ class SAM3ObjectDetector:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             try:
-                dets = self._detect_class(pil_image, class_name, w, h)
+                dets = self._detect_class(pil_image, class_name, det_w, det_h)
                 # 프롬프트가 "military tank" 형태일 경우 마지막 단어를 class_name으로 정규화
                 canonical = class_name.split()[-1].replace(" ", "_")
                 for d in dets:
