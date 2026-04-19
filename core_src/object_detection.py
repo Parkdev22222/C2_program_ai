@@ -151,10 +151,8 @@ class SAM3ObjectDetector:
             category=UserWarning,
         )
         # transformers 신버전 processor_kwargs 경고 억제 (SAM3 내부 호환성 이슈)
-        warnings.filterwarnings(
-            "ignore",
-            message="Kwargs passed to.*processor.*processor_kwargs",
-        )
+        warnings.filterwarnings("ignore", message="Kwargs passed to")
+        warnings.filterwarnings("ignore", message="processor_kwargs")
 
         try:
             import torch
@@ -247,10 +245,10 @@ class SAM3ObjectDetector:
 
         # 디버그: 실제 반환값 확인 (탐지 0건 진단용)
         _raw_scores = _output_to_tensor(output.get("scores", [])).flatten()
+        _max_str = f"{float(_raw_scores.max()):.3f}" if len(_raw_scores) else "N/A"
         logger.debug(
             f"set_text_prompt('{class_name}') → "
-            f"scores={len(_raw_scores)} 개, "
-            f"max={float(_raw_scores.max()) if len(_raw_scores) else 'N/A':.3f}, "
+            f"scores={len(_raw_scores)}개, max={_max_str}, "
             f"keys={list(output.keys())}"
         )
 
