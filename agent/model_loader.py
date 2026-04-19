@@ -98,9 +98,66 @@ class EXAONE4DirectModel:
         )
         logger.info("EXAONE4DirectModel ready")
 
+    @staticmethod
+    def _normalize_messages(messages) -> List[Dict[str, str]]:
+        """
+        smolagents ChatMessage / MessageRole enum → EXAONE tokenizer용 plain dict 변환.
+
+        EXAONE chat template 지원 role: system, user, assistant
+        - TOOL_RESPONSE → user (prefix 추가)
+        - TOOL_CALL     → assistant
+        - 기타 unknown  → user
+        """
+        normalized = []
+        for msg in messages:
+            # role 추출
+            if hasattr(msg, "role"):
+                role_raw = msg.role
+                role_str = role_raw.value if hasattr(role_raw, "value") else str(role_raw)
+            elif isinstance(msg, dict):
+                role_str = str(msg.get("role", "user"))
+            else:
+                continue
+
+            # content 추출
+            if hasattr(msg, "content"):
+                content = msg.content
+            elif isinstance(msg, dict):
+                content = msg.get("content", "")
+            else:
+                content = str(msg)
+
+            # list content (multimodal) → text만 이어붙임
+            if isinstance(content, list):
+                parts = [
+                    c.get("text", str(c)) if isinstance(c, dict) else str(c)
+                    for c in content
+                ]
+                content = "\n".join(parts)
+            content = str(content) if content is not None else ""
+
+            # role 정규화
+            r = role_str.lower().replace("-", "_").replace(".", "_")
+            if "system" in r:
+                normalized.append({"role": "system", "content": content})
+            elif "assistant" in r:
+                normalized.append({"role": "assistant", "content": content})
+            elif "tool_response" in r or "tool_result" in r:
+                # EXAONE은 tool role 미지원 → user 로 변환
+                normalized.append({"role": "user", "content": f"[Tool Result]\n{content}"})
+            elif "tool_call" in r:
+                # tool 호출은 assistant 메시지의 일부로 처리
+                if normalized and normalized[-1]["role"] == "assistant":
+                    normalized[-1]["content"] += f"\n{content}"
+                else:
+                    normalized.append({"role": "assistant", "content": content})
+            else:
+                normalized.append({"role": "user", "content": content})
+        return normalized
+
     def __call__(
         self,
-        messages: List[Dict[str, str]],
+        messages,
         stop_sequences: Optional[List[str]] = None,
         **kwargs,
     ):
@@ -108,7 +165,7 @@ class EXAONE4DirectModel:
         smolagents CodeAgent가 호출하는 인터페이스.
 
         Args:
-            messages: [{"role": str, "content": str}, ...]
+            messages: smolagents ChatMessage 리스트 또는 dict 리스트
             stop_sequences: 생성 중단 토큰 목록
 
         Returns:
@@ -116,8 +173,11 @@ class EXAONE4DirectModel:
         """
         from vllm import SamplingParams
 
+        # smolagents MessageRole enum → plain dict 변환 (TOOL_RESPONSE 포함)
+        normalized = self._normalize_messages(messages)
+
         prompt = self._tokenizer.apply_chat_template(
-            messages,
+            normalized,
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -133,7 +193,6 @@ class EXAONE4DirectModel:
         text = outputs[0].outputs[0].text.strip()
         return _make_chat_message(text)
 
-    # smolagents가 내부적으로 호출할 수 있는 추가 메서드
     def generate(self, messages, stop_sequences=None, **kwargs):
         return self(messages, stop_sequences=stop_sequences, **kwargs)
 

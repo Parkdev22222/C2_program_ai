@@ -98,15 +98,16 @@ def _is_strategy_query(text: str) -> bool:
 # 비디오 분석 함수
 # ─────────────────────────────────────────────
 
-def analyze_video(video_file, collection_name: str, progress=gr.Progress()) -> Tuple[str, list]:
+def analyze_video(video_file, collection_name: str, progress=gr.Progress()):
     """
     업로드된 군사 영상을 분석합니다.
     EXAONE4가 이후 상황 분석에 사용할 수 있도록 DB에 저장합니다.
     """
     global _video_analysis_system, _analyzed_videos, _active_video_ids
 
+    choices = _get_video_list_choices()
     if video_file is None:
-        return "영상 파일을 먼저 업로드하세요.", _get_video_list_choices()
+        return "영상 파일을 먼저 업로드하세요.", gr.update(choices=choices, value=choices)
 
     try:
         progress(0.1, desc="영상 분석 시스템 초기화 중...")
@@ -156,11 +157,14 @@ def analyze_video(video_file, collection_name: str, progress=gr.Progress()) -> T
             f"  - 탐지된 객체 수: {total_dets}건\n\n"
             f"이제 채팅창에서 영상에 대해 질문하거나 전략/전술 추천을 요청할 수 있습니다."
         )
-        return result_msg, _get_video_list_choices()
+        new_choices = _get_video_list_choices()
+        # gr.update로 choices와 value를 함께 설정해야 CheckboxGroup이 정상 동작
+        return result_msg, gr.update(choices=new_choices, value=new_choices)
 
     except Exception as e:
         logger.error(f"Video analysis error: {e}", exc_info=True)
-        return f"분석 오류: {e}", _get_video_list_choices()
+        choices = _get_video_list_choices()
+        return f"분석 오류: {e}", gr.update(choices=choices, value=choices)
 
 
 def _get_video_list_choices() -> list:

@@ -67,16 +67,60 @@ class StrategyVLLMModel:
         )
         logger.info("StrategyVLLMModel ready")
 
+    @staticmethod
+    def _normalize_messages(messages) -> List[Dict[str, str]]:
+        """smolagents MessageRole enum → plain dict 변환 (EXAONE Deep용)."""
+        normalized = []
+        for msg in messages:
+            if hasattr(msg, "role"):
+                role_raw = msg.role
+                role_str = role_raw.value if hasattr(role_raw, "value") else str(role_raw)
+            elif isinstance(msg, dict):
+                role_str = str(msg.get("role", "user"))
+            else:
+                continue
+
+            if hasattr(msg, "content"):
+                content = msg.content
+            elif isinstance(msg, dict):
+                content = msg.get("content", "")
+            else:
+                content = str(msg)
+
+            if isinstance(content, list):
+                parts = [
+                    c.get("text", str(c)) if isinstance(c, dict) else str(c)
+                    for c in content
+                ]
+                content = "\n".join(parts)
+            content = str(content) if content is not None else ""
+
+            r = role_str.lower().replace("-", "_").replace(".", "_")
+            if "system" in r:
+                normalized.append({"role": "system", "content": content})
+            elif "assistant" in r:
+                normalized.append({"role": "assistant", "content": content})
+            elif "tool_response" in r or "tool_result" in r:
+                normalized.append({"role": "user", "content": f"[Tool Result]\n{content}"})
+            elif "tool_call" in r:
+                if normalized and normalized[-1]["role"] == "assistant":
+                    normalized[-1]["content"] += f"\n{content}"
+                else:
+                    normalized.append({"role": "assistant", "content": content})
+            else:
+                normalized.append({"role": "user", "content": content})
+        return normalized
+
     def __call__(
         self,
-        messages: List[Dict[str, str]],
+        messages,
         temperature: float = 0.2,
         max_tokens: int = 8192,
         **kwargs,
     ) -> str:
         """
         Args:
-            messages: [{"role": "system"|"user"|"assistant", "content": str}, ...]
+            messages: smolagents ChatMessage 리스트 또는 dict 리스트
             temperature: 샘플링 온도
             max_tokens: 최대 생성 토큰 수
 
@@ -85,9 +129,9 @@ class StrategyVLLMModel:
         """
         from vllm import SamplingParams
 
-        # chat template 적용해서 단일 프롬프트 문자열로 변환
+        normalized = self._normalize_messages(messages)
         prompt = self._tokenizer.apply_chat_template(
-            messages,
+            normalized,
             tokenize=False,
             add_generation_prompt=True,
         )
