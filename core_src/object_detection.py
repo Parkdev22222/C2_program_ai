@@ -143,12 +143,24 @@ class SAM3ObjectDetector:
     # ──────────────────────────────────────────────────────
 
     def _load_models(self):
+        import warnings
+        # video predictor BFloat16/float 불일치 경고 억제
+        warnings.filterwarnings(
+            "ignore",
+            message="Input type.*BFloat16.*bias type",
+            category=UserWarning,
+        )
+        # transformers 신버전 processor_kwargs 경고 억제 (SAM3 내부 호환성 이슈)
+        warnings.filterwarnings(
+            "ignore",
+            message="Kwargs passed to.*processor.*processor_kwargs",
+        )
+
         try:
             import torch
-            from sam3.model_builder import build_sam3_image_model, build_sam3_video_predictor
+            from sam3.model_builder import build_sam3_image_model
             from sam3.model.sam3_image_processor import Sam3Processor
 
-            # config dtype: "bfloat16"(기본) 또는 "float16" / "float32"
             dtype_str = self.config.get("dtype", "bfloat16")
             dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
             torch_dtype = dtype_map.get(dtype_str, torch.bfloat16)
@@ -157,13 +169,19 @@ class SAM3ObjectDetector:
             self._image_model = build_sam3_image_model(checkpoint_path=self.checkpoint_path)
             self._image_model = self._image_model.to(device=self.device, dtype=torch_dtype).eval()
             self._processor = Sam3Processor(self._image_model)
+            logger.info("SAM3 image model loaded successfully")
 
-            logger.info(f"SAM3 video predictor 로딩 ({dtype_str})")
-            self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
-            # bias를 포함한 전체 파라미터를 동일 dtype으로 통일 → BFloat16/float 불일치 경고 제거
-            if hasattr(self._video_predictor, "to"):
-                self._video_predictor = self._video_predictor.to(dtype=torch_dtype)
-            logger.info("SAM3 models loaded successfully")
+            # video predictor: dtype 불일치 + processor_kwargs 이슈로 탐지 실패 사례 있음
+            # 로드만 해두고 실제 탐지는 image model을 기본으로 사용
+            try:
+                from sam3.model_builder import build_sam3_video_predictor
+                logger.info("SAM3 video predictor 로딩")
+                self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
+                logger.info("SAM3 video predictor loaded")
+            except Exception as e:
+                logger.warning(f"SAM3 video predictor 로딩 실패 (image model으로 대체): {e}")
+                self._video_predictor = None
+
         except ModuleNotFoundError as e:
             logger.error(f"SAM3 모듈 없음: {e}  →  sam3_path 확인 필요")
         except FileNotFoundError as e:
@@ -226,6 +244,15 @@ class SAM3ObjectDetector:
                 prompt=class_name,
             )
         del inference_state  # GPU 텐서 즉시 해제
+
+        # 디버그: 실제 반환값 확인 (탐지 0건 진단용)
+        _raw_scores = _output_to_tensor(output.get("scores", [])).flatten()
+        logger.debug(
+            f"set_text_prompt('{class_name}') → "
+            f"scores={len(_raw_scores)} 개, "
+            f"max={float(_raw_scores.max()) if len(_raw_scores) else 'N/A':.3f}, "
+            f"keys={list(output.keys())}"
+        )
 
         masks_out  = _output_to_tensor(output.get("masks",  []))
         boxes_out  = _output_to_tensor(output.get("boxes",  []))
@@ -294,12 +321,7 @@ class SAM3ObjectDetector:
         # N 프레임마다 한 번 탐지 (config: detection_frame_step, 기본 5)
         step = max(1, self.config.get("detection_frame_step", 5))
 
-        if self._video_predictor is not None:
-            try:
-                return self._track_with_video_predictor(frames, step)
-            except Exception as e:
-                logger.error(f"video predictor tracking failed: {e}. Falling back.")
-
+        # image model을 기본으로 사용 (video predictor는 dtype/processor_kwargs 이슈로 불안정)
         return self._track_with_image_model(frames, step)
 
     def _detect_frame_via_predictor(

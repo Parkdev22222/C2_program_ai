@@ -22,6 +22,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
+# SAM3 탐지 디버그 로그 활성화 (탐지 0건 진단 시 확인)
+logging.getLogger("core_src.object_detection").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
