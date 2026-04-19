@@ -194,37 +194,39 @@ class BattlefieldAgent:
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
 
-        # system_prompt: 구버전에만 직접 전달 가능
-        if self._custom_instructions and "system_prompt" in valid_params:
-            kwargs["system_prompt"] = self._custom_instructions
-            logger.info("Custom instructions set via system_prompt")
+        # system_prompt: 구버전에서 직접 전달 가능하지만 기본값에 덧붙이는 방식 사용
+        # (기본 포맷 지시사항을 보존하기 위해 직접 전달하지 않음)
 
-        # CodeAgent 생성
+        # CodeAgent 생성 (기본 system_prompt 포함)
         agent = CodeAgent(**kwargs)
 
-        # 신버전: 생성 후 prompt_templates.system_prompt 직접 교체
-        # PromptTemplates는 모든 키가 필요하므로 기본값에서 system_prompt만 덮어씀
-        if self._custom_instructions and "system_prompt" not in valid_params:
-            self._apply_custom_prompt(agent)
+        # 커스텀 지시사항을 기존 system_prompt 뒤에 추가 (덮어쓰지 않음)
+        if self._custom_instructions:
+            self._append_custom_prompt(agent)
 
         return agent
 
-    def _apply_custom_prompt(self, agent):
-        """smolagents CodeAgent의 prompt_templates.system_prompt를 교체합니다."""
+    def _append_custom_prompt(self, agent):
+        """
+        smolagents CodeAgent의 기존 system_prompt를 유지하면서 뒤에 커스텀 지시사항을 추가합니다.
+        기존 포맷 지시사항(코드 출력 형식 등)을 보존하는 것이 핵심입니다.
+        """
         try:
             pt = agent.prompt_templates
             # dict 타입
             if isinstance(pt, dict):
-                pt["system_prompt"] = self._custom_instructions
-                logger.info("Custom instructions injected into prompt_templates dict")
+                existing = pt.get("system_prompt", "")
+                pt["system_prompt"] = existing + "\n\n" + self._custom_instructions
+                logger.info("Custom instructions appended to prompt_templates dict")
                 return
             # TypedDict / dataclass / object 타입
             if hasattr(pt, "system_prompt"):
-                pt.system_prompt = self._custom_instructions
-                logger.info("Custom instructions injected into prompt_templates.system_prompt")
+                existing = getattr(pt, "system_prompt", "") or ""
+                pt.system_prompt = existing + "\n\n" + self._custom_instructions
+                logger.info("Custom instructions appended to prompt_templates.system_prompt")
                 return
         except Exception as e:
-            logger.debug(f"prompt_templates injection failed: {e}")
+            logger.debug(f"prompt_templates append failed: {e}")
 
         # 최후 폴백: run() 쿼리에 직접 첨부
         logger.info("Falling back to per-query instruction prepend")
