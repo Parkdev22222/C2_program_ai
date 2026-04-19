@@ -167,6 +167,25 @@ class SAM3ObjectDetector:
             self._processor = Sam3Processor(self._image_model)
             logger.info("SAM3 image model loaded successfully")
 
+            # set_text_prompt 소스 코드 출력 (내부 threshold 위치 파악)
+            try:
+                import inspect as _inspect
+                _src = _inspect.getsource(self._processor.set_text_prompt)
+                logger.debug(f"[SAM3 set_text_prompt 소스]\n{_src}")
+            except Exception as _e:
+                logger.debug(f"getsource 실패: {_e}")
+
+            # Sam3Processor 속성 중 threshold 관련 값 탐색
+            try:
+                _thresh_attrs = {
+                    k: v for k, v in vars(self._processor).items()
+                    if any(kw in k.lower() for kw in ("thresh", "score", "conf", "min"))
+                }
+                if _thresh_attrs:
+                    logger.debug(f"[Sam3Processor threshold 속성] {_thresh_attrs}")
+            except Exception:
+                pass
+
             # video predictor: dtype 불일치 + processor_kwargs 이슈로 탐지 실패 사례 있음
             # 로드만 해두고 실제 탐지는 image model을 기본으로 사용
             try:
