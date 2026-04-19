@@ -237,16 +237,7 @@ class SAM3ObjectDetector:
         """SAM3 set_image + set_text_prompt로 단일 클래스 탐지."""
         import torch
 
-        dtype_str = self.config.get("dtype", "bfloat16")
-        dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-        amp_dtype = dtype_map.get(dtype_str, torch.bfloat16)
-
-        ctx = (
-            torch.autocast(device_type="cuda", dtype=amp_dtype)
-            if self.device == "cuda"
-            else torch.autocast(device_type="cpu", dtype=torch.float32)
-        )
-        with torch.no_grad(), ctx:
+        with torch.no_grad():
             inference_state = self._processor.set_image(pil_image)
             output = self._processor.set_text_prompt(
                 state=inference_state,
