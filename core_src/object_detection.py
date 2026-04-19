@@ -236,14 +236,26 @@ class SAM3ObjectDetector:
     ) -> List[Detection]:
         """SAM3 set_image + set_text_prompt로 단일 클래스 탐지."""
         import torch
+        import inspect
 
         with torch.no_grad():
             inference_state = self._processor.set_image(pil_image)
-            output = self._processor.set_text_prompt(
-                state=inference_state,
-                prompt=class_name,
-            )
-        del inference_state  # GPU 텐서 즉시 해제
+
+            # set_text_prompt 시그니처 확인 후 임계값 파라미터를 최대한 낮춤
+            sig = inspect.signature(self._processor.set_text_prompt)
+            _params = sig.parameters
+            _kwargs = {"state": inference_state, "prompt": class_name}
+            _threshold_params = [
+                "threshold", "text_threshold", "box_threshold",
+                "score_threshold", "confidence_threshold", "min_score",
+            ]
+            for _p in _threshold_params:
+                if _p in _params:
+                    _kwargs[_p] = 0.0
+                    logger.debug(f"set_text_prompt에 {_p}=0.0 적용")
+
+            output = self._processor.set_text_prompt(**_kwargs)
+        del inference_state
 
         masks_out   = _output_to_tensor(output.get("masks",        []))
         boxes_out   = _output_to_tensor(output.get("boxes",        []))
@@ -282,6 +294,7 @@ class SAM3ObjectDetector:
 
         logger.debug(
             f"[SAM3 내부] '{class_name}'\n"
+            f"  set_text_prompt sig: {sig}\n"
             f"  backbone_out  : {_bb_info}\n"
             f"  geometric_prompt: {_gp_info}\n"
             f"  scores={scores_out.shape} masks={masks_out.shape} logits={logits_out.shape}"
