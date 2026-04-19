@@ -285,20 +285,22 @@ class SAM3ObjectDetector:
         """
         세그먼트 전체 프레임에 대해 탐지 + IoU 추적을 수행합니다.
 
-        video_predictor가 있으면 각 프레임을 임시 파일로 저장 후
-        handle_request 세션으로 탐지하고, IoU로 track_id를 이어붙입니다.
-        없으면 image model 직접 탐지 + IoU 추적으로 대체합니다.
+        메모리 절약을 위해 detection_frame_step마다 한 번씩만 SAM3를 실행하고,
+        중간 프레임은 이전 탐지 결과를 그대로 이어붙입니다.
         """
         if not frames:
             return []
 
+        # N 프레임마다 한 번 탐지 (config: detection_frame_step, 기본 5)
+        step = max(1, self.config.get("detection_frame_step", 5))
+
         if self._video_predictor is not None:
             try:
-                return self._track_with_video_predictor(frames)
+                return self._track_with_video_predictor(frames, step)
             except Exception as e:
                 logger.error(f"video predictor tracking failed: {e}. Falling back.")
 
-        return self._track_with_image_model(frames)
+        return self._track_with_image_model(frames, step)
 
     def _detect_frame_via_predictor(
         self,
@@ -316,6 +318,9 @@ class SAM3ObjectDetector:
         all_dets: List[Detection] = []
 
         for class_name in self.target_classes:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             try:
                 resp = self._video_predictor.handle_request(
                     request=dict(
@@ -377,8 +382,36 @@ class SAM3ObjectDetector:
 
         return _nms(all_dets, self.iou_threshold)
 
-    def _track_with_video_predictor(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-        """video predictor + IoU 매칭으로 세그먼트 추적."""
+    def _assign_track_ids(
+        self,
+        curr_dets: List[Detection],
+        prev_dets: List[Detection],
+        next_track_id: int,
+    ) -> int:
+        """IoU 기반 track_id 이어붙이기. 변경된 next_track_id를 반환."""
+        used_prev = set()
+        for det in curr_dets:
+            best_iou, best_prev = 0.0, None
+            for pi, prev in enumerate(prev_dets):
+                if pi in used_prev or prev.class_name != det.class_name:
+                    continue
+                iou = _iou(tuple(det.bbox), tuple(prev.bbox))
+                if iou > best_iou:
+                    best_iou, best_prev = iou, pi
+            if best_prev is not None and best_iou >= 0.1:
+                det.track_id = prev_dets[best_prev].track_id
+                used_prev.add(best_prev)
+            else:
+                det.track_id = next_track_id
+                next_track_id += 1
+        return next_track_id
+
+    def _track_with_video_predictor(self, frames: List[np.ndarray], step: int = 5) -> List[Dict[str, Any]]:
+        """
+        video predictor + IoU 매칭으로 세그먼트 추적.
+        step 프레임마다 한 번 SAM3 실행, 중간 프레임은 직전 탐지 결과 재사용.
+        """
+        import torch
         from PIL import Image
 
         results: List[Dict[str, Any]] = []
@@ -387,37 +420,31 @@ class SAM3ObjectDetector:
 
         for frame_idx, frame in enumerate(frames):
             h, w = frame.shape[:2]
-            pil_img = Image.fromarray(frame).convert("RGB")
 
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                pil_img.save(tmp_path, format="JPEG", quality=95)
-                curr_dets = self._detect_frame_via_predictor(tmp_path, h, w)
-            finally:
+            if frame_idx % step == 0:
+                # SAM3 실행 프레임
+                pil_img = Image.fromarray(frame).convert("RGB")
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp_path = tmp.name
                 try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
+                    pil_img.save(tmp_path, format="JPEG", quality=95)
+                    curr_dets = self._detect_frame_via_predictor(tmp_path, h, w)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            else:
+                # 중간 프레임: 직전 탐지 결과 복사 (track_id 유지)
+                curr_dets = [
+                    Detection(d.class_name, d.confidence, d.bbox[:], track_id=d.track_id)
+                    for d in prev_dets
+                ]
 
-            # IoU 기반 track_id 이어붙이기
-            used_prev = set()
-            for det in curr_dets:
-                best_iou, best_prev = 0.0, None
-                for pi, prev in enumerate(prev_dets):
-                    if pi in used_prev:
-                        continue
-                    if prev.class_name != det.class_name:
-                        continue
-                    iou = _iou(tuple(det.bbox), tuple(prev.bbox))
-                    if iou > best_iou:
-                        best_iou, best_prev = iou, pi
-                if best_prev is not None and best_iou >= 0.1:
-                    det.track_id = prev_dets[best_prev].track_id
-                    used_prev.add(best_prev)
-                else:
-                    det.track_id = next_track_id
-                    next_track_id += 1
+            next_track_id = self._assign_track_ids(curr_dets, prev_dets, next_track_id)
 
             if curr_dets:
                 results.append({
@@ -428,30 +455,28 @@ class SAM3ObjectDetector:
 
         return results
 
-    def _track_with_image_model(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-        """image model 직접 탐지 + IoU 추적 (video predictor 없을 때 폴백)."""
+    def _track_with_image_model(self, frames: List[np.ndarray], step: int = 5) -> List[Dict[str, Any]]:
+        """image model 직접 탐지 + IoU 추적 (video predictor 없을 때 폴백).
+        step 프레임마다 한 번 탐지, 중간 프레임은 직전 결과 재사용."""
+        import torch
+
         results: List[Dict[str, Any]] = []
         prev_dets: List[Detection] = []
         next_track_id = 0
 
         for frame_idx, frame in enumerate(frames):
-            curr_dets = self._detect_frame(frame)
+            if frame_idx % step == 0:
+                curr_dets = self._detect_frame(frame)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            else:
+                curr_dets = [
+                    Detection(d.class_name, d.confidence, d.bbox[:], track_id=d.track_id)
+                    for d in prev_dets
+                ]
 
-            used_prev = set()
-            for det in curr_dets:
-                best_iou, best_prev = 0.0, None
-                for pi, prev in enumerate(prev_dets):
-                    if pi in used_prev or prev.class_name != det.class_name:
-                        continue
-                    iou = _iou(tuple(det.bbox), tuple(prev.bbox))
-                    if iou > best_iou:
-                        best_iou, best_prev = iou, pi
-                if best_prev is not None and best_iou >= 0.1:
-                    det.track_id = prev_dets[best_prev].track_id
-                    used_prev.add(best_prev)
-                else:
-                    det.track_id = next_track_id
-                    next_track_id += 1
+            next_track_id = self._assign_track_ids(curr_dets, prev_dets, next_track_id)
 
             if curr_dets:
                 results.append({
