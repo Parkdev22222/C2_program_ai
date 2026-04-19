@@ -1,6 +1,9 @@
-# ===== 객체 탐지 모델 (SAM3 기반) =====
+# ===== 객체 탐지 및 추적 (SAM3) =====
 object_detection:
-  model_name: "facebook/sam2-hiera-large"
+  # SAM3 레포 clone 경로 (sys.path에 추가됨)
+  sam3_path: "/content/drive/MyDrive/sam3"
+  # SAM3 모델 가중치 파일 경로
+  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights/sam3.pt"
   device: "cuda"
   target_classes:
     - "soldier"
@@ -11,6 +14,8 @@ object_detection:
     - "artillery"
   confidence_threshold: 0.3
   iou_threshold: 0.5
+  # 추적 시 최소 마스크 면적 비율 (전체 픽셀 대비)
+  min_mask_area_ratio: 0.001
 
 # ===== 임베딩 모델 =====
 embedding:

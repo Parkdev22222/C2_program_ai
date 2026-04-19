@@ -122,9 +122,19 @@ class VideoAnalysisSystem:
         key_frame_idx = len(frames) // 2
         key_frame = frames[key_frame_idx]
 
-        # 객체 탐지
-        detections = self.detector.detect(key_frame)
-        det_dicts = [d.to_dict() for d in detections]
+        # SAM3 추적: 세그먼트 전체 프레임 추적 (track_segment 지원 시)
+        # 결과에서 키 프레임 탐지만 det_dicts로 추출하여 DB 저장에 활용
+        if hasattr(self.detector, "track_segment"):
+            tracked = self.detector.track_segment(frames)
+            # 키 프레임과 가장 가까운 프레임 결과 선택
+            det_dicts = []
+            if tracked:
+                # 키 프레임 인덱스와 가장 근접한 결과 선택
+                best = min(tracked, key=lambda r: abs(r["frame_index"] - key_frame_idx))
+                det_dicts = best["detections"]
+        else:
+            dets = self.detector.detect(key_frame)
+            det_dicts = [d.to_dict() for d in dets]
 
         # 임베딩 생성 (키 프레임 기준)
         embedding = self.embedding_generator.generate([key_frame])[0]
