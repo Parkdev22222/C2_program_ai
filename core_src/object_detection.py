@@ -250,6 +250,25 @@ class SAM3ObjectDetector:
         scores_out  = _output_to_tensor(output.get("scores",       [])).flatten()
         logits_out  = _output_to_tensor(output.get("masks_logits", []))
 
+        # ── 진단 로그: backbone_out / geometric_prompt 내부 상태 확인 ──
+        _bb = output.get("backbone_out")
+        _gp = output.get("geometric_prompt")
+        def _shape_info(v):
+            if v is None:
+                return "None"
+            if hasattr(v, "shape"):
+                arr = v.cpu().numpy() if hasattr(v, "cpu") else np.asarray(v)
+                return f"shape={arr.shape} min={arr.min():.4f} max={arr.max():.4f}"
+            if isinstance(v, (list, tuple)):
+                return f"list len={len(v)}"
+            return str(type(v))
+        logger.debug(
+            f"[SAM3 내부] '{class_name}' | "
+            f"backbone_out={_shape_info(_bb)} | "
+            f"geometric_prompt={_shape_info(_gp)} | "
+            f"scores={scores_out.shape} | masks={masks_out.shape} | logits={logits_out.shape}"
+        )
+
         # scores가 비어있으면 masks_logits에서 score 추출
         if len(scores_out) == 0 and logits_out.ndim >= 3 and logits_out.shape[0] > 0:
             import torch as _torch
