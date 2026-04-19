@@ -39,6 +39,7 @@ class SAM3ObjectDetector:
     """
 
     def __init__(self, config: dict):
+        import os
         self.config = config
         self.device = config.get("device", "cuda")
         self.target_classes = config.get("target_classes", [])
@@ -46,8 +47,16 @@ class SAM3ObjectDetector:
         self.iou_threshold = config.get("iou_threshold", 0.5)
         self.min_mask_area_ratio = config.get("min_mask_area_ratio", 0.001)
 
-        sam3_path = config.get("sam3_path", "")
-        self.checkpoint_path = config.get("checkpoint_path", "")
+        # 환경 변수로 경로 오버라이드 가능: SAM3_PATH, SAM3_CHECKPOINT
+        sam3_path = os.environ.get("SAM3_PATH") or config.get("sam3_path", "")
+        self.checkpoint_path = os.environ.get("SAM3_CHECKPOINT") or config.get("checkpoint_path", "")
+
+        if not sam3_path or not self.checkpoint_path:
+            logger.warning(
+                "SAM3 경로가 설정되지 않았습니다. "
+                "환경 변수 SAM3_PATH, SAM3_CHECKPOINT를 설정하거나 "
+                "config/models_config.yaml의 sam3_path, checkpoint_path를 수정하세요."
+            )
 
         # SAM3 레포를 sys.path에 추가
         if sam3_path and sam3_path not in sys.path:
@@ -73,8 +82,19 @@ class SAM3ObjectDetector:
             logger.info("Loading SAM3 video predictor")
             self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
             logger.info("SAM3 models loaded successfully")
+        except ModuleNotFoundError as e:
+            logger.error(
+                f"SAM3 모듈을 찾을 수 없습니다: {e}\n"
+                f"  → SAM3_PATH 환경 변수 또는 models_config.yaml의 sam3_path를 확인하세요.\n"
+                f"  → 현재 설정된 경로: {self.checkpoint_path}"
+            )
+        except FileNotFoundError as e:
+            logger.error(
+                f"SAM3 체크포인트 파일이 없습니다: {e}\n"
+                f"  → SAM3_CHECKPOINT 환경 변수 또는 models_config.yaml의 checkpoint_path를 확인하세요."
+            )
         except Exception as e:
-            logger.warning(f"Failed to load SAM3 models: {e}. Falling back to dummy detector.")
+            logger.error(f"SAM3 모델 로딩 실패: {e}", exc_info=True)
             self._image_model = None
             self._processor = None
             self._video_predictor = None
