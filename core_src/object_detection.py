@@ -144,13 +144,11 @@ class SAM3ObjectDetector:
 
     def _load_models(self):
         import warnings
-        # video predictor BFloat16/float 불일치 경고 억제
-        warnings.filterwarnings(
-            "ignore",
-            message="Input type.*BFloat16.*bias type",
-            category=UserWarning,
-        )
-        # transformers 신버전 processor_kwargs 경고 억제 (SAM3 내부 호환성 이슈)
+        # dtype 불일치 경고 억제 (autocast로 실제 해결, 잔여 경고 대비)
+        warnings.filterwarnings("ignore", message="Input type.*should be the same", category=UserWarning)
+        warnings.filterwarnings("ignore", message="Input type.*BFloat16", category=UserWarning)
+        warnings.filterwarnings("ignore", message="Input type.*FloatTensor", category=UserWarning)
+        # transformers 신버전 processor_kwargs 경고 억제
         warnings.filterwarnings("ignore", message="Kwargs passed to")
         warnings.filterwarnings("ignore", message="processor_kwargs")
 
@@ -239,7 +237,16 @@ class SAM3ObjectDetector:
         """SAM3 set_image + set_text_prompt로 단일 클래스 탐지."""
         import torch
 
-        with torch.no_grad():
+        dtype_str = self.config.get("dtype", "bfloat16")
+        dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+        amp_dtype = dtype_map.get(dtype_str, torch.bfloat16)
+
+        ctx = (
+            torch.autocast(device_type="cuda", dtype=amp_dtype)
+            if self.device == "cuda"
+            else torch.autocast(device_type="cpu", dtype=torch.float32)
+        )
+        with torch.no_grad(), ctx:
             inference_state = self._processor.set_image(pil_image)
             output = self._processor.set_text_prompt(
                 state=inference_state,
