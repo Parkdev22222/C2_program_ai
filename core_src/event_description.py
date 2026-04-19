@@ -78,7 +78,11 @@ class EventDescriptionGenerator:
             self._processor, self._model = _load_vlm_model(model_name, self.device)
             logger.info("Event description model loaded successfully")
         except Exception as e:
-            logger.warning(f"Failed to load description model: {e}. Using dummy generator.")
+            msg = str(e)
+            if "num2words" in msg:
+                logger.error("SmolVLM2 프로세서 로딩 실패: num2words 패키지가 없습니다.\n  → pip install num2words 로 설치하세요.")
+            else:
+                logger.warning(f"Failed to load description model: {e}. Using dummy generator.")
             self._model = None
 
     def describe_frame(self, frame: np.ndarray, detections: List[Dict] = None) -> str:
