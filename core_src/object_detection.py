@@ -172,6 +172,8 @@ class SAM3ObjectDetector:
                 import inspect as _inspect
                 _src = _inspect.getsource(self._processor.set_text_prompt)
                 logger.debug(f"[SAM3 set_text_prompt 소스]\n{_src}")
+                _src2 = _inspect.getsource(self._processor._forward_grounding)
+                logger.debug(f"[SAM3 _forward_grounding 소스]\n{_src2}")
             except Exception as _e:
                 logger.debug(f"getsource 실패: {_e}")
 
