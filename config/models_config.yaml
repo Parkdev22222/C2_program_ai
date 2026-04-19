@@ -19,8 +19,6 @@ object_detection:
     - "military vehicle"
   confidence_threshold: 0.01
   iou_threshold: 0.5
-  # SAM3 최적 입력 해상도 (최장 변 기준 px); 초과 시 비율 유지하며 리사이즈
-  sam3_input_size: 1024
   # 추적 시 최소 마스크 면적 비율 (전체 픽셀 대비)
   min_mask_area_ratio: 0.001
   # SAM3를 N 프레임마다 한 번 실행 (메모리 절약, 기본 5)
