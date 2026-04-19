@@ -253,20 +253,38 @@ class SAM3ObjectDetector:
         # ── 진단 로그: backbone_out / geometric_prompt 내부 상태 확인 ──
         _bb = output.get("backbone_out")
         _gp = output.get("geometric_prompt")
-        def _shape_info(v):
-            if v is None:
-                return "None"
-            if hasattr(v, "shape"):
-                arr = v.cpu().numpy() if hasattr(v, "cpu") else np.asarray(v)
-                return f"shape={arr.shape} min={arr.min():.4f} max={arr.max():.4f}"
-            if isinstance(v, (list, tuple)):
-                return f"list len={len(v)}"
-            return str(type(v))
+
+        # backbone_out dict 키 목록
+        if isinstance(_bb, dict):
+            _bb_info = f"dict keys={list(_bb.keys())}"
+        elif _bb is None:
+            _bb_info = "None"
+        else:
+            _bb_info = str(type(_bb))
+
+        # Prompt 객체 내부 속성 전수 검사
+        if _gp is not None:
+            _gp_attrs = {}
+            for _attr in vars(_gp) if hasattr(_gp, "__dict__") else []:
+                _val = getattr(_gp, _attr)
+                if hasattr(_val, "shape"):
+                    _arr = _val.cpu().numpy() if hasattr(_val, "cpu") else np.asarray(_val)
+                    _gp_attrs[_attr] = f"shape={_arr.shape}"
+                elif isinstance(_val, (list, tuple)):
+                    _gp_attrs[_attr] = f"list len={len(_val)}"
+                elif _val is None:
+                    _gp_attrs[_attr] = "None"
+                else:
+                    _gp_attrs[_attr] = str(type(_val))
+            _gp_info = str(_gp_attrs) if _gp_attrs else f"attrs={dir(_gp)}"
+        else:
+            _gp_info = "None"
+
         logger.debug(
-            f"[SAM3 내부] '{class_name}' | "
-            f"backbone_out={_shape_info(_bb)} | "
-            f"geometric_prompt={_shape_info(_gp)} | "
-            f"scores={scores_out.shape} | masks={masks_out.shape} | logits={logits_out.shape}"
+            f"[SAM3 내부] '{class_name}'\n"
+            f"  backbone_out  : {_bb_info}\n"
+            f"  geometric_prompt: {_gp_info}\n"
+            f"  scores={scores_out.shape} masks={masks_out.shape} logits={logits_out.shape}"
         )
 
         # scores가 비어있으면 masks_logits에서 score 추출
