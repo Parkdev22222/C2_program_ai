@@ -243,18 +243,34 @@ class SAM3ObjectDetector:
             )
         del inference_state  # GPU 텐서 즉시 해제
 
-        # 디버그: 실제 반환값 확인 (탐지 0건 진단용)
-        _raw_scores = _output_to_tensor(output.get("scores", [])).flatten()
-        _max_str = f"{float(_raw_scores.max()):.3f}" if len(_raw_scores) else "N/A"
-        logger.debug(
-            f"set_text_prompt('{class_name}') → "
-            f"scores={len(_raw_scores)}개, max={_max_str}, "
-            f"keys={list(output.keys())}"
-        )
+        masks_out   = _output_to_tensor(output.get("masks",        []))
+        boxes_out   = _output_to_tensor(output.get("boxes",        []))
+        scores_out  = _output_to_tensor(output.get("scores",       [])).flatten()
+        logits_out  = _output_to_tensor(output.get("masks_logits", []))
 
-        masks_out  = _output_to_tensor(output.get("masks",  []))
-        boxes_out  = _output_to_tensor(output.get("boxes",  []))
-        scores_out = _output_to_tensor(output.get("scores", [])).flatten()
+        # scores가 비어있으면 masks_logits에서 score 추출
+        # masks_logits shape: (N, 1, H, W) 또는 (N, H, W) — 마스크 픽셀별 logit
+        # score = 양수 픽셀 비율 (sigmoid > 0.5)
+        if len(scores_out) == 0 and logits_out.ndim >= 3:
+            import torch as _torch
+            _lt = _torch.as_tensor(logits_out)
+            _probs = _torch.sigmoid(_lt.float())          # (N, *, H, W)
+            _probs_2d = _probs.reshape(_probs.shape[0], -1)
+            scores_out = (_probs_2d > 0.5).float().mean(dim=1).numpy()  # (N,)
+            logger.debug(
+                f"set_text_prompt('{class_name}') → "
+                f"scores(logits 기반)={len(scores_out)}개, "
+                f"max={float(scores_out.max()):.3f}" if len(scores_out) else
+                f"set_text_prompt('{class_name}') → 출력 없음"
+            )
+        else:
+            _max_str = f"{float(scores_out.max()):.3f}" if len(scores_out) else "N/A"
+            logger.debug(
+                f"set_text_prompt('{class_name}') → "
+                f"scores={len(scores_out)}개, max={_max_str}, "
+                f"masks={masks_out.shape}, boxes={boxes_out.shape}, "
+                f"logits={logits_out.shape}"
+            )
 
         detections: List[Detection] = []
         for i, score in enumerate(scores_out):
@@ -262,7 +278,7 @@ class SAM3ObjectDetector:
             if score < self.confidence_threshold:
                 continue
 
-            # 마스크 처리
+            # 마스크 처리: masks 우선, 없으면 masks_logits 이진화
             mask_np = None
             if masks_out.ndim >= 3 and i < len(masks_out):
                 raw = np.squeeze(masks_out[i]).astype(bool)
@@ -271,10 +287,18 @@ class SAM3ObjectDetector:
                     pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
                     pm = pm.resize((orig_w, orig_h), PILImage.NEAREST)
                     raw = np.array(pm) > 127
-                # 면적 필터
-                if raw.sum() / (orig_h * orig_w) < self.min_mask_area_ratio:
-                    continue
-                mask_np = raw
+                if raw.sum() / (orig_h * orig_w) >= self.min_mask_area_ratio:
+                    mask_np = raw
+            elif logits_out.ndim >= 3 and i < len(logits_out):
+                raw_logit = np.squeeze(logits_out[i])
+                raw = (1 / (1 + np.exp(-raw_logit.astype(np.float32)))) > 0.5
+                if raw.shape != (orig_h, orig_w):
+                    from PIL import Image as PILImage
+                    pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
+                    pm = pm.resize((orig_w, orig_h), PILImage.NEAREST)
+                    raw = np.array(pm) > 127
+                if raw.sum() / (orig_h * orig_w) >= self.min_mask_area_ratio:
+                    mask_np = raw
 
             # bbox 결정: 마스크 우선, 없으면 boxes
             if mask_np is not None and mask_np.any():
