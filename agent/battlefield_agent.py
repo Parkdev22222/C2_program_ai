@@ -180,8 +180,6 @@ class BattlefieldAgent:
         import inspect
 
         ca_cfg = self._agent_config.get("code_agent", {})
-
-        # smolagents 버전마다 허용 파라미터가 다르므로 실제 시그니처 확인 후 전달
         valid_params = inspect.signature(CodeAgent.__init__).parameters
 
         kwargs = {
@@ -196,27 +194,41 @@ class BattlefieldAgent:
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
 
-        # system_prompt: smolagents 1.x에서 제거됨 → prompt_templates 또는 미전달
-        if self._custom_instructions:
-            if "system_prompt" in valid_params:
-                kwargs["system_prompt"] = self._custom_instructions
-            else:
-                # 신버전: prompt_templates 방식으로 시도
-                try:
-                    from smolagents import PromptTemplates
-                    kwargs["prompt_templates"] = PromptTemplates(
-                        system_prompt=self._custom_instructions
-                    )
-                    logger.info("Custom instructions set via prompt_templates")
-                except Exception:
-                    # 미지원 버전: run() 시 쿼리에 지시사항 직접 첨부로 대체
-                    logger.info(
-                        "system_prompt/prompt_templates not supported; "
-                        "custom instructions will be prepended per query"
-                    )
-                    self._prepend_instructions = True
+        # system_prompt: 구버전에만 직접 전달 가능
+        if self._custom_instructions and "system_prompt" in valid_params:
+            kwargs["system_prompt"] = self._custom_instructions
+            logger.info("Custom instructions set via system_prompt")
 
-        return CodeAgent(**kwargs)
+        # CodeAgent 생성
+        agent = CodeAgent(**kwargs)
+
+        # 신버전: 생성 후 prompt_templates.system_prompt 직접 교체
+        # PromptTemplates는 모든 키가 필요하므로 기본값에서 system_prompt만 덮어씀
+        if self._custom_instructions and "system_prompt" not in valid_params:
+            self._apply_custom_prompt(agent)
+
+        return agent
+
+    def _apply_custom_prompt(self, agent):
+        """smolagents CodeAgent의 prompt_templates.system_prompt를 교체합니다."""
+        try:
+            pt = agent.prompt_templates
+            # dict 타입
+            if isinstance(pt, dict):
+                pt["system_prompt"] = self._custom_instructions
+                logger.info("Custom instructions injected into prompt_templates dict")
+                return
+            # TypedDict / dataclass / object 타입
+            if hasattr(pt, "system_prompt"):
+                pt.system_prompt = self._custom_instructions
+                logger.info("Custom instructions injected into prompt_templates.system_prompt")
+                return
+        except Exception as e:
+            logger.debug(f"prompt_templates injection failed: {e}")
+
+        # 최후 폴백: run() 쿼리에 직접 첨부
+        logger.info("Falling back to per-query instruction prepend")
+        self._prepend_instructions = True
 
     # ─────────────────────────────────────────────────────────────
     # 공개 API
