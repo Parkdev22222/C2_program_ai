@@ -214,6 +214,10 @@ class SAM3ObjectDetector:
                 torch.cuda.empty_cache()
             try:
                 dets = self._detect_class(pil_image, class_name, w, h)
+                # 프롬프트가 "military tank" 형태일 경우 마지막 단어를 class_name으로 정규화
+                canonical = class_name.split()[-1].replace(" ", "_")
+                for d in dets:
+                    d.class_name = canonical
                 all_dets.extend(dets)
             except torch.cuda.OutOfMemoryError:
                 logger.warning(f"OOM on class '{class_name}' — skipping")

@@ -8,12 +8,16 @@ object_detection:
   dtype: "bfloat16"          # bfloat16 | float16 | float32 (A100은 bfloat16 권장)
   target_classes:
     - "soldier"
+    - "military soldier"
     - "tank"
-    - "truck"
-    - "armored_vehicle"
+    - "military tank"
+    - "armored vehicle"
+    - "military truck"
     - "helicopter"
+    - "military helicopter"
     - "artillery"
-  confidence_threshold: 0.3
+    - "military vehicle"
+  confidence_threshold: 0.01
   iou_threshold: 0.5
   # 추적 시 최소 마스크 면적 비율 (전체 픽셀 대비)
   min_mask_area_ratio: 0.001
