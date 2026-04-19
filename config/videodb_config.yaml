@@ -1,0 +1,17 @@
+videodb:
+  storage_path: "./data/videodb"
+  default_collection: "default"
+  segment_duration: 5
+  max_videos_per_collection: 100
+  supported_formats:
+    - "mp4"
+    - "avi"
+    - "mov"
+    - "mkv"
+
+local_storage:
+  base_path: "./data"
+  video_path: "./data/videos"
+  metadata_path: "./data/metadata"
+  thumbnails_path: "./data/thumbnails"
+  tracking_path: "./data/tracking"

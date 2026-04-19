@@ -1,0 +1,60 @@
+# ===== 객체 탐지 모델 (SAM3 기반) =====
+object_detection:
+  model_name: "facebook/sam2-hiera-large"
+  device: "cuda"
+  target_classes:
+    - "soldier"
+    - "tank"
+    - "truck"
+    - "armored_vehicle"
+    - "helicopter"
+    - "artillery"
+  confidence_threshold: 0.3
+  iou_threshold: 0.5
+
+# ===== 임베딩 모델 =====
+embedding:
+  model_name: "apple/MobileCLIP-S2"
+  image_size: 336
+  embedding_dim: 1024
+  device: "cuda"
+  batch_size: 8
+
+# ===== 이벤트 설명 모델 (경량 VLM) =====
+event_description:
+  model_name: "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+  device: "cuda"
+  temperature: 0.7
+  max_new_tokens: 512
+  batch_size: 4
+
+# ===== EXAONE4 메인 에이전트 모델 =====
+# 상황 분석, 비디오 이해, 최종 응답 생성 담당
+agent_model:
+  model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
+  quantization: "awq"
+  model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
+  tensor_parallel_size: 2
+  gpu_memory_utilization: 0.60
+  dtype: "float16"
+  max_model_len: 32768
+  trust_remote_code: true
+  # 주의: temperature, max_tokens는 VLLMModel.__init__()에 전달하지 말 것
+  # 이 값들은 generate() 호출 시 사용됨
+  generation:
+    temperature: 0.1
+    max_tokens: 4096
+
+# ===== EXAONE Deep 전략/전술 전문 모델 =====
+# 군사 전략 및 전술 추천 생성 전담
+strategy_model:
+  model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
+  tensor_parallel_size: 2
+  gpu_memory_utilization: 0.60
+  dtype: "bfloat16"
+  max_model_len: 32768
+  trust_remote_code: true
+  # 주의: temperature, max_tokens는 VLLMModel.__init__()에 전달하지 말 것
+  generation:
+    temperature: 0.2
+    max_tokens: 8192

@@ -1,0 +1,45 @@
+{
+  "map": {
+    "center": [37.5, 127.0],
+    "zoom": 10
+  },
+  "timestamp": "",
+  "units": [
+    {
+      "name": "1기갑대대",
+      "affiliation": "friendly",
+      "type": "ARMOR",
+      "echelon": "BATTALION",
+      "location": [37.52, 126.98],
+      "waypoints": [[37.53, 127.00], [37.55, 127.02]],
+      "status": "active"
+    },
+    {
+      "name": "2보병대대",
+      "affiliation": "friendly",
+      "type": "INFANTRY",
+      "echelon": "BATTALION",
+      "location": [37.49, 126.95],
+      "waypoints": [[37.50, 126.97]],
+      "status": "active"
+    },
+    {
+      "name": "Red Armor Alpha",
+      "affiliation": "hostile",
+      "type": "ARMOR",
+      "echelon": "BATTALION",
+      "location": [37.58, 127.05],
+      "waypoints": [[37.56, 127.03], [37.54, 127.01]],
+      "status": "active"
+    },
+    {
+      "name": "Red Infantry Beta",
+      "affiliation": "hostile",
+      "type": "INFANTRY",
+      "echelon": "COMPANY",
+      "location": [37.60, 127.08],
+      "waypoints": [[37.58, 127.06]],
+      "status": "active"
+    }
+  ]
+}

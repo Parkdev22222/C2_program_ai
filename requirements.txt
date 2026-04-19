@@ -1,0 +1,37 @@
+# ─── Core Framework ───────────────────────────────────────────
+torch>=2.0.0
+torchvision
+transformers>=4.47.0
+accelerate
+
+# ─── smolagents (Agent Framework) ────────────────────────────
+smolagents>=1.0.0
+
+# ─── LLM Inference (EXAONE4 & EXAONE Deep via vLLM) ──────────
+vllm>=0.4.0
+
+# ─── Computer Vision ──────────────────────────────────────────
+opencv-python>=4.8.0
+Pillow>=10.0.0
+scipy
+supervision>=0.20.0
+
+# ─── Embeddings & Search ─────────────────────────────────────
+faiss-cpu>=1.7.4
+numpy>=1.24.0
+
+# ─── PDF Processing (for RAG) ────────────────────────────────
+PyPDF2>=3.0.0
+
+# ─── Web UI ───────────────────────────────────────────────────
+gradio>=4.0.0
+
+# ─── Utilities ────────────────────────────────────────────────
+pyyaml>=6.0
+huggingface-hub>=0.20.0
+
+# ─── Optional: Map Visualization ──────────────────────────────
+# folium>=0.14.0
+
+# ─── Optional: SAM2 Tracking ──────────────────────────────────
+# Install from source: pip install git+https://github.com/facebookresearch/segment-anything-2.git
