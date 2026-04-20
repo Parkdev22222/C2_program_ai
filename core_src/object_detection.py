@@ -1,19 +1,22 @@
 """
 SAM3 기반 객체 탐지 및 추적 모듈
 
-Image detection API:
+Image detection API (공식):
     inference_state = processor.set_image(pil_image)
-    output = processor.set_text_prompt(state=inference_state, prompt=class_name)
+    output = processor.set_text_prompt(prompt=class_name, state=inference_state)
     masks, boxes, scores = output["masks"], output["boxes"], output["scores"]
-    del inference_state  # GPU 메모리 즉시 해제
+    # 선택적 후처리 (threshold 조절):
+    processed = processor.post_process_instance_segmentation(
+        output, threshold=0.1, mask_threshold=0.5, target_sizes=[(h, w)]
+    )
 
-Video tracking API:
-    response = video_predictor.handle_request({"type": "start_session", "resource_path": path})
+Video tracking API (공식):
+    response = video_predictor.handle_request({"type": "start_session", "resource_path": jpeg_dir})
     session_id = response["session_id"]
     response = video_predictor.handle_request({"type": "add_prompt", "session_id": session_id,
                                                "frame_index": 0, "text": class_name})
-    output = response["outputs"]  # {"boxes", "scores", "masks"}
-    video_predictor.handle_request({"type": "end_session", "session_id": session_id})
+    video_predictor.handle_request({"type": "propagate_in_video", "session_id": session_id})
+    video_predictor.handle_request({"type": "close_session", "session_id": session_id})
 """
 import gc
 import sys
@@ -75,7 +78,6 @@ def _nms(detections: List[Detection], iou_threshold: float) -> List[Detection]:
         while remaining:
             best = remaining.pop(0)
             kept.append(dets[best])
-            # best bbox (pixel)
             bx = tuple(dets[best].bbox)
             remaining = [
                 i for i in remaining
@@ -104,12 +106,83 @@ def _output_to_tensor(val):
     return np.asarray(val)
 
 
+def _parse_detections(
+    output: dict,
+    class_name: str,
+    orig_h: int,
+    orig_w: int,
+    confidence_threshold: float,
+    min_mask_area_ratio: float,
+) -> List[Detection]:
+    """SAM3 output dict → Detection 리스트 변환 (이미지/비디오 공통)."""
+    masks_out  = _output_to_tensor(output.get("masks",        []))
+    boxes_out  = _output_to_tensor(output.get("boxes",        []))
+    scores_out = _output_to_tensor(output.get("scores",       [])).flatten()
+    logits_out = _output_to_tensor(output.get("masks_logits", []))
+
+    # scores가 없을 때 masks_logits에서 추출
+    if len(scores_out) == 0 and logits_out.ndim >= 3 and logits_out.shape[0] > 0:
+        import torch as _t
+        _probs = _t.sigmoid(_t.as_tensor(logits_out).float())
+        scores_out = (_probs.reshape(_probs.shape[0], -1) > 0.5).float().mean(dim=1).numpy()
+
+    logger.debug(f"_parse_detections '{class_name}': scores={len(scores_out)}, masks={masks_out.shape}")
+
+    detections: List[Detection] = []
+    for i, score in enumerate(scores_out):
+        score = float(score)
+        if score < confidence_threshold:
+            continue
+
+        mask_np = None
+        if masks_out.ndim >= 3 and i < len(masks_out):
+            raw = np.squeeze(masks_out[i]).astype(bool)
+            if raw.shape != (orig_h, orig_w):
+                from PIL import Image as PILImage
+                pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
+                raw = np.array(pm.resize((orig_w, orig_h), PILImage.NEAREST)) > 127
+            if raw.sum() / (orig_h * orig_w) >= min_mask_area_ratio:
+                mask_np = raw
+        elif logits_out.ndim >= 3 and i < len(logits_out):
+            raw_logit = np.squeeze(logits_out[i])
+            raw = (1 / (1 + np.exp(-raw_logit.astype(np.float32)))) > 0.5
+            if raw.shape != (orig_h, orig_w):
+                from PIL import Image as PILImage
+                pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
+                raw = np.array(pm.resize((orig_w, orig_h), PILImage.NEAREST)) > 127
+            if raw.sum() / (orig_h * orig_w) >= min_mask_area_ratio:
+                mask_np = raw
+
+        if mask_np is not None and mask_np.any():
+            bbox_norm = _mask_to_normalized_bbox(mask_np, orig_h, orig_w)
+            if bbox_norm is None:
+                continue
+        elif i < len(boxes_out):
+            x1, y1, x2, y2 = boxes_out[i].tolist()
+            if (x2 - x1) < 4 or (y2 - y1) < 4:
+                continue
+            bbox_norm = [x1 / orig_w, y1 / orig_h, x2 / orig_w, y2 / orig_h]
+        else:
+            continue
+
+        detections.append(Detection(
+            class_name=class_name,
+            confidence=score,
+            bbox=bbox_norm,
+            mask=mask_np,
+        ))
+
+    return detections
+
+
 class SAM3ObjectDetector:
     """
     SAM3 기반 군사 객체 탐지 및 추적.
 
     - 단일 프레임 탐지: processor.set_image() + processor.set_text_prompt()
-    - 다중 프레임 추적: video_predictor.handle_request() + IoU 매칭
+      + processor.post_process_instance_segmentation()
+    - 다중 프레임 추적: video_predictor.handle_request()
+      start_session → add_prompt(frame=0) → propagate_in_video → close_session
     """
 
     def __init__(self, config: dict):
@@ -144,11 +217,9 @@ class SAM3ObjectDetector:
 
     def _load_models(self):
         import warnings
-        # dtype 불일치 경고 억제 (autocast로 실제 해결, 잔여 경고 대비)
         warnings.filterwarnings("ignore", message="Input type.*should be the same", category=UserWarning)
         warnings.filterwarnings("ignore", message="Input type.*BFloat16", category=UserWarning)
         warnings.filterwarnings("ignore", message="Input type.*FloatTensor", category=UserWarning)
-        # transformers 신버전 processor_kwargs 경고 억제
         warnings.filterwarnings("ignore", message="Kwargs passed to")
         warnings.filterwarnings("ignore", message="processor_kwargs")
 
@@ -157,9 +228,9 @@ class SAM3ObjectDetector:
             from sam3.model_builder import build_sam3_image_model
             from sam3.model.sam3_image_processor import Sam3Processor
 
-            dtype_str = self.config.get("dtype", "bfloat16")
+            dtype_str = self.config.get("dtype", "float32")
             dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-            torch_dtype = dtype_map.get(dtype_str, torch.bfloat16)
+            torch_dtype = dtype_map.get(dtype_str, torch.float32)
 
             logger.info(f"SAM3 image model 로딩 ({dtype_str}): {self.checkpoint_path}")
             self._image_model = build_sam3_image_model(checkpoint_path=self.checkpoint_path)
@@ -167,29 +238,6 @@ class SAM3ObjectDetector:
             self._processor = Sam3Processor(self._image_model)
             logger.info("SAM3 image model loaded successfully")
 
-            # set_text_prompt 소스 코드 출력 (내부 threshold 위치 파악)
-            try:
-                import inspect as _inspect
-                _src = _inspect.getsource(self._processor.set_text_prompt)
-                logger.debug(f"[SAM3 set_text_prompt 소스]\n{_src}")
-                _src2 = _inspect.getsource(self._processor._forward_grounding)
-                logger.debug(f"[SAM3 _forward_grounding 소스]\n{_src2}")
-            except Exception as _e:
-                logger.debug(f"getsource 실패: {_e}")
-
-            # Sam3Processor 속성 중 threshold 관련 값 탐색
-            try:
-                _thresh_attrs = {
-                    k: v for k, v in vars(self._processor).items()
-                    if any(kw in k.lower() for kw in ("thresh", "score", "conf", "min"))
-                }
-                if _thresh_attrs:
-                    logger.debug(f"[Sam3Processor threshold 속성] {_thresh_attrs}")
-            except Exception:
-                pass
-
-            # video predictor: dtype 불일치 + processor_kwargs 이슈로 탐지 실패 사례 있음
-            # 로드만 해두고 실제 탐지는 image model을 기본으로 사용
             try:
                 from sam3.model_builder import build_sam3_video_predictor
                 logger.info("SAM3 video predictor 로딩")
@@ -233,7 +281,6 @@ class SAM3ObjectDetector:
                 torch.cuda.empty_cache()
             try:
                 dets = self._detect_class(pil_image, class_name, w, h)
-                # 프롬프트가 "military tank" 형태일 경우 마지막 단어를 class_name으로 정규화
                 canonical = class_name.split()[-1].replace(" ", "_")
                 for d in dets:
                     d.class_name = canonical
@@ -255,137 +302,81 @@ class SAM3ObjectDetector:
         orig_w: int,
         orig_h: int,
     ) -> List[Detection]:
-        """SAM3 set_image + set_text_prompt로 단일 클래스 탐지."""
+        """SAM3 공식 API: set_image → set_text_prompt → post_process_instance_segmentation."""
         import torch
-        import inspect
 
         with torch.no_grad():
             inference_state = self._processor.set_image(pil_image)
-
-            # set_text_prompt 시그니처 확인 후 임계값 파라미터를 최대한 낮춤
-            sig = inspect.signature(self._processor.set_text_prompt)
-            _params = sig.parameters
-            _kwargs = {"state": inference_state, "prompt": class_name}
-            _threshold_params = [
-                "threshold", "text_threshold", "box_threshold",
-                "score_threshold", "confidence_threshold", "min_score",
-            ]
-            for _p in _threshold_params:
-                if _p in _params:
-                    _kwargs[_p] = 0.0
-                    logger.debug(f"set_text_prompt에 {_p}=0.0 적용")
-
-            output = self._processor.set_text_prompt(**_kwargs)
+            # 공식 시그니처: set_text_prompt(prompt, state)
+            output = self._processor.set_text_prompt(
+                prompt=class_name,
+                state=inference_state,
+            )
         del inference_state
 
-        masks_out   = _output_to_tensor(output.get("masks",        []))
-        boxes_out   = _output_to_tensor(output.get("boxes",        []))
-        scores_out  = _output_to_tensor(output.get("scores",       [])).flatten()
-        logits_out  = _output_to_tensor(output.get("masks_logits", []))
+        # ── post_process_instance_segmentation (공식 docs의 threshold 조절 메서드) ──
+        # threshold 기본값 0.5를 confidence_threshold로 낮춰 더 많은 탐지 허용
+        if hasattr(self._processor, "post_process_instance_segmentation"):
+            try:
+                processed = self._processor.post_process_instance_segmentation(
+                    output,
+                    threshold=self.confidence_threshold,
+                    mask_threshold=0.5,
+                    target_sizes=[(orig_h, orig_w)],
+                )
+                # processed: List[dict] with keys "masks", "scores", "labels"
+                if processed and isinstance(processed, (list, tuple)) and len(processed) > 0:
+                    result = processed[0]
+                    masks_pp  = _output_to_tensor(result.get("masks",  []))
+                    scores_pp = _output_to_tensor(result.get("scores", [])).flatten()
+                    logger.debug(
+                        f"post_process '{class_name}': scores={len(scores_pp)}, masks={masks_pp.shape}"
+                    )
+                    if len(scores_pp) > 0:
+                        return self._build_detections_from_pp(
+                            masks_pp, scores_pp, class_name, orig_h, orig_w
+                        )
+            except Exception as e:
+                logger.debug(f"post_process_instance_segmentation 오류: {e}")
 
-        # ── 진단 로그: backbone_out / geometric_prompt 내부 상태 확인 ──
-        _bb = output.get("backbone_out")
-        _gp = output.get("geometric_prompt")
-
-        # backbone_out dict 키 목록
-        if isinstance(_bb, dict):
-            _bb_info = f"dict keys={list(_bb.keys())}"
-        elif _bb is None:
-            _bb_info = "None"
-        else:
-            _bb_info = str(type(_bb))
-
-        # Prompt 객체 내부 속성 전수 검사
-        if _gp is not None:
-            _gp_attrs = {}
-            for _attr in vars(_gp) if hasattr(_gp, "__dict__") else []:
-                _val = getattr(_gp, _attr)
-                if hasattr(_val, "shape"):
-                    _arr = _val.cpu().numpy() if hasattr(_val, "cpu") else np.asarray(_val)
-                    _gp_attrs[_attr] = f"shape={_arr.shape}"
-                elif isinstance(_val, (list, tuple)):
-                    _gp_attrs[_attr] = f"list len={len(_val)}"
-                elif _val is None:
-                    _gp_attrs[_attr] = "None"
-                else:
-                    _gp_attrs[_attr] = str(type(_val))
-            _gp_info = str(_gp_attrs) if _gp_attrs else f"attrs={dir(_gp)}"
-        else:
-            _gp_info = "None"
-
-        logger.debug(
-            f"[SAM3 내부] '{class_name}'\n"
-            f"  set_text_prompt sig: {sig}\n"
-            f"  backbone_out  : {_bb_info}\n"
-            f"  geometric_prompt: {_gp_info}\n"
-            f"  scores={scores_out.shape} masks={masks_out.shape} logits={logits_out.shape}"
+        # post_process 없거나 결과 없을 때 → output 직접 파싱
+        return _parse_detections(
+            output, class_name, orig_h, orig_w,
+            self.confidence_threshold, self.min_mask_area_ratio,
         )
 
-        # scores가 비어있으면 masks_logits에서 score 추출
-        if len(scores_out) == 0 and logits_out.ndim >= 3 and logits_out.shape[0] > 0:
-            import torch as _torch
-            _lt = _torch.as_tensor(logits_out)
-            _probs = _torch.sigmoid(_lt.float())
-            _probs_2d = _probs.reshape(_probs.shape[0], -1)
-            scores_out = (_probs_2d > 0.5).float().mean(dim=1).numpy()
-            _max_str = f"{float(scores_out.max()):.3f}" if len(scores_out) else "N/A"
-            logger.debug(f"set_text_prompt('{class_name}') → logits 기반 scores={len(scores_out)}개, max={_max_str}")
-        else:
-            _max_str = f"{float(scores_out.max()):.3f}" if len(scores_out) else "N/A"
-            logger.debug(
-                f"set_text_prompt('{class_name}') → "
-                f"scores={len(scores_out)}개, max={_max_str}, "
-                f"masks={masks_out.shape}, logits={logits_out.shape}"
-            )
-
-        detections: List[Detection] = []
-        for i, score in enumerate(scores_out):
+    def _build_detections_from_pp(
+        self,
+        masks_pp: np.ndarray,
+        scores_pp: np.ndarray,
+        class_name: str,
+        orig_h: int,
+        orig_w: int,
+    ) -> List[Detection]:
+        """post_process_instance_segmentation 결과 → Detection 리스트."""
+        detections = []
+        for i, score in enumerate(scores_pp):
             score = float(score)
             if score < self.confidence_threshold:
                 continue
-
-            # 마스크 처리: masks 우선, 없으면 masks_logits 이진화
-            mask_np = None
-            if masks_out.ndim >= 3 and i < len(masks_out):
-                raw = np.squeeze(masks_out[i]).astype(bool)
-                if raw.shape != (orig_h, orig_w):
-                    from PIL import Image as PILImage
-                    pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
-                    pm = pm.resize((orig_w, orig_h), PILImage.NEAREST)
-                    raw = np.array(pm) > 127
-                if raw.sum() / (orig_h * orig_w) >= self.min_mask_area_ratio:
-                    mask_np = raw
-            elif logits_out.ndim >= 3 and i < len(logits_out):
-                raw_logit = np.squeeze(logits_out[i])
-                raw = (1 / (1 + np.exp(-raw_logit.astype(np.float32)))) > 0.5
-                if raw.shape != (orig_h, orig_w):
-                    from PIL import Image as PILImage
-                    pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
-                    pm = pm.resize((orig_w, orig_h), PILImage.NEAREST)
-                    raw = np.array(pm) > 127
-                if raw.sum() / (orig_h * orig_w) >= self.min_mask_area_ratio:
-                    mask_np = raw
-
-            # bbox 결정: 마스크 우선, 없으면 boxes
-            if mask_np is not None and mask_np.any():
-                bbox_norm = _mask_to_normalized_bbox(mask_np, orig_h, orig_w)
-                if bbox_norm is None:
-                    continue
-            elif i < len(boxes_out):
-                x1, y1, x2, y2 = boxes_out[i].tolist()
-                if (x2 - x1) < 4 or (y2 - y1) < 4:
-                    continue
-                bbox_norm = [x1 / orig_w, y1 / orig_h, x2 / orig_w, y2 / orig_h]
-            else:
+            if masks_pp.ndim < 2 or i >= len(masks_pp):
                 continue
-
+            raw = np.squeeze(masks_pp[i]).astype(bool)
+            if raw.shape != (orig_h, orig_w):
+                from PIL import Image as PILImage
+                pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
+                raw = np.array(pm.resize((orig_w, orig_h), PILImage.NEAREST)) > 127
+            if raw.sum() / (orig_h * orig_w) < self.min_mask_area_ratio:
+                continue
+            bbox_norm = _mask_to_normalized_bbox(raw, orig_h, orig_w)
+            if bbox_norm is None:
+                continue
             detections.append(Detection(
                 class_name=class_name,
                 confidence=score,
                 bbox=bbox_norm,
-                mask=mask_np,
+                mask=raw,
             ))
-
         return detections
 
     # ──────────────────────────────────────────────────────
@@ -397,100 +388,183 @@ class SAM3ObjectDetector:
         frames: List[np.ndarray],
         seed_detections: Optional[List[Detection]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        세그먼트 전체 프레임에 대해 탐지 + IoU 추적을 수행합니다.
+        """세그먼트 전체 프레임에 대해 탐지 + 추적을 수행합니다.
 
-        메모리 절약을 위해 detection_frame_step마다 한 번씩만 SAM3를 실행하고,
-        중간 프레임은 이전 탐지 결과를 그대로 이어붙입니다.
+        video predictor 사용 가능 시: SAM3 propagate_in_video로 추적 (권장)
+        video predictor 없을 시: image model + IoU 매칭으로 폴백
         """
         if not frames:
             return []
 
-        # N 프레임마다 한 번 탐지 (config: detection_frame_step, 기본 5)
         step = max(1, self.config.get("detection_frame_step", 5))
 
-        # image model을 기본으로 사용 (video predictor는 dtype/processor_kwargs 이슈로 불안정)
+        if self._video_predictor is not None:
+            try:
+                return self._track_with_video_predictor(frames)
+            except Exception as e:
+                logger.warning(f"video predictor 실패, image model로 대체: {e}")
+
         return self._track_with_image_model(frames, step)
 
-    def _detect_frame_via_predictor(
-        self,
-        tmp_path: str,
-        h: int,
-        w: int,
-    ) -> List[Detection]:
-        """video predictor handle_request 세션으로 단일 프레임 탐지."""
+    def _track_with_video_predictor(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
+        """
+        SAM3 공식 video predictor API로 추적:
+        1. 프레임을 temp JPEG 디렉토리에 저장
+        2. start_session(resource_path=jpeg_dir)
+        3. 각 클래스마다 add_prompt(frame_index=0, text=class_name)
+        4. propagate_in_video → 전체 프레임 자동 추적
+        5. close_session
+        """
         import torch
+        from PIL import Image
 
-        response = self._video_predictor.handle_request(
-            request=dict(type="start_session", resource_path=tmp_path)
-        )
-        session_id = response["session_id"]
-        all_dets: List[Detection] = []
+        if not frames:
+            return []
 
-        for class_name in self.target_classes:
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        h, w = frames[0].shape[:2]
+        # frame_idx → Detection 리스트
+        frame_dets: Dict[int, List[Detection]] = {i: [] for i in range(len(frames))}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # 1. 프레임 저장 (SAM3 video predictor는 JPEG 디렉토리 또는 MP4 경로를 받음)
+            logger.info(f"SAM3 video predictor: {len(frames)}개 프레임을 {tmp_dir}에 저장 중")
+            for i, frame in enumerate(frames):
+                Image.fromarray(frame).convert("RGB").save(
+                    os.path.join(tmp_dir, f"{i:05d}.jpg"),
+                    format="JPEG", quality=95,
+                )
+
+            # 2. 세션 시작
             try:
                 resp = self._video_predictor.handle_request(
-                    request=dict(
-                        type="add_prompt",
-                        session_id=session_id,
-                        frame_index=0,
-                        text=class_name,
-                    )
+                    request=dict(type="start_session", resource_path=tmp_dir)
                 )
-                output = resp.get("outputs", {})
-                boxes_out  = _output_to_tensor(output.get("boxes",  []))
-                scores_out = _output_to_tensor(output.get("scores", [])).flatten()
-                masks_out  = _output_to_tensor(output.get("masks",  []))
-
-                for i, score in enumerate(scores_out):
-                    score = float(score)
-                    if score < self.confidence_threshold:
-                        continue
-
-                    mask_np = None
-                    if masks_out.ndim >= 3 and i < len(masks_out):
-                        raw = np.squeeze(masks_out[i]).astype(bool)
-                        if raw.shape != (h, w):
-                            from PIL import Image as PILImage
-                            pm = PILImage.fromarray(raw.astype(np.uint8) * 255, "L")
-                            pm = pm.resize((w, h), PILImage.NEAREST)
-                            raw = np.array(pm) > 127
-                        if raw.sum() / (h * w) < self.min_mask_area_ratio:
-                            continue
-                        mask_np = raw
-
-                    if mask_np is not None and mask_np.any():
-                        bbox_norm = _mask_to_normalized_bbox(mask_np, h, w)
-                        if bbox_norm is None:
-                            continue
-                    elif i < len(boxes_out):
-                        x1, y1, x2, y2 = boxes_out[i].tolist()
-                        if (x2 - x1) < 4 or (y2 - y1) < 4:
-                            continue
-                        bbox_norm = [x1 / w, y1 / h, x2 / w, y2 / h]
-                    else:
-                        continue
-
-                    all_dets.append(Detection(
-                        class_name=class_name,
-                        confidence=score,
-                        bbox=bbox_norm,
-                        mask=mask_np,
-                    ))
             except Exception as e:
-                logger.warning(f"predictor class '{class_name}': {e}")
+                logger.error(f"start_session 실패: {e}")
+                raise
 
-        try:
-            self._video_predictor.handle_request(
-                request=dict(type="end_session", session_id=session_id)
-            )
-        except Exception:
-            pass
+            session_id = resp["session_id"]
+            logger.info(f"SAM3 video session 시작: {session_id}")
 
-        return _nms(all_dets, self.iou_threshold)
+            try:
+                # 3. 각 클래스에 대해 frame 0에 텍스트 프롬프트 추가
+                for class_name in self.target_classes:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    try:
+                        add_resp = self._video_predictor.handle_request(
+                            request=dict(
+                                type="add_prompt",
+                                session_id=session_id,
+                                frame_index=0,
+                                text=class_name,
+                            )
+                        )
+                        # frame 0 결과 파싱
+                        output = add_resp.get("outputs", {})
+                        dets = _parse_detections(
+                            output, class_name, h, w,
+                            self.confidence_threshold, self.min_mask_area_ratio,
+                        )
+                        canonical = class_name.split()[-1].replace(" ", "_")
+                        for d in dets:
+                            d.class_name = canonical
+                        frame_dets[0].extend(dets)
+                        logger.debug(f"add_prompt '{class_name}' frame=0 → {len(dets)}개")
+                    except Exception as e:
+                        logger.warning(f"add_prompt '{class_name}': {e}")
+
+                # 4. 전체 비디오 전파 (propagate_in_video)
+                try:
+                    prop_resp = self._video_predictor.handle_request(
+                        request=dict(type="propagate_in_video", session_id=session_id)
+                    )
+                    logger.debug(f"propagate_in_video 응답 타입: {type(prop_resp)}")
+                    self._parse_propagate_response(prop_resp, frame_dets, h, w)
+                except Exception as e:
+                    logger.warning(f"propagate_in_video 오류: {e}")
+
+            finally:
+                # 5. 세션 종료 (공식 docs: close_session)
+                try:
+                    self._video_predictor.handle_request(
+                        request=dict(type="close_session", session_id=session_id)
+                    )
+                    logger.info(f"SAM3 video session 종료: {session_id}")
+                except Exception:
+                    pass
+
+        # IoU 기반 track_id 부여
+        results: List[Dict[str, Any]] = []
+        prev_dets: List[Detection] = []
+        next_track_id = 0
+
+        for frame_idx in range(len(frames)):
+            curr_dets = _nms(frame_dets.get(frame_idx, []), self.iou_threshold)
+            next_track_id = self._assign_track_ids(curr_dets, prev_dets, next_track_id)
+            if curr_dets:
+                results.append({
+                    "frame_index": frame_idx,
+                    "detections": [d.to_dict() for d in curr_dets],
+                })
+            prev_dets = curr_dets
+
+        return results
+
+    def _parse_propagate_response(
+        self,
+        prop_resp: Any,
+        frame_dets: Dict[int, List[Detection]],
+        h: int,
+        w: int,
+    ) -> None:
+        """propagate_in_video 응답을 frame_dets에 파싱 (다양한 응답 포맷 처리)."""
+        if prop_resp is None:
+            return
+
+        # 포맷 A: {"frames": {frame_idx: output_dict, ...}}
+        if isinstance(prop_resp, dict):
+            frames_data = prop_resp.get("frames", prop_resp.get("outputs", {}))
+            if isinstance(frames_data, dict):
+                for fidx, fout in frames_data.items():
+                    fidx = int(fidx)
+                    if not (0 <= fidx < len(frame_dets)):
+                        continue
+                    if not isinstance(fout, dict):
+                        continue
+                    for class_name in self.target_classes:
+                        dets = _parse_detections(
+                            fout, class_name, h, w,
+                            self.confidence_threshold, self.min_mask_area_ratio,
+                        )
+                        canonical = class_name.split()[-1].replace(" ", "_")
+                        for d in dets:
+                            d.class_name = canonical
+                        frame_dets[fidx].extend(dets)
+                return
+
+        # 포맷 B: 이터레이터 — (frame_idx, obj_ids, mask_logits) 또는 (frame_idx, output_dict)
+        if hasattr(prop_resp, "__iter__"):
+            try:
+                for item in prop_resp:
+                    if not isinstance(item, (tuple, list)) or len(item) < 2:
+                        continue
+                    fidx = int(item[0])
+                    if not (0 <= fidx < len(frame_dets)):
+                        continue
+                    fout = item[1] if isinstance(item[1], dict) else {}
+                    for class_name in self.target_classes:
+                        dets = _parse_detections(
+                            fout, class_name, h, w,
+                            self.confidence_threshold, self.min_mask_area_ratio,
+                        )
+                        canonical = class_name.split()[-1].replace(" ", "_")
+                        for d in dets:
+                            d.class_name = canonical
+                        frame_dets[fidx].extend(dets)
+            except Exception as e:
+                logger.debug(f"propagate iterator 파싱 오류: {e}")
 
     def _assign_track_ids(
         self,
@@ -516,57 +590,8 @@ class SAM3ObjectDetector:
                 next_track_id += 1
         return next_track_id
 
-    def _track_with_video_predictor(self, frames: List[np.ndarray], step: int = 5) -> List[Dict[str, Any]]:
-        """
-        video predictor + IoU 매칭으로 세그먼트 추적.
-        step 프레임마다 한 번 SAM3 실행, 중간 프레임은 직전 탐지 결과 재사용.
-        """
-        import torch
-        from PIL import Image
-
-        results: List[Dict[str, Any]] = []
-        prev_dets: List[Detection] = []
-        next_track_id = 0
-
-        for frame_idx, frame in enumerate(frames):
-            h, w = frame.shape[:2]
-
-            if frame_idx % step == 0:
-                # SAM3 실행 프레임
-                pil_img = Image.fromarray(frame).convert("RGB")
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                    tmp_path = tmp.name
-                try:
-                    pil_img.save(tmp_path, format="JPEG", quality=95)
-                    curr_dets = self._detect_frame_via_predictor(tmp_path, h, w)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except Exception:
-                        pass
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            else:
-                # 중간 프레임: 직전 탐지 결과 복사 (track_id 유지)
-                curr_dets = [
-                    Detection(d.class_name, d.confidence, d.bbox[:], track_id=d.track_id)
-                    for d in prev_dets
-                ]
-
-            next_track_id = self._assign_track_ids(curr_dets, prev_dets, next_track_id)
-
-            if curr_dets:
-                results.append({
-                    "frame_index": frame_idx,
-                    "detections": [d.to_dict() for d in curr_dets],
-                })
-            prev_dets = curr_dets
-
-        return results
-
     def _track_with_image_model(self, frames: List[np.ndarray], step: int = 5) -> List[Dict[str, Any]]:
-        """image model 직접 탐지 + IoU 추적 (video predictor 없을 때 폴백).
+        """image model 직접 탐지 + IoU 추적 (video predictor 폴백).
         step 프레임마다 한 번 탐지, 중간 프레임은 직전 결과 재사용."""
         import torch
 
