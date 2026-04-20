@@ -240,37 +240,9 @@ class SAM3ObjectDetector:
             self._processor = Sam3Processor(self._image_model)
             logger.info("SAM3 image model loaded successfully")
 
-            try:
-                from sam3.model_builder import build_sam3_video_predictor
-                logger.info("SAM3 video predictor 로딩")
-                self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
-                logger.info("SAM3 video predictor loaded")
-
-                # handle_request 소스에서 유효한 request type 목록 확인
-                try:
-                    import inspect as _inspect
-                    _src = _inspect.getsource(self._video_predictor.handle_request)
-                    logger.warning(f"[SAM3 handle_request 소스]\n{_src}")
-                except Exception as _e:
-                    logger.warning(f"handle_request getsource 실패: {_e}")
-
-                # predictor 객체에서 직접 handler 딕셔너리 탐색
-                try:
-                    for _attr in ("_handlers", "_request_handlers", "_dispatch", "handlers"):
-                        _val = getattr(self._video_predictor, _attr, None)
-                        if isinstance(_val, dict):
-                            logger.warning(f"[SAM3 video predictor 지원 request types] {list(_val.keys())}")
-                            break
-                    else:
-                        # 클래스 메서드 중 request 처리할 것 같은 이름 탐색
-                        _methods = [m for m in dir(self._video_predictor)
-                                    if not m.startswith("__") and callable(getattr(self._video_predictor, m, None))]
-                        logger.warning(f"[SAM3 video predictor 메서드] {_methods}")
-                except Exception as _e:
-                    logger.warning(f"predictor 속성 탐색 실패: {_e}")
-            except Exception as e:
-                logger.warning(f"SAM3 video predictor 로딩 실패 (image model으로 대체): {e}")
-                self._video_predictor = None
+            # video predictor: propagate_in_video 미지원 확인됨 → 로딩 생략
+            # track_segment는 image model + IoU 추적으로 동작
+            self._video_predictor = None
 
         except ModuleNotFoundError as e:
             logger.error(f"SAM3 모듈 없음: {e}  →  sam3_path 확인 필요")
@@ -422,13 +394,6 @@ class SAM3ObjectDetector:
             return []
 
         step = max(1, self.config.get("detection_frame_step", 5))
-
-        if self._video_predictor is not None:
-            try:
-                return self._track_with_video_predictor(frames)
-            except Exception as e:
-                logger.warning(f"video predictor 실패, image model로 대체: {e}")
-
         return self._track_with_image_model(frames, step)
 
     def _track_with_video_predictor(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
