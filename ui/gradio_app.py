@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple, Generator
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
+SAMPLES_DIR = Path(__file__).parent.parent / "samples"
 
 
 def _load_ui_config() -> dict:
@@ -171,6 +172,32 @@ def _get_video_list_choices() -> list:
     return [f"{v['video_id']} - {v['filename']}" for v in _analyzed_videos]
 
 
+def _get_sample_video_choices() -> list:
+    """samples/ 디렉토리에서 영상 파일 목록을 반환합니다."""
+    SAMPLES_DIR.mkdir(exist_ok=True)
+    exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+    return sorted(p.name for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in exts)
+
+
+def analyze_sample_video(sample_name: str, collection_name: str, progress=gr.Progress()):
+    """samples/ 폴더의 영상을 선택하여 분석합니다."""
+    if not sample_name:
+        choices = _get_video_list_choices()
+        return "예시 영상을 선택하세요.", gr.update(choices=choices, value=choices)
+
+    sample_path = SAMPLES_DIR / sample_name
+    if not sample_path.exists():
+        choices = _get_video_list_choices()
+        return f"파일을 찾을 수 없습니다: {sample_name}", gr.update(choices=choices, value=choices)
+
+    # 경로를 name 속성처럼 접근할 수 있는 객체로 래핑
+    class _FileLike:
+        def __init__(self, path):
+            self.name = str(path)
+
+    return analyze_video(_FileLike(sample_path), collection_name, progress)
+
+
 def update_active_videos(selected_items: List[str]) -> str:
     """UI에서 선택된 비디오를 활성 컨텍스트로 설정합니다."""
     global _active_video_ids
@@ -317,6 +344,7 @@ def create_app(agent=None) -> gr.Blocks:
             with gr.Column(scale=1):
                 gr.Markdown("## 영상 분석")
 
+                gr.Markdown("#### 직접 업로드")
                 video_upload = gr.File(
                     label="군사 영상 업로드 (mp4, avi, mov)",
                     file_types=[".mp4", ".avi", ".mov", ".mkv"],
@@ -327,6 +355,18 @@ def create_app(agent=None) -> gr.Blocks:
                     placeholder="컬렉션 이름 입력",
                 )
                 analyze_btn = gr.Button("영상 분석 시작", variant="primary")
+
+                gr.Markdown("#### 예시 영상")
+                sample_dropdown = gr.Dropdown(
+                    label="예시 영상 선택",
+                    choices=_get_sample_video_choices(),
+                    value=None,
+                    interactive=True,
+                )
+                with gr.Row():
+                    sample_refresh_btn = gr.Button("목록 새로고침", scale=1)
+                    sample_analyze_btn = gr.Button("예시 영상 분석", variant="primary", scale=2)
+
                 analysis_status = gr.Textbox(
                     label="분석 상태",
                     lines=6,
@@ -407,6 +447,17 @@ def create_app(agent=None) -> gr.Blocks:
             fn=analyze_video,
             inputs=[video_upload, collection_input],
             outputs=[analysis_status, video_list],
+        )
+
+        sample_analyze_btn.click(
+            fn=analyze_sample_video,
+            inputs=[sample_dropdown, collection_input],
+            outputs=[analysis_status, video_list],
+        )
+
+        sample_refresh_btn.click(
+            fn=lambda: gr.update(choices=_get_sample_video_choices()),
+            outputs=[sample_dropdown],
         )
 
         video_list.change(
