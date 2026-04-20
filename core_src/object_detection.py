@@ -250,9 +250,24 @@ class SAM3ObjectDetector:
                 try:
                     import inspect as _inspect
                     _src = _inspect.getsource(self._video_predictor.handle_request)
-                    logger.debug(f"[SAM3 handle_request 소스]\n{_src}")
+                    logger.warning(f"[SAM3 handle_request 소스]\n{_src}")
                 except Exception as _e:
-                    logger.debug(f"handle_request getsource 실패: {_e}")
+                    logger.warning(f"handle_request getsource 실패: {_e}")
+
+                # predictor 객체에서 직접 handler 딕셔너리 탐색
+                try:
+                    for _attr in ("_handlers", "_request_handlers", "_dispatch", "handlers"):
+                        _val = getattr(self._video_predictor, _attr, None)
+                        if isinstance(_val, dict):
+                            logger.warning(f"[SAM3 video predictor 지원 request types] {list(_val.keys())}")
+                            break
+                    else:
+                        # 클래스 메서드 중 request 처리할 것 같은 이름 탐색
+                        _methods = [m for m in dir(self._video_predictor)
+                                    if not m.startswith("__") and callable(getattr(self._video_predictor, m, None))]
+                        logger.warning(f"[SAM3 video predictor 메서드] {_methods}")
+                except Exception as _e:
+                    logger.warning(f"predictor 속성 탐색 실패: {_e}")
             except Exception as e:
                 logger.warning(f"SAM3 video predictor 로딩 실패 (image model으로 대체): {e}")
                 self._video_predictor = None
