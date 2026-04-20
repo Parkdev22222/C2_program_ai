@@ -222,6 +222,8 @@ class SAM3ObjectDetector:
         warnings.filterwarnings("ignore", message="Input type.*FloatTensor", category=UserWarning)
         warnings.filterwarnings("ignore", message="Kwargs passed to")
         warnings.filterwarnings("ignore", message="processor_kwargs")
+        warnings.filterwarnings("ignore", message="Input type.*and bias type")
+        warnings.filterwarnings("ignore", category=UserWarning, module="sam3")
 
         try:
             import torch
@@ -243,6 +245,14 @@ class SAM3ObjectDetector:
                 logger.info("SAM3 video predictor 로딩")
                 self._video_predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint_path)
                 logger.info("SAM3 video predictor loaded")
+
+                # handle_request 소스에서 유효한 request type 목록 확인
+                try:
+                    import inspect as _inspect
+                    _src = _inspect.getsource(self._video_predictor.handle_request)
+                    logger.debug(f"[SAM3 handle_request 소스]\n{_src}")
+                except Exception as _e:
+                    logger.debug(f"handle_request getsource 실패: {_e}")
             except Exception as e:
                 logger.warning(f"SAM3 video predictor 로딩 실패 (image model으로 대체): {e}")
                 self._video_predictor = None
@@ -475,15 +485,36 @@ class SAM3ObjectDetector:
                     except Exception as e:
                         logger.warning(f"add_prompt '{class_name}': {e}")
 
-                # 4. 전체 비디오 전파 (propagate_in_video)
-                try:
-                    prop_resp = self._video_predictor.handle_request(
-                        request=dict(type="propagate_in_video", session_id=session_id)
+                # 4. 전체 비디오 전파 — SAM3 버전에 따라 request type이 다를 수 있음
+                _propagate_types = [
+                    "propagate_in_video",
+                    "propagate",
+                    "track",
+                    "track_in_video",
+                    "run_propagation",
+                ]
+                _propagated = False
+                for _ptype in _propagate_types:
+                    try:
+                        prop_resp = self._video_predictor.handle_request(
+                            request=dict(type=_ptype, session_id=session_id)
+                        )
+                        logger.info(f"propagate request type '{_ptype}' 성공")
+                        self._parse_propagate_response(prop_resp, frame_dets, h, w)
+                        _propagated = True
+                        break
+                    except Exception as e:
+                        err = str(e)
+                        if "invalid request type" in err or "unknown" in err.lower():
+                            logger.debug(f"'{_ptype}' 미지원, 다음 시도")
+                            continue
+                        logger.warning(f"propagate '{_ptype}' 오류: {e}")
+                        break
+                if not _propagated:
+                    logger.warning(
+                        "propagate 지원 request type을 찾지 못했습니다. "
+                        "frame 0 탐지 결과만 사용합니다."
                     )
-                    logger.debug(f"propagate_in_video 응답 타입: {type(prop_resp)}")
-                    self._parse_propagate_response(prop_resp, frame_dets, h, w)
-                except Exception as e:
-                    logger.warning(f"propagate_in_video 오류: {e}")
 
             finally:
                 # 5. 세션 종료 (공식 docs: close_session)
