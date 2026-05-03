@@ -1,0 +1,72 @@
+version=53;
+addons[]=
+{
+};
+randomSeed=20240101;
+dateDay=1;
+dateMonth=7;
+
+class Intel
+{
+	briefingName="C2AI :: 기계화 보병 대대 vs 대대";
+	overviewText="C2AI 연동 기계화 보병 대대 교전 시나리오<br/>각 대대: 2개 중대 / 각 중대: APC 8대 + 보병 80명";
+	changeWeatherInterval=0;
+	forecastWeather=0.29999998;
+	startWeather=0.20000000;
+	forecastFog=0;
+	startFog=0;
+	forecastFogDecay=0.01;
+	startFogDecay=0.01;
+	startFogBase=0;
+	forecastFogBase=0;
+	overcast=0.30000001;
+};
+
+class Entities
+{
+	items=1;
+	class Item0
+	{
+		dataType="Group";
+		side="West";
+		class Entities
+		{
+			items=1;
+			class Item0
+			{
+				dataType="Object";
+				class PositionInfo
+				{
+					// BLUFOR 지휘소 인근 — 실제 스폰은 init.sqf 처리
+					position[]={7500,0,4200};
+					angles[]={0,0,0};
+				};
+				type="B_Soldier_F";
+				id=1;
+				atlOffset=0;
+				class CustomAttributes
+				{
+					items=1;
+					class Item0
+					{
+						property="Arma3::IsPlayer";
+						expression="";
+						class Value
+						{
+							class data
+							{
+								class type
+								{
+									type[]={1};
+								};
+								value=1;
+							};
+						};
+					};
+				};
+			};
+		};
+		id=2;
+		atlOffset=0;
+	};
+};

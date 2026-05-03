@@ -16,18 +16,24 @@ scenarios:
 
   bn_vs_bn:
     display_name: "기계화 보병 대대 vs 대대"
-    description: "BLUFOR vs OPFOR 기계화 보병 대대급 전투 시나리오"
+    description: "BLUFOR vs OPFOR 기계화 보병 대대급 전투 시나리오 (각 중대: APC 8대 + 보병 80명)"
     mission_name: "C2AI_BN_VS_BN"   # 미션 폴더명 (확장자 제외)
-    world: "Altis"                  # 맵 이름
-    multiplayer: true               # true → mpmissions, false → missions
+    world: "Altis"                   # 맵 이름
+    multiplayer: true                # true → mpmissions, false → missions
     # 미션 폴더 절대경로 (비워두면 Documents\Arma 3\mpmissions 자동 탐색)
+    # 배포: arma3_integration/mission_template/C2AI_BN_VS_BN.Altis/ 를
+    #        Documents\Arma 3\mpmissions\ 에 통째로 복사
     mission_dir: ""
     # 에이전트에게 전달할 시나리오 컨텍스트
     agent_context: >
-      기계화 보병 대대 vs 대대 시나리오.
-      BLUFOR 그룹 ID: Alpha, Bravo, Charlie, Delta, HQ.
-      OPFOR  그룹 ID: Red1, Red2, Red3, Red4, RedHQ.
-      중대별 임무 경로 생성 시 위 groupId를 company_id로 사용할 것.
+      기계화 보병 대대 vs 대대 시나리오 (Altis 맵).
+      BLUFOR 대대: Alpha 중대(APC 8대 + 보병 80명), Bravo 중대(APC 8대 + 보병 80명).
+      OPFOR  대대: Red1  중대(APC 8대 + 보병 80명), Red2  중대(APC 8대 + 보병 80명).
+      BLUFOR 초기 위치: Alpha=[7500,5000], Bravo=[7500,6500] (남부, 북향).
+      OPFOR  초기 위치: Red1=[22000,20000], Red2=[22000,21500] (북부, 남향).
+      양측 초기 거리: 약 15km. 예상 교전 구역: [14000-16000, 12000-14000].
+      중대별 임무 경로 생성 시 위 groupId(Alpha/Bravo/Red1/Red2)를 company_id로 사용할 것.
+      웨이포인트 좌표는 ARMA3 ASL 기준 (x=동쪽m, y=북쪽m).
 
   company_attack:
     display_name: "중대급 공격 작전"

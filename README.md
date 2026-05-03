@@ -237,31 +237,60 @@ pip install requests
 
 ## 5단계 — ARMA3 미션 설정
 
-### 5-1. SQF 파일 배포
+### 5-1. 예제 미션 배포 (권장 — 한 번에 복사)
 
-다음 파일들을 ARMA3 미션 폴더에 복사합니다.
+저장소에 완성된 예제 미션이 포함되어 있습니다.  
+아래 폴더를 통째로 ARMA3 `mpmissions` 폴더에 복사합니다.
 
 ```
-미션 폴더 예: C:\Users\유저명\Documents\Arma 3\missions\C2AI_BN_VS_BN.Altis\
+[복사 원본]
+  arma3_integration/mission_template/C2AI_BN_VS_BN.Altis/
+
+[복사 대상]
+  C:\Users\유저명\Documents\Arma 3\mpmissions\C2AI_BN_VS_BN.Altis\
 ```
 
-복사할 파일:
+복사 후 폴더 구조:
+```
+mpmissions\
+└── C2AI_BN_VS_BN.Altis\
+    ├── mission.sqm           ← Eden 에디터 미션 파일 (플레이어 1명)
+    ├── description.ext       ← 미션 설명 및 설정
+    ├── init.sqf              ← 유닛 스폰 + C2AI 초기화
+    ├── c2_ai_reporter.sqf    ← 전장 데이터 수집
+    └── c2_order_executor.sqf ← 임무 명령 자동 실행
+```
+
+**예제 미션 편제:**
+
+| 진영 | 중대 | groupId | APC | 보병 |
+|------|------|---------|-----|------|
+| BLUFOR | Alpha 중대 | `Alpha` | Pandur II × 8 | 80명 |
+| BLUFOR | Bravo 중대 | `Bravo` | Pandur II × 8 | 80명 |
+| OPFOR  | Red1 중대  | `Red1`  | Marid × 8    | 80명 |
+| OPFOR  | Red2 중대  | `Red2`  | Marid × 8    | 80명 |
+
+> **총전력:** 양측 합계 AI 384명 + 차량 32대 / 양측 초기 거리 약 15km
+
+> 자체 init.sqf에 이미 `c2_ai_reporter.sqf`와 `c2_order_executor.sqf` 호출이 포함되어 있어  
+> 추가 설정 없이 바로 사용 가능합니다.
+
+---
+
+### 5-2. 커스텀 미션에 C2AI 연동하기 (선택)
+
+기존 미션이 있는 경우, 아래 파일들을 미션 폴더에 복사하고 `init.sqf`를 수정합니다.
+
 ```
 arma3_integration/c2_ai_reporter.sqf     → 미션폴더/c2_ai_reporter.sqf
 arma3_integration/c2_order_executor.sqf  → 미션폴더/c2_order_executor.sqf
 ```
 
-### 5-2. init.sqf 설정
-
-미션폴더에 `init.sqf` 파일을 생성하고 아래 내용을 추가합니다.
-
 ```sqf
-// C2 AI 시스템 초기화
-execVM "c2_ai_reporter.sqf";     // 전장 데이터 Colab 업로드
-execVM "c2_order_executor.sqf";  // 임무 명령 수신 및 자동 실행
+// init.sqf 맨 아래에 추가
+execVM "c2_ai_reporter.sqf";
+execVM "c2_order_executor.sqf";
 ```
-
-기존 `init.sqf`가 있으면 위 두 줄을 맨 아래에 추가합니다.
 
 ### 5-3. 부대 그룹 ID 설정 (핵심)
 
