@@ -1,11 +1,13 @@
 # ===== 객체 탐지 및 추적 (SAM3) =====
 object_detection:
-  # SAM3 레포 clone 경로 (sys.path에 추가됨)
-  sam3_path: "/content/drive/MyDrive/sam3"
-  # SAM3 모델 가중치 파일 경로
-  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights/sam3.pt"
+  # SAM2 공식 패키지 체크포인트 경로
+  # 다운로드: https://github.com/facebookresearch/segment-anything-2#model-checkpoints
+  checkpoint_path: ""        # 예: "/path/to/sam2.1_hiera_large.pt"
+  # SAM2 모델 설정 파일 (sam2 패키지 설치 시 사용)
+  sam2_config: "sam2.1_hiera_large.yaml"
+  # checkpoint 미설정 시 HuggingFace facebook/sam2-hiera-large 자동 다운로드
   device: "cuda"
-  dtype: "float32"           # SAM3는 내부 텍스트 인코더가 float32 고정 → float32 필수
+  dtype: "bfloat16"
   target_classes:
     - "soldier"
     - "military soldier"

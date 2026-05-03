@@ -3,22 +3,15 @@
 SAM3 MP4 영상 객체 탐지 및 추적 스크립트
 
 사용법:
-  # 텍스트 프롬프트 (sam3 image model로 탐지 → 트래커에 전달)
-  python sam3_track_video.py --video input.mp4 --prompt "soldier"
-  python sam3_track_video.py --video input.mp4 --prompt "soldier" --prompt "tank"
-
-  # 수동 클릭 포인트 (좌표 직접 지정)
+  python sam3_track_video.py --video input.mp4 --text "person"
+  python sam3_track_video.py --video input.mp4 --text "soldier" --text "tank"
   python sam3_track_video.py --video input.mp4 --point 640,360
-
-  # models_config.yaml의 target_classes 자동 사용
   python sam3_track_video.py --video samples/sample.mp4 --use-config
+  python sam3_track_video.py --video input.mp4 --text "car" --output result.mp4
 """
 
 import argparse
-import gc
 import logging
-import os
-import sys
 import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -29,7 +22,6 @@ import torch
 from PIL import Image
 
 warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*bias type.*")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,92 +29,73 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 상수
-# ──────────────────────────────────────────────────────────────────────────────
 
+# ── 색상 팔레트 (BGR) ────────────────────────────────────────────────────────
 COLORS_BGR = [
-    (0, 230, 0),    (0, 0, 230),    (230, 0, 0),
-    (0, 230, 230),  (230, 0, 230),  (0, 165, 255),
-    (128, 0, 255),  (0, 255, 128),  (255, 128, 0),
+    (0, 230, 0),   (0, 0, 230),   (230, 0, 0),
+    (0, 230, 230), (230, 0, 230), (0, 165, 255),
+    (128, 0, 255), (0, 255, 128), (255, 128, 0),
     (0, 128, 255),
 ]
 
+
 def get_color(idx: int) -> Tuple[int, int, int]:
-    return COLORS_BGR[idx % len(COLORS_BGR)]
+    return COLORS_BGR[int(idx) % len(COLORS_BGR)]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 설정 로딩
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ── 설정 로딩 ────────────────────────────────────────────────────────────────
 def load_config() -> dict:
     try:
         import yaml
         path = Path(__file__).parent / "config" / "models_config.yaml"
         cfg = yaml.safe_load(path.read_text())["object_detection"]
         return {
-            "sam3_path":       cfg.get("sam3_path", ""),
-            "checkpoint_path": cfg.get("checkpoint_path", ""),
-            "target_classes":  cfg.get("target_classes", []),
-            "conf_threshold":  cfg.get("confidence_threshold", 0.01),
+            "target_classes": cfg.get("target_classes", []),
+            "conf_threshold": cfg.get("confidence_threshold", 0.01),
         }
     except Exception:
         return {}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 모델 로딩
-# ──────────────────────────────────────────────────────────────────────────────
+# ── 모델 로딩 ────────────────────────────────────────────────────────────────
+def load_model(hf_model_id: str, device: torch.device, dtype: torch.dtype):
+    from transformers import Sam3VideoModel, Sam3VideoProcessor
 
-def load_tracker(hf_model_id: str, device: torch.device, dtype: torch.dtype):
-    """HuggingFace Sam3TrackerVideoModel + Sam3TrackerVideoProcessor."""
-    from transformers import Sam3TrackerVideoModel, Sam3TrackerVideoProcessor
-    log.info(f"SAM3 tracker 모델 로딩: {hf_model_id}")
-    model = Sam3TrackerVideoModel.from_pretrained(hf_model_id).to(device, dtype=dtype)
+    log.info(f"SAM3 모델 로딩: {hf_model_id}")
+    model = Sam3VideoModel.from_pretrained(hf_model_id).to(device, dtype=dtype)
     model.eval()
-    proc = Sam3TrackerVideoProcessor.from_pretrained(hf_model_id)
-    log.info("SAM3 tracker 로딩 완료")
-    return model, proc
+    processor = Sam3VideoProcessor.from_pretrained(hf_model_id)
+    log.info("SAM3 모델 로딩 완료")
+    return model, processor
 
 
-def load_image_detector(sam3_path: str, ckpt: str, device: torch.device):
-    """텍스트 프롬프트 초기 탐지용 sam3 패키지 이미지 모델."""
-    if sam3_path and sam3_path not in sys.path:
-        sys.path.insert(0, sam3_path)
-    from sam3.model_builder import build_sam3_image_model
-    from sam3.model.sam3_image_processor import Sam3Processor
-    log.info(f"SAM3 image detector 로딩: {ckpt}")
-    m = build_sam3_image_model(checkpoint_path=ckpt)
-    m = m.to(device=device, dtype=torch.float32).eval()
-    log.info("SAM3 image detector 로딩 완료")
-    return Sam3Processor(m)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 비디오 I/O
-# ──────────────────────────────────────────────────────────────────────────────
-
-def read_video(path: str) -> Tuple[List[np.ndarray], float, int, int]:
+# ── 비디오 로딩 (로컬 MP4 → PIL 프레임 리스트) ───────────────────────────────
+def load_local_video(path: str) -> Tuple[List[Image.Image], float, int, int]:
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise FileNotFoundError(f"영상을 열 수 없습니다: {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    fps   = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     log.info(f"영상: {w}×{h}  {fps:.1f}fps  {total}프레임")
-    frames = []
+
+    pil_frames: List[Image.Image] = []
     while True:
-        ok, f = cap.read()
+        ok, bgr = cap.read()
         if not ok:
             break
-        frames.append(f)
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        pil_frames.append(Image.fromarray(rgb))
+
     cap.release()
-    return frames, fps, w, h
+    log.info(f"프레임 로딩 완료: {len(pil_frames)}프레임")
+    return pil_frames, fps, w, h
 
 
-def write_video(frames: List[np.ndarray], path: str, fps: float, w: int, h: int):
+# ── 결과 영상 저장 ────────────────────────────────────────────────────────────
+def write_video(frames: List[np.ndarray], path: str, fps: float, w: int, h: int) -> None:
     out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     for f in frames:
         out.write(f)
@@ -130,341 +103,288 @@ def write_video(frames: List[np.ndarray], path: str, fps: float, w: int, h: int)
     log.info(f"결과 영상 저장: {path}  ({len(frames)}프레임)")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 텍스트 → 포인트 변환 (sam3 image model 사용)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def text_to_points(
-    img_proc,
-    frame_bgr: np.ndarray,
-    class_name: str,
-    conf_thr: float,
-) -> List[Tuple[int, int]]:
-    """
-    sam3 image model로 class_name 탐지 → 각 객체의 중심 좌표 반환.
-    탐지 실패 시 빈 리스트 반환.
-    """
-    h, w = frame_bgr.shape[:2]
-    pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-
-    with torch.no_grad():
-        state = img_proc.set_image(pil)
-        out   = img_proc.set_text_prompt(prompt=class_name, state=state)
-    del state
-    gc.collect()
-
-    def _np(v):
-        if v is None: return np.array([])
-        return v.cpu().numpy() if hasattr(v, "cpu") else np.asarray(v)
-
-    masks_np  = _np(out.get("masks"))
-    boxes_np  = _np(out.get("boxes"))
-    scores_np = _np(out.get("scores")).flatten()
-
-    points = []
-    for i, score in enumerate(scores_np):
-        if float(score) < conf_thr:
-            continue
-        # 마스크 중심
-        if masks_np.ndim >= 3 and i < len(masks_np):
-            mask = np.squeeze(masks_np[i]).astype(bool)
-            if mask.shape != (h, w):
-                mask = np.array(
-                    Image.fromarray(mask.astype(np.uint8) * 255, "L").resize((w, h), Image.NEAREST)
-                ) > 127
-            ys, xs = np.where(mask)
-            if len(xs):
-                points.append((int(xs.mean()), int(ys.mean())))
-        # 박스 중심
-        elif i < len(boxes_np):
-            x1, y1, x2, y2 = boxes_np[i].tolist()
-            if max(x2, y2) <= 1.0:
-                x1, y1, x2, y2 = x1*w, y1*h, x2*w, y2*h
-            points.append((int((x1+x2)/2), int((y1+y2)/2)))
-
-    log.info(f"  '{class_name}': {len(points)}개 탐지")
-    return points
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 마스크 후처리
-# ──────────────────────────────────────────────────────────────────────────────
-
-def to_bool_mask(tensor: torch.Tensor, h: int, w: int) -> np.ndarray:
-    m = tensor.squeeze()
-    if m.dtype != torch.bool:
-        m = m > 0.0
-    m = m.cpu().numpy().astype(bool)
-    if m.shape != (h, w):
-        m = np.array(
-            Image.fromarray(m.astype(np.uint8) * 255, "L").resize((w, h), Image.NEAREST)
-        ) > 127
-    return m
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 프레임 렌더링
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ── 프레임 렌더링 ─────────────────────────────────────────────────────────────
 def render_frame(
-    frame: np.ndarray,
-    segments: Dict[int, np.ndarray],          # obj_id → mask
+    pil_frame: Image.Image,
+    frame_outputs: dict,
     id_to_label: Dict[int, str],
+    conf_thr: float,
     alpha: float = 0.45,
 ) -> np.ndarray:
-    out = frame.copy()
+    """
+    frame_outputs 키:
+      object_ids : Tensor[N]
+      scores     : Tensor[N]
+      boxes      : Tensor[N, 4]  XYXY 절대 좌표
+      masks      : Tensor[N, H, W] 또는 Tensor[N, 1, H, W]
+    """
+    bgr = cv2.cvtColor(np.array(pil_frame), cv2.COLOR_RGB2BGR)
+    h, w = bgr.shape[:2]
 
-    for obj_id, mask in segments.items():
-        if mask is None or not mask.any():
+    obj_ids = frame_outputs.get("object_ids")
+    scores  = frame_outputs.get("scores")
+    boxes   = frame_outputs.get("boxes")
+    masks   = frame_outputs.get("masks")
+
+    if obj_ids is None:
+        return bgr
+
+    obj_ids_list = obj_ids.tolist() if hasattr(obj_ids, "tolist") else list(obj_ids)
+    scores_list  = scores.tolist()  if (scores is not None and hasattr(scores, "tolist")) else []
+
+    for i, obj_id in enumerate(obj_ids_list):
+        score = scores_list[i] if i < len(scores_list) else 1.0
+        if score < conf_thr:
             continue
-        color = get_color(obj_id - 1)
-        label = id_to_label.get(obj_id, f"obj{obj_id}")
+
+        color = get_color(int(obj_id) - 1)
+        label = f"{id_to_label.get(int(obj_id), f'obj{obj_id}')} {score:.2f}"
 
         # 마스크 오버레이
-        overlay = out.copy()
-        overlay[mask] = color
-        out = cv2.addWeighted(overlay, alpha, out, 1 - alpha, 0)
+        if masks is not None and i < len(masks):
+            mask_t = masks[i]
+            if mask_t.dim() == 3:
+                mask_t = mask_t.squeeze(0)
+            mask_np = mask_t.cpu().numpy().astype(bool)
+            if mask_np.shape != (h, w):
+                mask_np = np.array(
+                    Image.fromarray(mask_np.astype(np.uint8) * 255, "L")
+                    .resize((w, h), Image.NEAREST)
+                ) > 127
+            overlay = bgr.copy()
+            overlay[mask_np] = color
+            bgr = cv2.addWeighted(overlay, alpha, bgr, 1 - alpha, 0)
 
-        # 바운딩 박스
-        ys, xs = np.where(mask)
-        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+        # 바운딩 박스 + 라벨
+        if boxes is not None and i < len(boxes):
+            x1, y1, x2, y2 = boxes[i].tolist()
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            cv2.rectangle(bgr, (x1, y1), (x2, y2), color, 2)
+            (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+            cv2.rectangle(bgr, (x1, y1 - th - bl - 5), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(
+                bgr, label, (x1 + 2, y1 - bl - 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA,
+            )
 
-        # 라벨
-        (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-        cv2.rectangle(out, (x1, y1 - th - bl - 5), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(out, label, (x1 + 2, y1 - bl - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-    return out
+    return bgr
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 핵심 로직
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ── 핵심 추적 로직 ────────────────────────────────────────────────────────────
 def track(
-    tracker_model,
-    tracker_proc,
-    img_detector,                      # None이면 포인트 모드만
-    bgr_frames: List[np.ndarray],
+    model,
+    processor,
+    pil_frames: List[Image.Image],
     text_prompts: List[str],
     manual_points: List[Tuple[int, int]],
     conf_thr: float,
-    prompt_frame: int,
     device: torch.device,
     dtype: torch.dtype,
-) -> List[np.ndarray]:
-
-    h, w = bgr_frames[0].shape[:2]
-    pil_frames = [
-        Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
-        for f in bgr_frames
-    ]
-
-    # ── 1. 비디오 세션 초기화 ─────────────────────────────────────
+    max_frames: Optional[int],
+) -> Tuple[Dict[int, dict], Dict[int, str]]:
+    """
+    반환:
+      outputs_per_frame : {frame_idx: postprocess 결과 dict}
+      id_to_label       : {obj_id: 라벨 문자열}
+    """
+    # ── 비디오 세션 초기화 ─────────────────────────────────────────
     log.info("비디오 세션 초기화 중...")
-    session = tracker_proc.init_video_session(
+    inference_session = processor.init_video_session(
         video=pil_frames,
         inference_device=device,
+        processing_device="cpu",
+        video_storage_device="cpu",
         dtype=dtype,
     )
-    log.info(f"세션 초기화 완료  ({len(pil_frames)}프레임  {w}×{h})")
+    log.info(f"세션 초기화 완료  ({len(pil_frames)}프레임)")
 
     id_to_label: Dict[int, str] = {}
-    next_id = 1
 
-    # ── 2. 텍스트 프롬프트 → 포인트 → 세션 등록 ──────────────────
-    if img_detector is not None:
-        ref_frame = bgr_frames[prompt_frame]
-        for class_name in text_prompts:
-            pts = text_to_points(img_detector, ref_frame, class_name, conf_thr)
-            if not pts:
-                log.warning(f"'{class_name}' frame {prompt_frame}에서 탐지 안됨 — 건너뜀")
-                continue
-            for cx, cy in pts:
-                log.info(f"  등록: '{class_name}'  obj_id={next_id}  point=({cx},{cy})")
-                tracker_proc.add_inputs_to_inference_session(
-                    inference_session=session,
-                    frame_idx=prompt_frame,
-                    obj_ids=next_id,
-                    input_points=[[[[cx, cy]]]],
-                    input_labels=[[[1]]],
-                )
-                id_to_label[next_id] = class_name
-                next_id += 1
-
-    # ── 3. 수동 포인트 등록 ───────────────────────────────────────
-    for cx, cy in manual_points:
-        label = f"obj{next_id}"
-        log.info(f"  등록: 수동 포인트  obj_id={next_id}  point=({cx},{cy})")
-        tracker_proc.add_inputs_to_inference_session(
-            inference_session=session,
-            frame_idx=prompt_frame,
-            obj_ids=next_id,
-            input_points=[[[[cx, cy]]]],
-            input_labels=[[[1]]],
+    # ── 텍스트 프롬프트 등록 ───────────────────────────────────────
+    for text in text_prompts:
+        log.info(f"텍스트 프롬프트 등록: '{text}'")
+        inference_session = processor.add_text_prompt(
+            inference_session=inference_session,
+            text=text,
         )
-        id_to_label[next_id] = label
-        next_id += 1
 
-    if next_id == 1:
-        log.error("등록된 객체 없음 — 원본 영상을 저장합니다.")
-        return bgr_frames[:]
+    # ── 수동 포인트 등록 ───────────────────────────────────────────
+    for idx, (cx, cy) in enumerate(manual_points):
+        log.info(f"수동 포인트 등록: ({cx}, {cy})")
+        try:
+            inference_session = processor.add_point_prompt(
+                inference_session=inference_session,
+                point=[[cx, cy]],
+                label=[1],
+                frame_idx=0,
+            )
+        except AttributeError:
+            # add_point_prompt가 없는 버전 대응
+            inference_session = processor.add_inputs_to_inference_session(
+                inference_session=inference_session,
+                frame_idx=0,
+                obj_ids=idx + 1,
+                input_points=[[[[cx, cy]]]],
+                input_labels=[[[1]]],
+            )
 
-    log.info(f"총 {next_id - 1}개 객체 등록 완료")
+    # ── 텍스트 기반 obj_id → 라벨 매핑 구성 ──────────────────────
+    # 탐지 후 실제 obj_id는 propagate 결과에서 확인
+    # 텍스트 순서대로 임시 매핑 (실제 obj_id는 렌더링 시 동적 처리)
+    for text in text_prompts:
+        for obj_id in range(1, 100):
+            if obj_id not in id_to_label:
+                id_to_label[obj_id] = text
+                break
 
-    # ── 4. 전체 영상 전파 (propagate_in_video_iterator) ───────────
+    for idx, _ in enumerate(manual_points):
+        obj_id = len(text_prompts) + idx + 1
+        id_to_label[obj_id] = f"obj{obj_id}"
+
+    # ── 전체 영상 전파 ─────────────────────────────────────────────
     log.info("전체 비디오 추적 시작...")
-    video_segments: Dict[int, Dict[int, np.ndarray]] = {}  # frame_idx → {obj_id: mask}
+    outputs_per_frame: Dict[int, dict] = {}
 
-    for output in tracker_model.propagate_in_video_iterator(session):
-        fidx = output.frame_idx
+    propagate_kwargs = dict(inference_session=inference_session)
+    if max_frames is not None:
+        propagate_kwargs["max_frame_num_to_track"] = max_frames
 
-        # post_process_masks: binarize=True → bool 마스크
-        masks_pp = tracker_proc.post_process_masks(
-            [output.pred_masks],
-            original_sizes=[[session.video_height, session.video_width]],
-            binarize=True,
-        )[0]  # (num_objects, 1, H, W)
+    for model_outputs in model.propagate_in_video_iterator(**propagate_kwargs):
+        frame_idx = model_outputs.frame_idx
+        processed = processor.postprocess_outputs(inference_session, model_outputs)
+        outputs_per_frame[frame_idx] = processed
 
-        obj_ids = (
-            output.obj_ids.tolist()
-            if hasattr(output, "obj_ids") and output.obj_ids is not None
-            else list(id_to_label.keys())
-        )
+        # postprocess 결과의 obj_id → 라벨 동적 갱신
+        obj_ids = processed.get("object_ids")
+        if obj_ids is not None:
+            for oid in obj_ids.tolist():
+                if int(oid) not in id_to_label:
+                    id_to_label[int(oid)] = f"obj{oid}"
 
-        seg = {}
-        for oi, oid in enumerate(obj_ids):
-            if oi < len(masks_pp):
-                seg[int(oid)] = to_bool_mask(masks_pp[oi], h, w)
-        video_segments[fidx] = seg
+        if frame_idx % 60 == 0:
+            n_obj = len(obj_ids) if obj_ids is not None else 0
+            log.info(f"  추적 진행: {frame_idx}/{len(pil_frames)} 프레임  객체 {n_obj}개")
 
-        if fidx % 60 == 0:
-            log.info(f"  추적 진행: {fidx}/{len(bgr_frames)} 프레임")
-
-    log.info(f"추적 완료: {len(video_segments)}프레임 처리됨")
-
-    # ── 5. 결과 렌더링 ────────────────────────────────────────────
-    annotated = [f.copy() for f in bgr_frames]
-    for fidx, seg in video_segments.items():
-        if fidx >= len(annotated):
-            continue
-        annotated[fidx] = render_frame(annotated[fidx], seg, id_to_label)
-
-    # 프레임 카운터 오버레이
-    total = len(annotated)
-    for i, f in enumerate(annotated):
-        cv2.putText(f, f"{i+1}/{total}", (8, 26),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 1, cv2.LINE_AA)
-
-    return annotated
+    log.info(f"추적 완료: {len(outputs_per_frame)}프레임 처리됨")
+    return outputs_per_frame, id_to_label
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────────────
-
-def build_args():
+# ── CLI ──────────────────────────────────────────────────────────────────────
+def build_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="SAM3 비디오 객체 탐지 및 추적",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--video",      required=True, help="입력 영상 경로 (.mp4 등)")
-    p.add_argument("--output",     default="",    help="출력 경로 (기본: <입력>_tracked.mp4)")
-    p.add_argument("--prompt",     action="append", dest="prompts", default=[],
-                   metavar="TEXT", help="탐지 텍스트 (반복 가능, 예: --prompt soldier)")
-    p.add_argument("--point",      action="append", dest="points",  default=[],
+    p.add_argument("--video",      required=True,
+                   help="입력 영상 경로 (.mp4 등)")
+    p.add_argument("--output",     default="",
+                   help="출력 경로 (기본: <입력>_tracked.mp4)")
+    p.add_argument("--text",       action="append", dest="texts", default=[],
+                   metavar="TEXT", help="탐지 텍스트 프롬프트 (반복 가능, 예: --text soldier)")
+    p.add_argument("--prompt",     action="append", dest="texts",
+                   metavar="TEXT", help="--text의 별칭")
+    p.add_argument("--point",      action="append", dest="points", default=[],
                    metavar="X,Y",  help="수동 포인트 (예: --point 640,360)")
     p.add_argument("--use-config", action="store_true",
                    help="models_config.yaml의 target_classes 사용")
-    p.add_argument("--frame",      type=int, default=0,
-                   help="프롬프트 기준 프레임 번호 (기본: 0)")
     p.add_argument("--conf",       type=float, default=None,
-                   help="탐지 신뢰도 임계값 (기본: config 또는 0.01)")
+                   help="표시 신뢰도 임계값 (기본: config 또는 0.01)")
+    p.add_argument("--max-frames", type=int, default=None,
+                   help="추적할 최대 프레임 수 (기본: 전체)")
     p.add_argument("--hf-model",   default="facebook/sam3",
                    help="HuggingFace 모델 ID (기본: facebook/sam3)")
-    p.add_argument("--sam3-path",  default="",
-                   help="sam3 레포 경로 (텍스트 탐지용, config에서 자동 로딩 가능)")
-    p.add_argument("--checkpoint", default="",
-                   help="sam3 가중치 경로 (텍스트 탐지용, config에서 자동 로딩 가능)")
     p.add_argument("--dtype",      default="bfloat16",
-                   choices=["bfloat16", "float16", "float32"])
+                   choices=["bfloat16", "float16", "float32"],
+                   help="모델 추론 dtype (기본: bfloat16)")
     return p.parse_args()
 
 
-def main():
+def main() -> None:
     args = build_args()
     cfg  = load_config()
 
-    # 장치 / dtype
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype  = {"bfloat16": torch.bfloat16, "float16": torch.float16,
-               "float32": torch.float32}[args.dtype]
+    # 장치 / dtype 설정
+    try:
+        from accelerate import Accelerator
+        device = Accelerator().device
+    except Exception:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
+             "float32": torch.float32}[args.dtype]
     log.info(f"device={device}  dtype={args.dtype}")
 
     # 프롬프트 결정
-    prompts = list(args.prompts)
-    if args.use_config or (not prompts and not args.points):
-        prompts = cfg.get("target_classes", []) or prompts
+    texts = list(args.texts or [])
+    if args.use_config or (not texts and not args.points):
+        texts = cfg.get("target_classes", []) or texts
 
     # 수동 포인트 파싱
     manual_points: List[Tuple[int, int]] = []
-    for raw in args.points:
+    for raw in (args.points or []):
         try:
             x, y = raw.split(",")
             manual_points.append((int(x), int(y)))
         except Exception:
             raise SystemExit(f"[오류] --point 형식 잘못됨: '{raw}'  →  예: --point 640,360")
 
-    if not prompts and not manual_points:
-        raise SystemExit("[오류] --prompt / --point / --use-config 중 하나를 지정하세요.")
+    if not texts and not manual_points:
+        raise SystemExit("[오류] --text / --point / --use-config 중 하나를 지정하세요.")
 
     conf_thr = args.conf if args.conf is not None else cfg.get("conf_threshold", 0.01)
 
-    # 출력 경로
+    # 출력 경로 결정
     vp = Path(args.video)
     output_path = args.output or str(vp.parent / f"{vp.stem}_tracked.mp4")
-    log.info(f"입력: {vp}")
-    log.info(f"출력: {output_path}")
-    log.info(f"프롬프트: {prompts}  포인트: {manual_points}  conf: {conf_thr}")
+    log.info(f"입력:   {vp}")
+    log.info(f"출력:   {output_path}")
+    log.info(f"텍스트: {texts}")
+    log.info(f"포인트: {manual_points}")
+    log.info(f"conf:   {conf_thr}")
 
     # 모델 로딩
-    tracker_model, tracker_proc = load_tracker(args.hf_model, device, dtype)
+    model, processor = load_model(args.hf_model, device, dtype)
 
-    img_detector = None
-    if prompts:
-        sp = args.sam3_path or cfg.get("sam3_path", "")
-        ck = args.checkpoint or cfg.get("checkpoint_path", "")
-        if sp and ck:
-            try:
-                img_detector = load_image_detector(sp, ck, device)
-            except Exception as e:
-                log.warning(f"image detector 로딩 실패: {e}")
-        else:
-            log.warning("sam3_path / checkpoint 미설정 → 텍스트 탐지 불가")
-
-    # 영상 로딩
-    bgr_frames, fps, w, h = read_video(str(vp))
+    # 로컬 영상 로딩
+    pil_frames, fps, w, h = load_local_video(str(vp))
 
     # 탐지 + 추적
-    result_frames = track(
-        tracker_model=tracker_model,
-        tracker_proc=tracker_proc,
-        img_detector=img_detector,
-        bgr_frames=bgr_frames,
-        text_prompts=prompts,
+    outputs_per_frame, id_to_label = track(
+        model=model,
+        processor=processor,
+        pil_frames=pil_frames,
+        text_prompts=texts,
         manual_points=manual_points,
         conf_thr=conf_thr,
-        prompt_frame=min(args.frame, len(bgr_frames) - 1),
         device=device,
         dtype=dtype,
+        max_frames=args.max_frames,
     )
 
-    # 저장
-    write_video(result_frames, output_path, fps, w, h)
+    log.info(f"탐지된 객체: {id_to_label}")
+
+    # 결과 프레임 렌더링
+    log.info("결과 프레임 렌더링 중...")
+    annotated: List[np.ndarray] = []
+    total = len(pil_frames)
+
+    for fidx, pil_frame in enumerate(pil_frames):
+        frame_outputs = outputs_per_frame.get(fidx, {})
+        bgr = render_frame(pil_frame, frame_outputs, id_to_label, conf_thr)
+
+        # 프레임 카운터 오버레이
+        cv2.putText(
+            bgr, f"{fidx + 1}/{total}", (8, 26),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 1, cv2.LINE_AA,
+        )
+        annotated.append(bgr)
+
+    # 결과 영상 저장
+    write_video(annotated, output_path, fps, w, h)
     print(f"\n결과 저장 완료: {output_path}")
+    print(f"처리 프레임: {len(outputs_per_frame)}/{total}")
+    print(f"탐지 객체:   {id_to_label}")
 
 
 if __name__ == "__main__":
