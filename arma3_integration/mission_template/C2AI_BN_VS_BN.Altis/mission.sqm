@@ -1,0 +1,48 @@
+// version=12 포맷 — Eden editor 호환성 최고, 모든 ARMA3 버전에서 동작
+version=12;
+language="English";
+minRequiredVersion=0.01;
+
+class Mission
+{
+	class Intel
+	{
+		briefingName="C2AI BN vs BN";
+		overviewText="C2AI mechanized infantry BN vs BN scenario";
+	};
+
+	// 플레이어 유닛 1명 (나머지 유닛은 init.sqf에서 스폰)
+	class Groups
+	{
+		items=1;
+		class Item0
+		{
+			side="WEST";
+			class Vehicles
+			{
+				items=1;
+				class Item0
+				{
+					vehicle="B_Soldier_F";
+					leader=1;
+					skill=0.60000002;
+					player="PLAYER COMMANDER";
+					position[]={7500,5000};
+					id=0;
+					text="unit_player";
+				};
+			};
+			id=0;
+		};
+	};
+
+	class Markers
+	{
+		items=0;
+	};
+
+	class Sensors
+	{
+		items=0;
+	};
+};
