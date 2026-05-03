@@ -1,0 +1,11 @@
+{
+  "last_updated": "",
+  "mission_time": 0,
+  "units": [],
+  "groups": [],
+  "summary": {
+    "opfor": {"infantry": 0, "armor": 0, "helicopter": 0},
+    "blufor": {"infantry": 0, "armor": 0, "helicopter": 0}
+  },
+  "history": []
+}
