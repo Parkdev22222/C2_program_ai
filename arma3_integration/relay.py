@@ -1,12 +1,17 @@
 """
-ARMA3 → Colab 로컬 릴레이 스크립트
+ARMA3 ↔ Colab 양방향 릴레이 스크립트
 
 [로컬 PC에서 실행]
   pip install requests
   python relay.py --url https://xxxx-xx-xx-xx.ngrok-free.app --token YOUR_SECRET_TOKEN
 
+[추가: 임무 명령 수신 활성화]
+  python relay.py --url https://... --token TOKEN --mission-dir "C:\\...\\missions\\MyMission.Altis"
+
 [동작 방식]
-  ARMA3 .rpt 로그 파일을 실시간 감시 → [C2AI_DATA] 라인 추출 → Colab 서버로 HTTP POST
+  ① 업로드: ARMA3 .rpt 로그 파일 감시 → [C2AI_DATA] 라인 추출 → Colab 서버로 HTTP POST
+  ② 다운로드: Colab에서 에이전트가 발행한 임무 명령 폴링 → SQF 파일 생성 → 미션 폴더 저장
+              ARMA3의 c2_order_executor.sqf가 SQF 파일을 자동 감지하여 실행
 """
 
 import argparse
@@ -15,6 +20,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from datetime import datetime
@@ -105,7 +111,6 @@ def tail_and_relay(rpt_path: str, colab_url: str, token: str, poll_interval: flo
     log.info(f"감시 파일: {rpt_path}")
     log.info(f"Colab URL: {colab_url}")
 
-    # 파일 끝으로 이동 (기존 데이터 스킵)
     with open(rpt_path, "r", encoding="utf-8", errors="ignore") as f:
         f.seek(0, 2)
         log.info("기존 로그 건너뜀 — 새 데이터부터 감시 시작")
@@ -121,7 +126,6 @@ def tail_and_relay(rpt_path: str, colab_url: str, token: str, poll_interval: flo
             if data is None:
                 continue
 
-            # 수신 시각 추가
             data["received_at"] = datetime.utcnow().isoformat()
             if send_to_colab(colab_url, token, data):
                 sent_count += 1
@@ -129,22 +133,199 @@ def tail_and_relay(rpt_path: str, colab_url: str, token: str, poll_interval: flo
                     log.info(f"누적 전송 횟수: {sent_count}")
 
 
+# ── SQF 변환 ─────────────────────────────────────────────────────
+
+def _sqf_formation(f: str) -> str:
+    return {
+        "wedge": "WEDGE", "line": "LINE", "column": "COLUMN",
+        "echelon_left": "ECHELON LEFT", "echelon_right": "ECHELON RIGHT",
+        "vee": "VEE", "diamond": "DIAMOND", "stag_column": "STAG COLUMN", "file": "FILE",
+    }.get(f.lower(), "WEDGE")
+
+
+def _sqf_behavior(s: str) -> str:
+    return {
+        "safe": "SAFE", "aware": "AWARE", "combat": "COMBAT", "stealth": "STEALTH",
+        "attack": "COMBAT", "defend": "AWARE", "recon": "STEALTH",
+    }.get(s.lower(), "COMBAT")
+
+
+def _sqf_speed(s: str) -> str:
+    return {
+        "safe": "LIMITED", "aware": "NORMAL", "combat": "FULL", "stealth": "LIMITED",
+        "slow": "LIMITED", "normal": "NORMAL", "fast": "FULL",
+    }.get(s.lower(), "FULL")
+
+
+def _sqf_wp_type(a: str) -> str:
+    return {
+        "move": "MOVE", "attack": "ATTACK", "defend": "HOLD",
+        "hold": "HOLD", "support_by_fire": "HOLD", "assault": "ATTACK",
+        "recon": "MOVE", "withdrawal": "MOVE", "support": "HOLD",
+    }.get(a.lower(), "MOVE")
+
+
+def orders_to_sqf(order: dict) -> str:
+    """JSON 임무 명령을 ARMA3 SQF 스크립트로 변환합니다."""
+    seq = order.get("seq", 0)
+    lines = [
+        f"// C2AI 중대 임무 명령 #{seq}",
+        f"// 발령 시각: {order.get('issued_at', '')}",
+        f"// 시나리오: {order.get('scenario', '')}",
+        f"// 전술 의도: {order.get('tactical_intent', '')}",
+        f"// 자동 생성 — 수동 편집 금지 (다음 명령 수신 시 덮어씌워짐)",
+        "",
+        f'diag_log "[C2AI] 임무 명령 #{seq} 적용 시작";',
+        "",
+    ]
+
+    for company in order.get("companies", []):
+        cid = company.get("company_id", "Unknown")
+        # SQF 변수명에 사용할 수 있는 안전한 이름 (숫자로 시작 금지, 공백 제거)
+        safe_cid = "".join(c if c.isalnum() or c == "_" else "_" for c in cid)
+        if safe_cid and safe_cid[0].isdigit():
+            safe_cid = "C_" + safe_cid
+
+        formation = _sqf_formation(company.get("formation", "wedge"))
+        behavior  = _sqf_behavior(company.get("speed", "combat"))
+        speed     = _sqf_speed(company.get("speed", "combat"))
+        waypoints = company.get("waypoints", [])
+        notes     = company.get("notes", "").replace('"', "'")
+        side      = company.get("side", "")
+        mission   = company.get("mission_type", "")
+
+        lines += [
+            f"// ──── {cid} 중대  |  진영: {side}  |  임무: {mission} ────",
+            f"private _grp_{safe_cid} = grpNull;",
+            f'{{if (groupId _x == "{cid}") exitWith {{_grp_{safe_cid} = _x}}}} forEach allGroups;',
+            f"if (!isNull _grp_{safe_cid}) then {{",
+            f"    // 기존 웨이포인트 초기화",
+            f"    while {{count (waypoints _grp_{safe_cid}) > 0}} do {{",
+            f"        deleteWaypoint [_grp_{safe_cid}, 0];",
+            f"    }};",
+            f'    _grp_{safe_cid} setFormation "{formation}";',
+            f'    _grp_{safe_cid} setSpeedMode "{speed}";',
+            f'    {{_x setBehaviour "{behavior}"}} forEach units _grp_{safe_cid};',
+            "",
+        ]
+
+        for wp in waypoints:
+            x       = wp.get("x", 0)
+            y       = wp.get("y", 0)
+            radius  = wp.get("radius", 50)
+            wp_type = _sqf_wp_type(wp.get("action", "move"))
+            desc    = str(wp.get("notes", f"WP{wp.get('seq', '')}")).replace('"', "'")
+            hold    = int(wp.get("hold_time_sec", 0))
+
+            lines += [
+                f"    private _wp = _grp_{safe_cid} addWaypoint [[{x}, {y}, 0], {radius}];",
+                f'    _wp setWaypointType "{wp_type}";',
+                f'    _wp setWaypointDescription "{desc}";',
+            ]
+            if hold > 0:
+                lines.append(f"    _wp setWaypointTimeout [{hold}, {hold}, {hold}];")
+            lines.append("")
+
+        lines += [
+            f'    diag_log "[C2AI] {cid} 임무 적용 완료: {notes}";',
+            "} else {",
+            f'    diag_log "[C2AI] 경고: {cid} 그룹을 찾을 수 없습니다 (groupId 확인 필요)";',
+            "};",
+            "",
+        ]
+
+    lines.append(f'diag_log "[C2AI] 임무 명령 #{seq} 적용 완료";')
+    return "\n".join(lines)
+
+
+# ── 임무 명령 폴링 (Colab → ARMA3) ───────────────────────────────
+
+def poll_and_apply_orders(colab_url: str, token: str, mission_dir: str, poll_interval: float = 5.0):
+    """
+    Colab에서 대기 중인 임무 명령을 주기적으로 가져와
+    mission_dir에 c2ai_order_N.sqf 파일로 저장합니다.
+    ARMA3의 c2_order_executor.sqf가 해당 파일을 자동으로 감지하여 실행합니다.
+    """
+    mission_path = Path(mission_dir)
+    if not mission_path.exists():
+        log.warning(f"미션 폴더가 없습니다. 생성: {mission_dir}")
+        mission_path.mkdir(parents=True, exist_ok=True)
+
+    log.info(f"임무 명령 폴링 시작 (간격: {poll_interval}s) → {mission_dir}")
+    endpoint_pending = colab_url.rstrip("/") + "/arma3/orders/pending"
+    endpoint_ack     = colab_url.rstrip("/") + "/arma3/orders/ack"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    while True:
+        try:
+            resp = requests.get(endpoint_pending, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                orders = resp.json().get("orders", [])
+                if orders:
+                    acked_ids = []
+                    for order in orders:
+                        seq = order.get("seq", 0)
+                        sqf_content = orders_to_sqf(order)
+                        sqf_path = mission_path / f"c2ai_order_{seq}.sqf"
+                        sqf_path.write_text(sqf_content, encoding="utf-8")
+                        log.info(f"명령 SQF 저장: {sqf_path.name}  "
+                                 f"companies={len(order.get('companies', []))}")
+                        acked_ids.append(order["order_id"])
+
+                    requests.post(
+                        endpoint_ack,
+                        json={"order_ids": acked_ids},
+                        headers=headers,
+                        timeout=10,
+                    )
+            elif resp.status_code not in (401, 503):
+                log.debug(f"명령 폴링 응답: {resp.status_code}")
+        except requests.exceptions.ConnectionError:
+            log.debug("명령 폴링: 서버 연결 없음 (재시도 예정)")
+        except Exception as e:
+            log.error(f"명령 폴링 오류: {e}")
+
+        time.sleep(poll_interval)
+
+
 # ── CLI ──────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="ARMA3 → Colab 데이터 릴레이")
-    parser.add_argument("--url",   required=True,
+    parser = argparse.ArgumentParser(description="ARMA3 ↔ Colab 양방향 데이터 릴레이")
+    parser.add_argument("--url",         required=True,
                         help="Colab ngrok URL (예: https://xxxx.ngrok-free.app)")
-    parser.add_argument("--token", required=True,
+    parser.add_argument("--token",       required=True,
                         help="인증 토큰 (Colab 서버와 동일한 값)")
-    parser.add_argument("--rpt",   default="",
+    parser.add_argument("--rpt",         default="",
                         help="ARMA3 .rpt 파일 경로 (미지정 시 자동 탐색)")
-    parser.add_argument("--poll",  type=float, default=0.5,
-                        help="파일 폴링 간격(초), 기본 0.5")
+    parser.add_argument("--poll",        type=float, default=0.5,
+                        help="RPT 파일 폴링 간격(초), 기본 0.5")
+    parser.add_argument("--mission-dir", default="",
+                        help=(
+                            "ARMA3 미션 폴더 경로 (임무 명령 수신 활성화).\n"
+                            "예: C:\\Users\\NAME\\Documents\\Arma 3\\missions\\MyMission.Altis\n"
+                            "지정 시 Colab에서 에이전트가 발행한 임무 명령을\n"
+                            "c2ai_order_N.sqf 파일로 이 폴더에 저장합니다."
+                        ))
+    parser.add_argument("--order-poll",  type=float, default=5.0,
+                        help="임무 명령 폴링 간격(초), 기본 5.0")
     args = parser.parse_args()
 
     rpt_path = args.rpt or find_latest_rpt()
     log.info(f"RPT 경로: {rpt_path}")
+
+    # 임무 명령 수신 스레드 (--mission-dir 지정 시)
+    if args.mission_dir:
+        order_thread = threading.Thread(
+            target=poll_and_apply_orders,
+            args=(args.url, args.token, args.mission_dir, args.order_poll),
+            daemon=True,
+            name="OrderPoller",
+        )
+        order_thread.start()
+        log.info(f"임무 명령 수신 활성화: {args.mission_dir}")
+    else:
+        log.info("--mission-dir 미지정 → 임무 명령 수신 비활성화 (전장 데이터 업로드만 동작)")
 
     try:
         tail_and_relay(rpt_path, args.url, args.token, args.poll)

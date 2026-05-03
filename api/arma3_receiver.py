@@ -96,6 +96,32 @@ async def get_arma3_status(token: str = Depends(_verify_token)):
     }
 
 
+@app.get("/arma3/orders/pending")
+async def get_pending_orders(token: str = Depends(_verify_token)):
+    """relay.py가 폴링하는 대기 중 임무 명령 목록을 반환합니다."""
+    from core_src.arma3_order_manager import get_pending_orders as _get
+    orders = _get()
+    return {"status": "ok", "orders": orders, "count": len(orders)}
+
+
+@app.post("/arma3/orders/ack")
+async def ack_orders(request: Request, token: str = Depends(_verify_token)):
+    """relay.py가 SQF 파일 저장 후 수신 완료를 알립니다."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+
+    order_ids = data.get("order_ids", [])
+    try:
+        from core_src.arma3_order_manager import acknowledge_orders
+        acknowledge_orders(order_ids)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok", "acknowledged": order_ids}
+
+
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
