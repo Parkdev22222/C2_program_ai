@@ -1,0 +1,51 @@
+# ── ARMA3 실행 환경 설정 ────────────────────────────────────────
+arma3:
+  # ARMA3 실행 파일 경로 (비워두면 레지스트리/일반 경로 자동 탐색)
+  exe_path: ""
+  # 사용할 게임 프로필명 (비워두면 기본 프로필 사용)
+  profile: ""
+  # 추가 실행 인수
+  extra_args:
+    - "-skipIntro"
+    - "-noSplash"
+    - "-noPause"
+    - "-hugepages"
+
+# ── 시나리오 목록 ────────────────────────────────────────────────
+scenarios:
+
+  bn_vs_bn:
+    display_name: "기계화 보병 대대 vs 대대"
+    description: "BLUFOR vs OPFOR 기계화 보병 대대급 전투 시나리오"
+    mission_name: "C2AI_BN_VS_BN"   # 미션 폴더명 (확장자 제외)
+    world: "Altis"                  # 맵 이름
+    multiplayer: true               # true → mpmissions, false → missions
+    # 미션 폴더 절대경로 (비워두면 Documents\Arma 3\mpmissions 자동 탐색)
+    mission_dir: ""
+    # 에이전트에게 전달할 시나리오 컨텍스트
+    agent_context: >
+      기계화 보병 대대 vs 대대 시나리오.
+      BLUFOR 그룹 ID: Alpha, Bravo, Charlie, Delta, HQ.
+      OPFOR  그룹 ID: Red1, Red2, Red3, Red4, RedHQ.
+      중대별 임무 경로 생성 시 위 groupId를 company_id로 사용할 것.
+
+  company_attack:
+    display_name: "중대급 공격 작전"
+    description: "단일 중대 공격 훈련 시나리오"
+    mission_name: "C2AI_COMPANY_ATTACK"
+    world: "Stratis"
+    multiplayer: true
+    mission_dir: ""
+    agent_context: >
+      중대급 공격 작전 시나리오.
+      BLUFOR 그룹 ID: Alpha1, Alpha2, Alpha3, AlphaHQ.
+      OPFOR  그룹 ID: Opfor1, Opfor2, OpforHQ.
+
+  custom:
+    display_name: "커스텀 시나리오"
+    description: "사용자 정의 미션"
+    mission_name: ""        # --mission-name 옵션으로 덮어쓰기
+    world: "Altis"
+    multiplayer: true
+    mission_dir: ""         # --mission-dir 옵션으로 덮어쓰기
+    agent_context: "커스텀 시나리오."

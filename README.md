@@ -56,6 +56,40 @@ ARMA3가 그 명령을 자동으로 수신하여 실행합니다.
 
 ---
 
+## 빠른 시작 (TL;DR)
+
+> 상세 설명이 필요하면 아래 단계별 가이드를 참고하세요.
+
+**Colab (셀 순서대로 실행):**
+```python
+# 셀 1 — 서버 기동
+import sys, uvicorn, threading
+sys.path.insert(0, '/content/drive/MyDrive/C2_program_ai')
+from api.arma3_receiver import app, set_auth_token
+set_auth_token("my_token")
+threading.Thread(target=uvicorn.run, kwargs={"app":app,"host":"0.0.0.0","port":8765}, daemon=True).start()
+
+# 셀 2 — ngrok 터널
+from pyngrok import ngrok
+tunnel = ngrok.connect(8765)
+print("ngrok URL:", tunnel.public_url)  # ← 이 URL을 복사
+
+# 셀 3 — AI 시스템 기동
+!cd /content/drive/MyDrive/C2_program_ai && python main.py ui
+```
+
+**로컬 PC (cmd 한 줄):**
+```cmd
+python arma3_integration\launch.py ^
+  --scenario bn_vs_bn ^
+  --url https://xxxx.ngrok-free.app ^
+  --token my_token
+```
+
+이 한 줄로 ARMA3 자동 실행 + relay 자동 시작이 완료됩니다.
+
+---
+
 ## 1단계 — Colab 환경 준비
 
 ### 1-1. 드라이브 마운트 및 패키지 설치
@@ -274,47 +308,148 @@ hint str (groupId (group player));
 
 ---
 
-## 6단계 — relay.py 실행 (로컬 PC)
+## 6단계 — launch.py 실행 (ARMA3 자동 실행 + relay 통합)
 
-ARMA3를 실행하기 **전에** relay.py를 먼저 시작합니다.
+**`launch.py` 한 줄로 ARMA3 자동 실행과 relay를 동시에 시작합니다.**
+
+### 6-1. 기본 실행 (자동 탐색)
 
 ```cmd
-python relay.py ^
+cd C:\C2AI
+python arma3_integration\launch.py ^
+  --scenario bn_vs_bn ^
   --url https://xxxx-xx-xx-xx.ngrok-free.app ^
-  --token my_secret_token_2024 ^
-  --mission-dir "C:\Users\유저명\Documents\Arma 3\missions\C2AI_BN_VS_BN.Altis" ^
-  --poll 0.5 ^
-  --order-poll 5
+  --token my_secret_token_2024
 ```
 
-**파라미터 설명:**
+`launch.py`가 자동으로 처리하는 항목:
+1. `scenarios.yaml`에서 `bn_vs_bn` 시나리오 설정 로드
+2. ARMA3 실행 파일 (`arma3_x64.exe`) 레지스트리/일반 경로 자동 탐색
+3. 미션 폴더 (`Documents\Arma 3\mpmissions\C2AI_BN_VS_BN.Altis`) 자동 탐색
+4. ARMA3 프로세스 실행 (`-host -world=Altis -mission=... -skipIntro`)
+5. 새 `.rpt` 파일 생성 대기 (최대 120초)
+6. `relay.py` 자동 시작 (전장 데이터 업로드 + 임무 명령 다운로드)
+
+### 6-2. 시나리오 목록 확인
+
+```cmd
+python arma3_integration\launch.py --list-scenarios
+```
+
+출력 예시:
+```
+등록된 시나리오 목록:
+------------------------------------------------------------
+  bn_vs_bn            기계화 보병 대대 vs 대대
+                      BLUFOR vs OPFOR 기계화 보병 대대급 전투 시나리오
+                      맵: Altis
+
+  company_attack      중대급 공격 작전
+                      단일 중대 공격 훈련 시나리오
+                      맵: Stratis
+
+  custom              커스텀 시나리오
+                      사용자 정의 미션
+                      맵: Altis
+```
+
+### 6-3. 자동 탐색 실패 시 경로 직접 지정
+
+```cmd
+python arma3_integration\launch.py ^
+  --scenario bn_vs_bn ^
+  --url https://xxxx.ngrok-free.app ^
+  --token my_token ^
+  --exe "D:\SteamLibrary\steamapps\common\Arma 3\arma3_x64.exe" ^
+  --mission-dir "D:\...\mpmissions\C2AI_BN_VS_BN.Altis"
+```
+
+### 6-4. 커스텀 미션 실행
+
+```cmd
+python arma3_integration\launch.py ^
+  --scenario custom ^
+  --mission-name MyCustomMission ^
+  --url https://xxxx.ngrok-free.app ^
+  --token my_token ^
+  --mission-dir "C:\...\mpmissions\MyCustomMission.Altis"
+```
+
+### 6-5. ARMA3가 이미 실행 중인 경우 (relay만 시작)
+
+```cmd
+python arma3_integration\launch.py ^
+  --scenario bn_vs_bn ^
+  --url https://xxxx.ngrok-free.app ^
+  --token my_token ^
+  --no-launch
+```
+
+### 6-6. launch.py 전체 파라미터
 
 | 파라미터 | 설명 | 기본값 |
 |----------|------|--------|
-| `--url` | Colab ngrok URL (2단계에서 확인) | 필수 |
-| `--token` | 인증 토큰 (서버와 동일) | 필수 |
-| `--rpt` | ARMA3 .rpt 로그 경로 (미지정 시 자동 탐색) | 자동 |
-| `--mission-dir` | ARMA3 미션 폴더 경로 (임무 명령 수신용) | 없음 |
-| `--poll` | RPT 파일 폴링 간격 (초) | 0.5 |
-| `--order-poll` | 임무 명령 폴링 간격 (초) | 5.0 |
+| `--scenario` | 시나리오 이름 (`--list-scenarios`로 확인) | 필수 |
+| `--url` | Colab ngrok URL | 필수 |
+| `--token` | 인증 토큰 | 필수 |
+| `--exe` | ARMA3 exe 경로 직접 지정 | 자동 탐색 |
+| `--mission-dir` | 미션 폴더 절대 경로 직접 지정 | 자동 탐색 |
+| `--mission-name` | 미션 이름 직접 지정 (custom 시나리오) | 시나리오 설정 |
+| `--rpt` | .rpt 파일 경로 직접 지정 | 자동 감지 |
+| `--rpt-wait` | .rpt 파일 대기 최대 시간(초) | 120 |
+| `--poll` | RPT 폴링 간격(초) | 0.5 |
+| `--order-poll` | 임무 명령 폴링 간격(초) | 5.0 |
+| `--no-launch` | ARMA3 실행 없이 relay만 시작 | false |
+| `--list-scenarios` | 시나리오 목록 출력 후 종료 | - |
 
-**정상 실행 출력 예시:**
+### 6-7. scenarios.yaml — 새 시나리오 등록
+
+`arma3_integration/scenarios.yaml`을 열어 새 항목 추가:
+
+```yaml
+scenarios:
+  my_scenario:
+    display_name: "내 커스텀 시나리오"
+    description: "설명"
+    mission_name: "MyMission"    # mpmissions\MyMission.Altis 폴더명
+    world: "Altis"
+    multiplayer: true
+    mission_dir: ""              # 비우면 자동 탐색
+    agent_context: >
+      그룹 ID 정보: Alpha, Bravo, Charlie
+```
+
+등록 후 `--scenario my_scenario`로 바로 사용 가능합니다.
+
+### 6-8. 정상 실행 출력 예시
 
 ```
-2024-01-01 12:00:00 [INFO] RPT 경로: C:\Users\...\arma3_20240101.rpt
-2024-01-01 12:00:00 [INFO] 임무 명령 수신 활성화: C:\...\missions\C2AI_BN_VS_BN.Altis
-2024-01-01 12:00:00 [INFO] 임무 명령 폴링 시작 (간격: 5.0s) → C:\...
-2024-01-01 12:00:00 [INFO] 기존 로그 건너뜀 — 새 데이터부터 감시 시작
+12:00:00 [INFO] ============================================================
+12:00:00 [INFO] C2AI 통합 런처 시작
+12:00:00 [INFO] 시나리오: 기계화 보병 대대 vs 대대
+12:00:00 [INFO] Colab URL: https://xxxx.ngrok-free.app
+12:00:00 [INFO] 미션 폴더: C:\Users\...\mpmissions\C2AI_BN_VS_BN.Altis
+12:00:00 [INFO] ============================================================
+12:00:00 [INFO] 레지스트리에서 ARMA3 발견: C:\...\arma3_x64.exe
+12:00:00 [INFO] 미션 폴더 발견: C:\...\mpmissions\C2AI_BN_VS_BN.Altis
+12:00:00 [INFO] ARMA3 실행됨 (PID: 12345)
+12:00:00 [INFO] ARMA3 프로세스 실행 완료. .rpt 파일 생성 대기 중...
+12:00:08 [INFO] .rpt 파일 감지됨: C:\...\arma3_20240101_120000.rpt
+12:00:08 [INFO] relay 시작: rpt=C:\...\arma3_20240101_120000.rpt
+12:00:08 [INFO]   전장 데이터 업로드: 활성화
+12:00:08 [INFO]   임무 명령 수신: 활성화
+12:00:08 [INFO] 임무 명령 폴링 시작 → C:\...\mpmissions\C2AI_BN_VS_BN.Altis
+12:00:08 [INFO] 기존 로그 건너뜀 — 새 데이터부터 감시 시작
 ```
 
 ---
 
-## 7단계 — ARMA3 미션 실행
+## 7단계 — ARMA3 미션 확인
 
-1. **ARMA3 스팀 실행**
-2. **에디터에서 준비한 미션 로드** (또는 멀티플레이 서버 호스팅)
-3. **미션 시작**
-4. **디버그 콘솔에서 초기화 확인:**
+launch.py가 ARMA3를 자동으로 실행했으면, ARMA3 로딩 완료 후:
+
+1. **미션이 자동으로 시작됩니다** (`-host -mission=...` 파라미터로 자동 로드)
+2. **디버그 콘솔에서 초기화 확인:**
 
 ```sqf
 // 디버그 콘솔 (~ 키 → 오른쪽 패널)에서 실행
@@ -548,7 +683,35 @@ C2_program_ai/
 
 ## 트러블슈팅
 
-### relay.py — `.rpt` 파일을 찾을 수 없음
+### ARMA3 실행 파일을 찾을 수 없음
+
+```
+FileNotFoundError: ARMA3 실행 파일(arma3_x64.exe)을 찾을 수 없습니다.
+```
+
+→ `scenarios.yaml`의 `arma3.exe_path`에 절대 경로 입력:
+
+```yaml
+arma3:
+  exe_path: "D:\\SteamLibrary\\steamapps\\common\\Arma 3\\arma3_x64.exe"
+```
+
+또는 `--exe` 옵션으로 직접 지정:
+
+```cmd
+python arma3_integration\launch.py --scenario bn_vs_bn --exe "D:\...\arma3_x64.exe" ...
+```
+
+### 미션 폴더를 찾을 수 없음
+
+```
+FileNotFoundError: 미션 폴더를 찾을 수 없습니다: C2AI_BN_VS_BN.Altis
+```
+
+→ `Documents\Arma 3\mpmissions\C2AI_BN_VS_BN.Altis` 폴더가 있는지 확인  
+→ `scenarios.yaml`의 `mission_dir`에 절대 경로 입력 또는 `--mission-dir` 옵션 사용
+
+### relay — `.rpt` 파일을 찾을 수 없음
 
 ```
 FileNotFoundError: ARMA3 .rpt 파일을 찾을 수 없습니다.
@@ -557,17 +720,17 @@ FileNotFoundError: ARMA3 .rpt 파일을 찾을 수 없습니다.
 → `--rpt` 옵션으로 직접 경로 지정:
 
 ```cmd
-python relay.py --rpt "C:\Users\유저명\AppData\Local\Arma 3\arma3_20240101_120000.rpt" ...
+python arma3_integration\launch.py ... --rpt "C:\Users\유저명\AppData\Local\Arma 3\arma3_20240101_120000.rpt"
 ```
 
-### relay.py — 서버 연결 실패
+### 서버 연결 실패
 
 ```
 [ERROR] 서버 연결 실패: https://xxxx.ngrok-free.app/arma3/report
 ```
 
 → Colab에서 2단계(FastAPI 서버 + ngrok)가 실행 중인지 확인  
-→ ngrok URL이 바뀌었으면 `--url` 값 업데이트
+→ ngrok URL이 바뀌었으면 `--url` 값 업데이트 후 launch.py 재시작
 
 ### ARMA3 — 임무 명령이 적용되지 않음
 
