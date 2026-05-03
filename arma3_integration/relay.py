@@ -8,10 +8,18 @@ ARMA3 ↔ Colab 양방향 릴레이 스크립트
 [추가: 임무 명령 수신 활성화]
   python relay.py --url https://... --token TOKEN --mission-dir "C:\\...\\missions\\MyMission.Altis"
 
+[macOS CrossOver — 로그 파일 위치 확인]
+  python relay.py --find-log          ← 로그 파일(rpt/dat) 자동 탐색 결과 출력
+
 [동작 방식]
-  ① 업로드: ARMA3 .rpt 로그 파일 감시 → [C2AI_DATA] 라인 추출 → Colab 서버로 HTTP POST
+  ① 업로드: ARMA3 로그 파일(.rpt 또는 .dat) 감시 → [C2AI_DATA] 라인 추출 → Colab 서버로 HTTP POST
   ② 다운로드: Colab에서 에이전트가 발행한 임무 명령 폴링 → SQF 파일 생성 → 미션 폴더 저장
               ARMA3의 c2_order_executor.sqf가 SQF 파일을 자동 감지하여 실행
+
+[로그 파일 확장자 참고]
+  Windows/CrossOver(Wine): 일반적으로 .rpt (arma3_YYYY-MM-DD_HH-MM-SS.rpt)
+  macOS CrossOver 일부 버전: .rpt 또는 .dat 로 생성될 수 있음
+  --log 옵션으로 직접 경로 지정 가능 (확장자 무관)
 """
 
 import argparse
@@ -35,69 +43,84 @@ log = logging.getLogger(__name__)
 
 C2AI_PREFIX = "[C2AI_DATA]"
 
+# macOS CrossOver에서 .rpt 외에 .dat 확장자로 생성되는 경우도 있음
+_LOG_EXTENSIONS = ("*.rpt", "*.dat")
 
-# ── ARMA3 RPT 로그 경로 탐색 ─────────────────────────────────────
 
-def _rpt_search_patterns() -> list:
-    """플랫폼별 .rpt 파일 glob 패턴 목록을 반환합니다."""
+# ── ARMA3 로그 경로 탐색 ──────────────────────────────────────────
+
+def _log_search_patterns() -> list:
+    """플랫폼별 ARMA3 로그 파일 glob 패턴 목록을 반환합니다 (.rpt + .dat)."""
     home = str(Path.home())
 
     if sys.platform == "win32":
-        return [
-            os.path.join(os.path.expandvars(r"%LOCALAPPDATA%"), "Arma 3", "*.rpt"),
-            os.path.join(home, "AppData", "Local", "Arma 3", "*.rpt"),
-        ]
+        patterns = []
+        for ext in _LOG_EXTENSIONS:
+            patterns += [
+                os.path.join(os.path.expandvars(r"%LOCALAPPDATA%"), "Arma 3", ext),
+                os.path.join(home, "AppData", "Local", "Arma 3", ext),
+            ]
+        return patterns
 
     if sys.platform == "darwin":
         crossover_base = os.path.join(home, "Library", "Application Support", "CrossOver", "Bottles")
-        return [
-            # CrossOver — AppData\Local\Arma 3 (Vista+ 경로)
-            os.path.join(crossover_base, "*", "drive_c", "users", "*",
-                         "AppData", "Local", "Arma 3", "*.rpt"),
-            os.path.join(crossover_base, "*", "drive_c", "Users", "*",
-                         "AppData", "Local", "Arma 3", "*.rpt"),
-            # CrossOver — XP 스타일 경로 (Local Settings\Application Data)
-            os.path.join(crossover_base, "*", "drive_c", "users", "*",
-                         "Local Settings", "Application Data", "Arma 3", "*.rpt"),
-            os.path.join(crossover_base, "*", "drive_c", "Users", "*",
-                         "Local Settings", "Application Data", "Arma 3", "*.rpt"),
-            # CrossOver — 게임 설치 폴더 내 .rpt (일부 버전)
-            os.path.join(crossover_base, "*", "drive_c", "Program Files (x86)",
-                         "Steam", "steamapps", "common", "Arma 3", "*.rpt"),
-            os.path.join(crossover_base, "*", "drive_c", "Program Files",
-                         "Steam", "steamapps", "common", "Arma 3", "*.rpt"),
-            # CrossOver — 루트 drive_c 직접 검색 (위치 불명확할 때 대비)
-            os.path.join(crossover_base, "*", "drive_c", "**", "Arma 3", "*.rpt"),
-            # macOS 네이티브 (구버전 Steam for Mac)
-            os.path.join(home, "Library", "Logs", "Arma 3", "*.rpt"),
-            os.path.join(home, "Library", "Application Support", "Arma 3", "*.rpt"),
-            # Parallels shared folder (드라이브 마운트 경로)
-            os.path.join("/Volumes", "*", "Users", "*", "AppData", "Local", "Arma 3", "*.rpt"),
-        ]
+        patterns = []
+        for ext in _LOG_EXTENSIONS:
+            patterns += [
+                # CrossOver — AppData\Local\Arma 3 (Vista+ 경로)
+                os.path.join(crossover_base, "*", "drive_c", "users", "*",
+                             "AppData", "Local", "Arma 3", ext),
+                os.path.join(crossover_base, "*", "drive_c", "Users", "*",
+                             "AppData", "Local", "Arma 3", ext),
+                # CrossOver — XP 스타일 경로 (Local Settings\Application Data)
+                os.path.join(crossover_base, "*", "drive_c", "users", "*",
+                             "Local Settings", "Application Data", "Arma 3", ext),
+                os.path.join(crossover_base, "*", "drive_c", "Users", "*",
+                             "Local Settings", "Application Data", "Arma 3", ext),
+                # CrossOver — 게임 설치 폴더 내 로그 (일부 버전)
+                os.path.join(crossover_base, "*", "drive_c", "Program Files (x86)",
+                             "Steam", "steamapps", "common", "Arma 3", ext),
+                os.path.join(crossover_base, "*", "drive_c", "Program Files",
+                             "Steam", "steamapps", "common", "Arma 3", ext),
+                # CrossOver — drive_c 전체 재귀 탐색 (위치 불명확할 때 대비)
+                os.path.join(crossover_base, "*", "drive_c", "**", "Arma 3", ext),
+                # macOS 네이티브 (구버전 Steam for Mac)
+                os.path.join(home, "Library", "Logs", "Arma 3", ext),
+                os.path.join(home, "Library", "Application Support", "Arma 3", ext),
+                # Parallels shared folder
+                os.path.join("/Volumes", "*", "Users", "*", "AppData", "Local", "Arma 3", ext),
+            ]
+        return patterns
 
     # Linux
-    return [
-        os.path.join(home, ".local", "share", "Arma 3", "*.rpt"),
-        os.path.join(home, ".steam", "steam", "steamapps", "common", "Arma 3", "*.rpt"),
-    ]
+    patterns = []
+    for ext in _LOG_EXTENSIONS:
+        patterns += [
+            os.path.join(home, ".local", "share", "Arma 3", ext),
+            os.path.join(home, ".steam", "steam", "steamapps", "common", "Arma 3", ext),
+        ]
+    return patterns
+
+
+# 하위 호환 별칭
+_rpt_search_patterns = _log_search_patterns
 
 
 def find_latest_rpt() -> str:
-    """최신 ARMA3 .rpt 로그 파일 경로를 반환합니다."""
-    rpt_files = []
-    for pattern in _rpt_search_patterns():
-        # drive_c/**/ 같이 ** 포함된 패턴만 recursive=True
+    """최신 ARMA3 로그 파일 경로를 반환합니다 (.rpt 또는 .dat)."""
+    log_files = []
+    for pattern in _log_search_patterns():
         recursive = "**" in pattern
-        rpt_files.extend(glob.glob(pattern, recursive=recursive))
+        log_files.extend(glob.glob(pattern, recursive=recursive))
 
-    if not rpt_files:
+    if not log_files:
         if sys.platform == "darwin":
             hint = (
-                "\n[참고] RPT 파일은 ARMA3가 실행된 이후 생성됩니다.\n"
+                "\n[참고] 로그 파일은 ARMA3가 실행된 이후 생성됩니다.\n"
                 "ARMA3를 한 번 실행 후 메인 메뉴까지 진입한 뒤 다시 시도하세요.\n\n"
-                "RPT 파일 위치 확인 방법:\n"
+                "로그 파일 위치 확인 방법:\n"
                 "  python launch.py --find-rpt\n\n"
-                "직접 경로 지정:\n"
+                "직접 경로 지정 (.rpt 또는 .dat 모두 가능):\n"
                 "  python relay.py --url ... --token ... "
                 "--rpt ~/Library/Application\\ Support/CrossOver/Bottles/[병이름]/"
                 "drive_c/Users/crossover/AppData/Local/Arma\\ 3/arma3_xxx.rpt"
@@ -107,19 +130,18 @@ def find_latest_rpt() -> str:
                 "\n직접 경로 지정:\n"
                 "  python relay.py --rpt /path/to/arma3_xxx.rpt"
             )
-        raise FileNotFoundError(f"ARMA3 .rpt 파일을 찾을 수 없습니다.{hint}")
+        raise FileNotFoundError(f"ARMA3 로그 파일(.rpt/.dat)을 찾을 수 없습니다.{hint}")
 
-    return max(rpt_files, key=os.path.getmtime)
+    return max(log_files, key=os.path.getmtime)
 
 
 def find_all_rpt_files() -> list:
-    """진단용: 탐색 가능한 모든 .rpt 파일 목록을 반환합니다."""
-    rpt_files = []
-    for pattern in _rpt_search_patterns():
+    """진단용: 탐색 가능한 모든 ARMA3 로그 파일 목록을 반환합니다 (.rpt + .dat)."""
+    log_files = []
+    for pattern in _log_search_patterns():
         recursive = "**" in pattern
-        found = glob.glob(pattern, recursive=recursive)
-        rpt_files.extend(found)
-    return sorted(set(rpt_files), key=os.path.getmtime, reverse=True)
+        log_files.extend(glob.glob(pattern, recursive=recursive))
+    return sorted(set(log_files), key=os.path.getmtime, reverse=True)
 
 
 # ── 데이터 파싱 ───────────────────────────────────────────────────
@@ -361,9 +383,9 @@ def main():
     parser.add_argument("--token",       required=True,
                         help="인증 토큰 (Colab 서버와 동일한 값)")
     parser.add_argument("--rpt",         default="",
-                        help="ARMA3 .rpt 파일 경로 (미지정 시 자동 탐색)")
+                        help="ARMA3 로그 파일 경로 (.rpt 또는 .dat, 미지정 시 자동 탐색)")
     parser.add_argument("--poll",        type=float, default=0.5,
-                        help="RPT 파일 폴링 간격(초), 기본 0.5")
+                        help="로그 파일 폴링 간격(초), 기본 0.5")
     parser.add_argument("--mission-dir", default="",
                         help=(
                             "ARMA3 미션 폴더 경로 (임무 명령 수신 활성화).\n"
@@ -374,30 +396,33 @@ def main():
     parser.add_argument("--order-poll",  type=float, default=5.0,
                         help="임무 명령 폴링 간격(초), 기본 5.0")
     parser.add_argument("--find-rpt",   action="store_true",
-                        help="RPT 파일 탐색 결과만 출력하고 종료 (진단용)")
+                        help="로그 파일(.rpt/.dat) 탐색 결과만 출력하고 종료 (진단용)")
     args = parser.parse_args()
 
     # ── 진단 모드 ──────────────────────────────────────────────────
     if args.find_rpt:
-        print("\n[RPT 파일 탐색 결과]")
+        print("\n[ARMA3 로그 파일 탐색 결과 (.rpt / .dat)]")
         files = find_all_rpt_files()
         if files:
             for f in files:
                 mtime = datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d %H:%M:%S")
                 size  = os.path.getsize(f)
-                print(f"  {mtime}  {size:>10,}B  {f}")
+                ext   = os.path.splitext(f)[1]
+                print(f"  {mtime}  {size:>10,}B  [{ext}]  {f}")
             print(f"\n→ 가장 최신 파일: {files[0]}")
+            print(f"\n사용 예:")
+            print(f"  python relay.py --url ... --token ... --rpt \"{files[0]}\"")
         else:
-            print("  .rpt 파일을 찾을 수 없습니다.")
+            print("  로그 파일(.rpt/.dat)을 찾을 수 없습니다.")
             print("\n[탐색한 경로 패턴]")
-            for p in _rpt_search_patterns():
+            for p in _log_search_patterns():
                 print(f"  {p}")
-            print("\n[주의] RPT 파일은 ARMA3가 실행되어야 생성됩니다.")
-            print("  ARMA3를 먼저 실행하고 메인 메뉴까지 진입한 뒤 다시 시도하세요.")
+            print("\n[주의] 로그 파일은 ARMA3가 실행되어야 생성됩니다.")
+            print("  CrossOver에서 ARMA3를 실행 후 메인 메뉴까지 진입한 뒤 다시 시도하세요.")
         return
 
     rpt_path = args.rpt or find_latest_rpt()
-    log.info(f"RPT 경로: {rpt_path}")
+    log.info(f"로그 파일 경로: {rpt_path}")
 
     # 임무 명령 수신 스레드 (--mission-dir 지정 시)
     if args.mission_dir:
