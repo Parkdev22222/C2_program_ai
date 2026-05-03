@@ -258,7 +258,7 @@ class SAM3ObjectDetector:
 
     # ── 단일 프레임 탐지 ──────────────────────────────────────────────────────
     def detect(self, frame: np.ndarray) -> List[Detection]:
-        """BGR numpy 프레임 1장 탐지."""
+        """RGB numpy 프레임 1장 탐지 (video_analysis_system이 RGB로 전달함)."""
         if self._model is None or self._processor is None:
             return []
         try:
@@ -272,8 +272,8 @@ class SAM3ObjectDetector:
         from PIL import Image
 
         h, w = frame.shape[:2]
-        pil = Image.fromarray(frame if frame.ndim == 3 and frame.shape[2] == 3 else
-                              frame[:, :, ::-1]).convert("RGB")  # BGR→RGB 보정
+        # video_analysis_system이 BGR→RGB 변환 후 넘기므로 그대로 사용
+        pil = Image.fromarray(frame).convert("RGB")
 
         # 1프레임짜리 비디오 세션으로 탐지
         inference_session = self._processor.init_video_session(
@@ -319,7 +319,8 @@ class SAM3ObjectDetector:
         seed_detections: Optional[List[Detection]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        BGR numpy 프레임 리스트 전체에 대해 SAM3 비디오 추적 수행.
+        RGB numpy 프레임 리스트 전체에 대해 SAM3 비디오 추적 수행.
+        (video_analysis_system이 BGR→RGB 변환 후 전달함)
         결과: [{"frame_index": int, "detections": [det.to_dict(), ...]}, ...]
         """
         if not frames or self._model is None or self._processor is None:
@@ -336,11 +337,8 @@ class SAM3ObjectDetector:
 
         h, w = frames[0].shape[:2]
 
-        # BGR → RGB PIL 변환
-        pil_frames = [
-            Image.fromarray(f[:, :, ::-1] if f.ndim == 3 and f.shape[2] == 3 else f).convert("RGB")
-            for f in frames
-        ]
+        # video_analysis_system이 이미 BGR→RGB 변환 후 넘기므로 그대로 PIL로 변환
+        pil_frames = [Image.fromarray(f).convert("RGB") for f in frames]
 
         logger.info(f"SAM3 비디오 세션 초기화: {len(pil_frames)}프레임  {w}×{h}")
         inference_session = self._processor.init_video_session(
