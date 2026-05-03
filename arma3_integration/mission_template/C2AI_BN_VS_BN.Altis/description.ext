@@ -1,15 +1,12 @@
-briefingName    = "C2AI :: 기계화 보병 대대 vs 대대";
+briefingName    = "C2AI BN vs BN";
 author          = "C2AI System";
-onLoadName      = "C2AI 대대 vs 대대";
-onLoadMission   = "기계화 보병 대대급 교전 — C2AI 연동 시나리오";
-overviewText    = "기계화 보병 대대 vs 대대 C2AI 연동 시나리오.<br/>각 대대: 2개 중대 / 각 중대: APC 8대 + 보병 80명";
+onLoadName      = "C2AI BN vs BN";
+onLoadMission   = "C2AI Mechanized Infantry Battalion vs Battalion";
+overviewText    = "BLUFOR vs OPFOR mechanized infantry battalion combat scenario. 2 companies per side, 8 APCs + 80 infantry per company.";
 
-// 리스폰 없음 (관측자 역할)
 respawn         = 0;
 respawnDelay    = 0;
-respawnOnStart  = -1;
 
-// 난이도 표시
 showCompass     = 1;
 showMap         = 1;
 showGPS         = 1;
@@ -23,14 +20,13 @@ class Header
     maxPlayers  = 1;
 };
 
-// 미션 파라미터
 class Params
 {
     class StartDelay
     {
-        title  = "전투 개시 지연 (초)";
+        title    = "Combat Start Delay (seconds)";
         values[] = {0, 30, 60, 120};
-        texts[]  = {"즉시", "30초", "60초", "120초"};
+        texts[]  = {"Immediate", "30 sec", "60 sec", "120 sec"};
         default  = 60;
     };
 };
