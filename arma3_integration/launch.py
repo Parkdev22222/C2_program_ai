@@ -81,6 +81,8 @@ def main():
     # 선택 인수
     parser.add_argument("--list-scenarios", action="store_true",
                         help="등록된 시나리오 목록 출력 후 종료")
+    parser.add_argument("--find-rpt", action="store_true",
+                        help="RPT 파일 탐색 결과 출력 후 종료 (진단용)")
     parser.add_argument("--exe", default="",
                         help="ARMA3 exe 경로 직접 지정 (자동 탐색 생략)")
     parser.add_argument("--mission-dir", default="",
@@ -101,6 +103,30 @@ def main():
     args = parser.parse_args()
 
     launcher = Arma3Launcher()
+
+    # ── RPT 파일 진단 ─────────────────────────────────────────────
+    if args.find_rpt:
+        from datetime import datetime
+        print("\n[RPT 파일 탐색 결과]")
+        files = relay_module.find_all_rpt_files()
+        if files:
+            for f in files:
+                mtime = datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d %H:%M:%S")
+                size  = os.path.getsize(f)
+                print(f"  {mtime}  {size:>10,}B  {f}")
+            print(f"\n→ 가장 최신 파일: {files[0]}")
+            print("\n사용 예:")
+            print(f"  python relay.py --url ... --token ... --rpt \"{files[0]}\"")
+        else:
+            print("  .rpt 파일을 찾을 수 없습니다.")
+            print("\n[탐색한 경로 패턴]")
+            for p in relay_module._rpt_search_patterns():
+                print(f"  {p}")
+            print("\n[주의] RPT 파일은 ARMA3가 실행되어야 생성됩니다.")
+            print("  1. CrossOver에서 ARMA3를 실행하세요")
+            print("  2. 메인 메뉴까지 진입하세요 (로딩 완료 후 .rpt 생성됨)")
+            print("  3. python launch.py --find-rpt  다시 실행하세요")
+        sys.exit(0)
 
     # ── 시나리오 목록 출력 ────────────────────────────────────────
     if args.list_scenarios:
