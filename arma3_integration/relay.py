@@ -38,23 +38,60 @@ C2AI_PREFIX = "[C2AI_DATA]"
 
 # ── ARMA3 RPT 로그 경로 탐색 ─────────────────────────────────────
 
+def _rpt_search_patterns() -> list:
+    """플랫폼별 .rpt 파일 glob 패턴 목록을 반환합니다."""
+    home = str(Path.home())
+
+    if sys.platform == "win32":
+        return [
+            os.path.join(os.path.expandvars(r"%LOCALAPPDATA%"), "Arma 3", "*.rpt"),
+            os.path.join(home, "AppData", "Local", "Arma 3", "*.rpt"),
+        ]
+
+    if sys.platform == "darwin":
+        crossover_base = os.path.join(home, "Library", "Application Support", "CrossOver", "Bottles")
+        return [
+            # CrossOver — 병 이름 무관하게 탐색
+            os.path.join(crossover_base, "*", "drive_c", "users", "*",
+                         "AppData", "Local", "Arma 3", "*.rpt"),
+            os.path.join(crossover_base, "*", "drive_c", "Users", "*",
+                         "AppData", "Local", "Arma 3", "*.rpt"),
+            # macOS 네이티브 (구버전 Steam for Mac)
+            os.path.join(home, "Library", "Logs", "Arma 3", "*.rpt"),
+            os.path.join(home, "Library", "Application Support", "Arma 3", "*.rpt"),
+            # Parallels shared folder (드라이브 마운트 경로)
+            os.path.join("/Volumes", "*", "Users", "*", "AppData", "Local", "Arma 3", "*.rpt"),
+        ]
+
+    # Linux
+    return [
+        os.path.join(home, ".local", "share", "Arma 3", "*.rpt"),
+        os.path.join(home, ".steam", "steam", "steamapps", "common", "Arma 3", "*.rpt"),
+    ]
+
+
 def find_latest_rpt() -> str:
     """최신 ARMA3 .rpt 로그 파일 경로를 반환합니다."""
-    candidates = [
-        os.path.expandvars(r"%LOCALAPPDATA%\Arma 3"),
-        os.path.expanduser(r"~\AppData\Local\Arma 3"),
-        r"C:\Users\Public\Documents\Arma 3",
-    ]
     rpt_files = []
-    for base in candidates:
-        rpt_files.extend(glob.glob(os.path.join(base, "*.rpt")))
+    for pattern in _rpt_search_patterns():
+        rpt_files.extend(glob.glob(pattern, recursive=False))
 
     if not rpt_files:
-        raise FileNotFoundError(
-            "ARMA3 .rpt 파일을 찾을 수 없습니다.\n"
-            "--rpt 옵션으로 경로를 직접 지정하세요.\n"
-            "예: python relay.py --rpt C:\\Users\\YourName\\AppData\\Local\\Arma 3\\arma3_xxx.rpt"
-        )
+        if sys.platform == "darwin":
+            hint = (
+                "macOS CrossOver 기준 경로:\n"
+                "  ~/Library/Application Support/CrossOver/Bottles/[병이름]/"
+                "drive_c/Users/crossover/AppData/Local/Arma 3/\n"
+                "--rpt 옵션으로 직접 지정:\n"
+                "  python launch.py ... --rpt ~/Library/Application\\ Support/CrossOver/..."
+            )
+        else:
+            hint = (
+                "--rpt 옵션으로 직접 지정:\n"
+                "  python relay.py --rpt /path/to/arma3_xxx.rpt"
+            )
+        raise FileNotFoundError(f"ARMA3 .rpt 파일을 찾을 수 없습니다.\n{hint}")
+
     return max(rpt_files, key=os.path.getmtime)
 
 

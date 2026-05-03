@@ -20,37 +20,88 @@ log = logging.getLogger(__name__)
 
 SCENARIOS_YAML = Path(__file__).parent / "scenarios.yaml"
 
-# ── ARMA3 탐색 ──────────────────────────────────────────────────
+# ── 플랫폼 감지 헬퍼 ────────────────────────────────────────────
 
-_STEAM_COMMON_PATHS = [
-    r"C:\Program Files (x86)\Steam\steamapps\common\Arma 3",
-    r"C:\Program Files\Steam\steamapps\common\Arma 3",
-    r"D:\Steam\steamapps\common\Arma 3",
-    r"D:\SteamLibrary\steamapps\common\Arma 3",
-    r"E:\Steam\steamapps\common\Arma 3",
-    r"E:\SteamLibrary\steamapps\common\Arma 3",
-    r"F:\Steam\steamapps\common\Arma 3",
-    r"F:\SteamLibrary\steamapps\common\Arma 3",
-]
+def _crossover_bottles() -> list:
+    """CrossOver 병(Bottle) 디렉토리 목록을 반환합니다."""
+    base = Path.home() / "Library" / "Application Support" / "CrossOver" / "Bottles"
+    if not base.exists():
+        return []
+    return [p for p in base.iterdir() if p.is_dir()]
 
+
+def _find_crossover_wine() -> Optional[str]:
+    """CrossOver wine 실행 파일 경로를 반환합니다."""
+    candidates = [
+        "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
+        str(Path.home() / "Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine"),
+    ]
+    for p in candidates:
+        if Path(p).exists():
+            return p
+    return None
+
+
+# ── ARMA3 실행 파일 탐색 ─────────────────────────────────────────
 
 def find_arma3_exe() -> Optional[str]:
     """
-    ARMA3 실행 파일(arma3_x64.exe)을 자동으로 탐색합니다.
+    ARMA3 실행 파일을 플랫폼에 맞게 자동으로 탐색합니다.
 
-    탐색 순서:
-    1. Windows 레지스트리 (Steam 앱 설치 경로)
-    2. 일반적인 Steam 설치 경로 목록
-    3. LOCALAPPDATA의 libraryfolders.vdf 파싱
+    macOS: CrossOver 병 → Steam for Mac .app
+    Windows: 레지스트리 → 일반 Steam 경로 → libraryfolders.vdf
 
     Returns:
         실행 파일 절대 경로 또는 None
     """
-    if sys.platform != "win32":
-        log.warning("ARMA3 자동 탐색은 Windows에서만 지원됩니다.")
-        return None
+    if sys.platform == "darwin":
+        return _find_arma3_exe_macos()
+    if sys.platform == "win32":
+        return _find_arma3_exe_windows()
+    return None
 
-    # 1. 레지스트리
+
+def _find_arma3_exe_macos() -> Optional[str]:
+    """macOS: CrossOver 병 또는 Steam.app 에서 ARMA3 실행 파일 탐색."""
+    arma3_rel_paths = [
+        "drive_c/Program Files (x86)/Steam/steamapps/common/Arma 3/arma3_x64.exe",
+        "drive_c/Program Files/Steam/steamapps/common/Arma 3/arma3_x64.exe",
+    ]
+    for bottle in _crossover_bottles():
+        for rel in arma3_rel_paths:
+            exe = bottle / rel
+            if exe.exists():
+                log.info(f"CrossOver 병에서 ARMA3 발견: {exe}")
+                return str(exe)
+
+    # macOS 네이티브 Steam (구버전 or 별도 설치)
+    native_paths = [
+        Path.home() / "Library/Application Support/Steam/steamapps/common/Arma 3/ArmA3.app",
+        Path("/Applications/ArmA 3.app"),
+        Path.home() / "Applications/ArmA 3.app",
+    ]
+    for p in native_paths:
+        if p.exists():
+            log.info(f"macOS 네이티브 ARMA3 발견: {p}")
+            return str(p)
+
+    return None
+
+
+def _find_arma3_exe_windows() -> Optional[str]:
+    """Windows: 레지스트리 → 일반 경로 → libraryfolders.vdf."""
+    steam_paths = [
+        r"C:\Program Files (x86)\Steam\steamapps\common\Arma 3",
+        r"C:\Program Files\Steam\steamapps\common\Arma 3",
+        r"D:\Steam\steamapps\common\Arma 3",
+        r"D:\SteamLibrary\steamapps\common\Arma 3",
+        r"E:\Steam\steamapps\common\Arma 3",
+        r"E:\SteamLibrary\steamapps\common\Arma 3",
+        r"F:\Steam\steamapps\common\Arma 3",
+        r"F:\SteamLibrary\steamapps\common\Arma 3",
+    ]
+
+    # 레지스트리
     try:
         import winreg
         key = winreg.OpenKey(
@@ -66,27 +117,25 @@ def find_arma3_exe() -> Optional[str]:
     except Exception:
         pass
 
-    # 2. 일반 경로
-    for base in _STEAM_COMMON_PATHS:
+    # 일반 경로
+    for base in steam_paths:
         exe = Path(base) / "arma3_x64.exe"
         if exe.exists():
             log.info(f"일반 경로에서 ARMA3 발견: {exe}")
             return str(exe)
 
-    # 3. Steam libraryfolders.vdf 파싱
+    # libraryfolders.vdf
     try:
-        vdf_path = Path(os.environ.get("LOCALAPPDATA", "")) / "Steam" / "steamapps" / "libraryfolders.vdf"
-        if not vdf_path.exists():
-            vdf_path = Path(r"C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf")
-        if vdf_path.exists():
-            content = vdf_path.read_text(encoding="utf-8", errors="ignore")
-            for line in content.splitlines():
+        vdf = Path(os.environ.get("LOCALAPPDATA", "")) / "Steam/steamapps/libraryfolders.vdf"
+        if not vdf.exists():
+            vdf = Path(r"C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf")
+        if vdf.exists():
+            for line in vdf.read_text(encoding="utf-8", errors="ignore").splitlines():
                 if '"path"' in line.lower():
-                    # "path"  "D:\\Games\\Steam"
                     parts = line.strip().split('"')
                     if len(parts) >= 4:
-                        lib_path = parts[3].replace("\\\\", "\\")
-                        exe = Path(lib_path) / "steamapps" / "common" / "Arma 3" / "arma3_x64.exe"
+                        lib = parts[3].replace("\\\\", "\\")
+                        exe = Path(lib) / "steamapps/common/Arma 3/arma3_x64.exe"
                         if exe.exists():
                             log.info(f"libraryfolders.vdf에서 ARMA3 발견: {exe}")
                             return str(exe)
@@ -100,28 +149,43 @@ def find_arma3_exe() -> Optional[str]:
 
 def find_mission_folder(mission_name: str, world: str, multiplayer: bool = True) -> Optional[str]:
     """
-    ARMA3 미션 폴더를 자동으로 탐색합니다.
+    ARMA3 미션 폴더를 플랫폼에 맞게 자동으로 탐색합니다.
 
     Args:
         mission_name: 미션 이름 (확장자/맵 제외, 예: "C2AI_BN_VS_BN")
         world: 맵 이름 (예: "Altis", "Stratis")
         multiplayer: True → mpmissions, False → missions
-
-    Returns:
-        미션 폴더 절대 경로 또는 None
     """
     folder_name = f"{mission_name}.{world}"
     sub = "mpmissions" if multiplayer else "missions"
+    home = Path.home()
 
-    search_roots = []
-    # Documents\Arma 3
-    for env_var in ("USERPROFILE", "HOMEPATH"):
-        base = os.environ.get(env_var, "")
-        if base:
-            search_roots.append(Path(base) / "Documents" / "Arma 3" / sub)
-            search_roots.append(Path(base) / "OneDrive" / "Documents" / "Arma 3" / sub)
+    search_roots: list[Path] = []
 
-    search_roots.append(Path.home() / "Documents" / "Arma 3" / sub)
+    if sys.platform == "darwin":
+        # ① CrossOver — 모든 병의 Windows Documents 탐색
+        for bottle in _crossover_bottles():
+            for user_dir in (bottle / "drive_c" / "users").iterdir() if (bottle / "drive_c" / "users").exists() else []:
+                search_roots.append(user_dir / "Documents" / "Arma 3" / sub)
+            for user_dir in (bottle / "drive_c" / "Users").iterdir() if (bottle / "drive_c" / "Users").exists() else []:
+                search_roots.append(user_dir / "Documents" / "Arma 3" / sub)
+
+        # ② macOS 네이티브 Steam (구버전)
+        search_roots += [
+            home / "Documents" / "Arma 3" / sub,
+            home / "Library" / "Application Support" / "Arma 3" / sub,
+        ]
+
+    elif sys.platform == "win32":
+        for env_var in ("USERPROFILE", "HOMEPATH"):
+            base = os.environ.get(env_var, "")
+            if base:
+                search_roots.append(Path(base) / "Documents" / "Arma 3" / sub)
+                search_roots.append(Path(base) / "OneDrive" / "Documents" / "Arma 3" / sub)
+        search_roots.append(home / "Documents" / "Arma 3" / sub)
+
+    else:
+        search_roots.append(home / "Documents" / "Arma 3" / sub)
 
     for root in search_roots:
         candidate = root / folder_name
@@ -131,7 +195,7 @@ def find_mission_folder(mission_name: str, world: str, multiplayer: bool = True)
 
     log.warning(
         f"미션 폴더를 찾을 수 없음: {folder_name}\n"
-        f"  탐색 위치: {[str(r) for r in search_roots]}\n"
+        f"  탐색 위치: {[str(r) for r in search_roots[:5]]} (상위 5개)\n"
         f"  scenarios.yaml의 mission_dir에 절대 경로를 직접 입력하세요."
     )
     return None
@@ -219,37 +283,36 @@ class Arma3Launcher:
 
         exe = find_arma3_exe()
         if exe is None:
-            raise FileNotFoundError(
-                "ARMA3 실행 파일(arma3_x64.exe)을 찾을 수 없습니다.\n"
-                "scenarios.yaml의 arma3.exe_path에 절대 경로를 입력하세요.\n"
-                "예: exe_path: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Arma 3\\arma3_x64.exe'"
-            )
+            if sys.platform == "darwin":
+                hint = (
+                    "macOS에서 ARMA3 실행 파일을 찾을 수 없습니다.\n"
+                    "scenarios.yaml의 arma3.exe_path에 경로를 입력하세요.\n\n"
+                    "CrossOver 사용 시 예:\n"
+                    "  exe_path: '~/Library/Application Support/CrossOver/Bottles/"
+                    "Steam/drive_c/Program Files (x86)/Steam/steamapps/common/Arma 3/arma3_x64.exe'\n\n"
+                    "CrossOver 병 목록 확인:\n"
+                    "  ls ~/Library/Application\\ Support/CrossOver/Bottles/"
+                )
+            else:
+                hint = (
+                    "scenarios.yaml의 arma3.exe_path에 절대 경로를 입력하세요.\n"
+                    "예: exe_path: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Arma 3\\arma3_x64.exe'"
+                )
+            raise FileNotFoundError(hint)
         return exe
 
     def build_args(self, scenario: dict, mission_dir: str) -> list:
         """ARMA3 실행 인수 목록을 구성합니다."""
         args = []
-
-        # 기본 옵션
         for arg in self._arma3_cfg.get("extra_args", ["-skipIntro", "-noSplash", "-noPause"]):
             args.append(arg)
-
-        # 프로필
         profile = self._arma3_cfg.get("profile", "")
         if profile:
             args.append(f"-name={profile}")
-
-        # 멀티플레이 호스트 모드
         if scenario.get("multiplayer", True):
             args.append("-host")
-
-        # 맵
-        world = scenario.get("world", "Altis")
-        args.append(f"-world={world}")
-
-        # 미션 경로 (절대 경로 사용)
-        args.append(f'-mission="{mission_dir}"')
-
+        args.append(f"-world={scenario.get('world', 'Altis')}")
+        args.append(f"-mission={mission_dir}")
         return args
 
     def launch(
@@ -263,12 +326,9 @@ class Arma3Launcher:
         """
         지정된 시나리오로 ARMA3를 실행합니다.
 
-        Args:
-            scenario_name:        scenarios.yaml에 등록된 시나리오 키
-            override_exe:         ARMA3 exe 경로 강제 지정 (빈 문자열이면 자동 탐색)
-            override_mission_dir: 미션 폴더 경로 강제 지정
-            override_mission_name: 미션 이름 강제 지정 (custom 시나리오용)
-            wait:                 True이면 ARMA3 종료까지 블로킹
+        macOS:   CrossOver wine으로 arma3_x64.exe 실행
+                 .app이면 open -a "ArmA 3" --args ... 실행
+        Windows: arma3_x64.exe 직접 실행
 
         Returns:
             subprocess.Popen 객체
@@ -277,56 +337,96 @@ class Arma3Launcher:
         if override_mission_name:
             scenario["mission_name"] = override_mission_name
 
-        exe        = self.resolve_exe(override_exe)
+        exe         = self.resolve_exe(override_exe)
         mission_dir = self.resolve_mission_dir(scenario, override_mission_dir)
-        args       = self.build_args(scenario, mission_dir)
-
-        cmd = [exe] + args
-        cmd_str = " ".join(cmd)
+        args        = self.build_args(scenario, mission_dir)
 
         log.info(f"시나리오: {scenario.get('display_name', scenario_name)}")
         log.info(f"미션 경로: {mission_dir}")
-        log.info(f"실행 명령: {cmd_str}")
 
-        proc = subprocess.Popen(
-            cmd_str,
-            shell=True,  # 절대 경로 내 공백 처리
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if sys.platform == "darwin":
+            proc = self._launch_macos(exe, args)
+        else:
+            proc = self._launch_windows(exe, args)
+
         log.info(f"ARMA3 실행됨 (PID: {proc.pid})")
-
         if wait:
             proc.wait()
-
         return proc
+
+    def _launch_macos(self, exe: str, args: list) -> subprocess.Popen:
+        """macOS 전용 실행 — CrossOver wine 또는 .app open."""
+        if exe.endswith(".exe"):
+            # CrossOver wine 경유 실행
+            wine = _find_crossover_wine()
+            if wine is None:
+                raise FileNotFoundError(
+                    "CrossOver wine 실행 파일을 찾을 수 없습니다.\n"
+                    "/Applications/CrossOver.app 이 설치되어 있는지 확인하세요."
+                )
+            # WINEPREFIX: arma3_x64.exe 경로에서 병 경로 역산
+            # 예) .../Bottles/Steam/drive_c/...arma3_x64.exe → .../Bottles/Steam
+            exe_path = Path(exe)
+            bottle_path = None
+            for part in exe_path.parts:
+                if part == "drive_c":
+                    idx = exe_path.parts.index(part)
+                    bottle_path = Path(*exe_path.parts[:idx])
+                    break
+
+            env = os.environ.copy()
+            if bottle_path:
+                env["WINEPREFIX"] = str(bottle_path)
+                log.info(f"WINEPREFIX: {bottle_path}")
+
+            cmd = [wine, exe] + args
+            log.info(f"실행 명령 (wine): {' '.join(cmd)}")
+            return subprocess.Popen(cmd, env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        elif exe.endswith(".app") or Path(exe).suffix == "":
+            # macOS 네이티브 .app
+            app_name = Path(exe).stem  # "ArmA 3" 등
+            cmd = ["open", "-a", app_name, "--args"] + args
+            log.info(f"실행 명령 (open): {' '.join(cmd)}")
+            return subprocess.Popen(cmd,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        else:
+            # 직접 실행 (실행 권한 필요)
+            cmd = [exe] + args
+            log.info(f"실행 명령: {' '.join(cmd)}")
+            return subprocess.Popen(cmd,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _launch_windows(self, exe: str, args: list) -> subprocess.Popen:
+        """Windows 전용 실행."""
+        cmd_str = f'"{exe}" ' + " ".join(args)
+        log.info(f"실행 명령: {cmd_str}")
+        return subprocess.Popen(cmd_str, shell=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def wait_for_rpt(self, timeout: int = 120) -> Optional[str]:
         """
         ARMA3 실행 후 새로 생성된 .rpt 파일이 나타날 때까지 대기합니다.
 
-        Args:
-            timeout: 최대 대기 시간(초)
-
         Returns:
             .rpt 파일 경로 또는 None (타임아웃)
         """
+        from relay import _rpt_search_patterns
         log.info(f"ARMA3 .rpt 파일 대기 중 (최대 {timeout}초)...")
 
-        rpt_dirs = [
-            os.path.expandvars(r"%LOCALAPPDATA%\Arma 3"),
-            os.path.expanduser(r"~\AppData\Local\Arma 3"),
-        ]
+        patterns = _rpt_search_patterns()
 
-        # 기존 .rpt 파일 목록 기록
+        # 기존 파일 목록 스냅샷
         existing = set()
-        for d in rpt_dirs:
-            existing.update(glob.glob(os.path.join(d, "*.rpt")))
+        for pat in patterns:
+            existing.update(glob.glob(pat))
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            for d in rpt_dirs:
-                current = set(glob.glob(os.path.join(d, "*.rpt")))
+            for pat in patterns:
+                current = set(glob.glob(pat))
                 new_files = current - existing
                 if new_files:
                     rpt = max(new_files, key=os.path.getmtime)
