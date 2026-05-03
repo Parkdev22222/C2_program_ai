@@ -323,13 +323,16 @@ class SAM3ObjectDetector:
         (video_analysis_system이 BGR→RGB 변환 후 전달함)
         결과: [{"frame_index": int, "detections": [det.to_dict(), ...]}, ...]
         """
-        if not frames or self._model is None or self._processor is None:
+        if not frames:
             return []
-        try:
-            return self._track_with_video_model(frames)
-        except Exception as e:
-            logger.error(f"track_segment 오류: {e}", exc_info=True)
+        if self._model is None or self._processor is None:
+            logger.error(
+                "SAM3 모델 미로딩 — checkpoint_path를 확인하세요. "
+                f"현재 경로: {self.weights_path}"
+            )
             return []
+        # 예외를 삼키지 않고 그대로 전파 → UI에서 실제 오류 확인 가능
+        return self._track_with_video_model(frames)
 
     def _track_with_video_model(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
         import torch
@@ -349,61 +352,70 @@ class SAM3ObjectDetector:
             dtype=self._dtype,
         )
 
-        # 텍스트 프롬프트 등록
+        # 각 텍스트 프롬프트를 독립 세션으로 처리해 obj_id → class_name 정확히 매핑
+        # (단일 세션에 여러 add_text_prompt를 연속 호출하면 obj_id 귀속 불명확)
+        all_frame_dets: Dict[int, List[Detection]] = {i: [] for i in range(len(frames))}
+
         for class_name in self.target_classes:
-            logger.debug(f"텍스트 프롬프트 등록: '{class_name}'")
-            inference_session = self._processor.add_text_prompt(
-                inference_session=inference_session,
+            canonical = class_name.split()[-1].replace(" ", "_")
+            logger.info(f"텍스트 프롬프트 처리: '{class_name}'")
+
+            # 클래스별 별도 세션
+            session = self._processor.init_video_session(
+                video=pil_frames,
+                inference_device=torch.device(self.device),
+                processing_device="cpu",
+                video_storage_device="cpu",
+                dtype=self._dtype,
+            )
+            session = self._processor.add_text_prompt(
+                inference_session=session,
                 text=class_name,
             )
 
-        # obj_id → class_name 매핑 (propagate 후 동적 갱신)
-        id_to_label: Dict[int, str] = {}
+            with torch.no_grad():
+                for model_outputs in self._model.propagate_in_video_iterator(
+                    inference_session=session
+                ):
+                    frame_idx = model_outputs.frame_idx
+                    processed = self._processor.postprocess_outputs(session, model_outputs)
 
-        # 프레임별 탐지 결과 수집
-        frame_dets: Dict[int, List[Detection]] = {i: [] for i in range(len(frames))}
+                    obj_ids_t = processed.get("object_ids")
+                    n_obj = len(obj_ids_t) if obj_ids_t is not None else 0
 
-        logger.info("SAM3 propagate_in_video_iterator 시작...")
-        with torch.no_grad():
-            for model_outputs in self._model.propagate_in_video_iterator(
-                inference_session=inference_session
-            ):
-                frame_idx = model_outputs.frame_idx
-                processed = self._processor.postprocess_outputs(
-                    inference_session, model_outputs
-                )
+                    if frame_idx == 0:
+                        logger.info(
+                            f"  '{class_name}' frame=0 탐지: {n_obj}개  "
+                            f"scores={processed.get('scores')}"
+                        )
 
-                # obj_id → 라벨 갱신
-                obj_ids_t = processed.get("object_ids")
-                if obj_ids_t is not None:
-                    for oid in obj_ids_t.tolist():
-                        if int(oid) not in id_to_label:
-                            id_to_label[int(oid)] = f"obj{oid}"
+                    # 이 세션의 모든 obj_id → class_name 매핑
+                    id_to_label: Dict[int, str] = {}
+                    if obj_ids_t is not None:
+                        for oid in obj_ids_t.tolist():
+                            id_to_label[int(oid)] = canonical
 
-                dets = _postprocess_to_detections(
-                    processed,
-                    class_name="",       # id_to_label로 라벨 결정
-                    orig_h=h,
-                    orig_w=w,
-                    confidence_threshold=self.confidence_threshold,
-                    min_mask_area_ratio=self.min_mask_area_ratio,
-                    id_to_label=id_to_label,
-                )
-                frame_dets[frame_idx].extend(dets)
-
-                if frame_idx % 60 == 0:
-                    logger.info(
-                        f"  추적 진행: {frame_idx}/{len(frames)} 프레임  "
-                        f"객체 {len(dets)}개"
+                    dets = _postprocess_to_detections(
+                        processed,
+                        class_name=canonical,
+                        orig_h=h,
+                        orig_w=w,
+                        confidence_threshold=self.confidence_threshold,
+                        min_mask_area_ratio=self.min_mask_area_ratio,
+                        id_to_label=id_to_label,
                     )
+                    all_frame_dets[frame_idx].extend(dets)
 
-        logger.info(f"추적 완료: {len(frame_dets)}프레임")
-        gc.collect()
+            gc.collect()
 
-        # track_id는 SAM3 obj_id 그대로 사용 → 추가 IoU 매칭 불필요
+        logger.info(
+            f"추적 완료 — "
+            f"탐지 프레임 수: {sum(1 for d in all_frame_dets.values() if d)}"
+        )
+
         results: List[Dict[str, Any]] = []
         for frame_idx in range(len(frames)):
-            curr_dets = _nms(frame_dets.get(frame_idx, []), self.iou_threshold)
+            curr_dets = _nms(all_frame_dets.get(frame_idx, []), self.iou_threshold)
             if curr_dets:
                 results.append({
                     "frame_index": frame_idx,

@@ -1,11 +1,8 @@
 # ===== 객체 탐지 및 추적 (SAM3) =====
 object_detection:
-  # SAM2 공식 패키지 체크포인트 경로
-  # 다운로드: https://github.com/facebookresearch/segment-anything-2#model-checkpoints
-  checkpoint_path: ""        # 예: "/path/to/sam2.1_hiera_large.pt"
-  # SAM2 모델 설정 파일 (sam2 패키지 설치 시 사용)
-  sam2_config: "sam2.1_hiera_large.yaml"
-  # checkpoint 미설정 시 HuggingFace facebook/sam2-hiera-large 자동 다운로드
+  # SAM3 가중치 경로 (로컬 디렉토리 또는 HuggingFace 모델 ID)
+  # ★ 실제 사용 중인 경로로 수정하세요 ★
+  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights"
   device: "cuda"
   dtype: "bfloat16"
   target_classes:
