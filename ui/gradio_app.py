@@ -24,6 +24,17 @@ try:
 except ImportError:
     _PLOTLY_OK = False
 
+try:
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+    from wargame import WargameEngine, setup_bn_vs_bn
+    from wargame.llm_planner import MissionPlanner
+    from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
+    _WARGAME_OK = True
+except Exception as _wg_err:
+    _WARGAME_OK = False
+    _wg_err = str(_wg_err)
+
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
@@ -40,9 +51,14 @@ def _load_ui_config() -> dict:
 # ─────────────────────────────────────────────
 _agent = None
 _video_analysis_system = None
-_analyzed_videos: List[dict] = []       # {"video_id", "filename", "summary"}
-_active_video_ids: List[str] = []       # 현재 선택된 비디오 IDs
-_last_situation_analysis: str = ""      # EXAONE4의 마지막 상황 분석 텍스트
+_analyzed_videos: List[dict] = []
+_active_video_ids: List[str] = []
+_last_situation_analysis: str = ""
+
+# ── 워게임 전역 상태 ──────────────────────────────────────────────
+_wg_engine: Optional["WargameEngine"] = None
+_wg_planner: Optional["MissionPlanner"] = None
+_wg_last_plan: dict = {}
 
 
 def _get_agent():
@@ -446,6 +462,206 @@ def get_battlefield_map():
     return fig, "\n".join(status_lines)
 
 
+# ─────────────────────────────────────────────────────────────────
+# 워게임 시뮬레이터 함수
+# ─────────────────────────────────────────────────────────────────
+
+def _wg_ensure_engine() -> Optional["WargameEngine"]:
+    global _wg_engine, _wg_planner
+    if not _WARGAME_OK:
+        return None
+    if _wg_engine is None:
+        units = setup_bn_vs_bn()
+        _wg_engine = WargameEngine(units)
+        _wg_planner = MissionPlanner()
+    return _wg_engine
+
+
+def _build_wargame_map(state: dict) -> Optional[go.Figure]:
+    """워게임 현황을 Plotly 지도로 시각화."""
+    if not _PLOTLY_OK:
+        return None
+
+    fig = go.Figure()
+
+    # 지형 고도 히트맵 (다운샘플 60x60)
+    try:
+        hm = get_heightmap()
+        step = max(1, GRID_H // 60)
+        hm_down = hm[::step, ::step]
+        x_scale = MAP_W / hm_down.shape[1]
+        y_scale = MAP_H / hm_down.shape[0]
+        fig.add_trace(go.Heatmap(
+            z=hm_down.tolist(),
+            x=[i * x_scale for i in range(hm_down.shape[1])],
+            y=[i * y_scale for i in range(hm_down.shape[0])],
+            colorscale="Greens",
+            showscale=False,
+            opacity=0.35,
+            hoverinfo="skip",
+        ))
+    except Exception:
+        pass
+
+    # 부대 마커 + 웨이포인트 경로
+    _SIDE_COLOR = {"BLUFOR": "#4FC3F7", "OPFOR": "#EF5350"}
+    _STATUS_SYM = {"active": "circle", "suppressed": "triangle-up", "destroyed": "x"}
+
+    for u in state.get("units", []):
+        color = u.get("color", _SIDE_COLOR.get(u["side"], "gray"))
+        sym = _STATUS_SYM.get(u["status"], "circle")
+        size = 18 if u["status"] == "active" else 12
+        cp = u["combat_power"]
+        elev = u.get("elevation", 0)
+
+        # 웨이포인트 경로선
+        wps = u.get("waypoints", [])
+        if wps:
+            path_x = [u["x"]] + [w[0] for w in wps]
+            path_y = [u["y"]] + [w[1] for w in wps]
+            fig.add_trace(go.Scatter(
+                x=path_x, y=path_y,
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dot"),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
+        # 부대 마커
+        fig.add_trace(go.Scatter(
+            x=[u["x"]], y=[u["y"]],
+            mode="markers+text",
+            name=f"{u['side']} {u['id']}",
+            marker=dict(
+                symbol=sym,
+                size=size,
+                color=color,
+                line=dict(color="white", width=1.5),
+                opacity=0.3 if u["status"] == "destroyed" else 1.0,
+            ),
+            text=[f"{u['id']}<br>{cp:.0f}%"],
+            textposition="top center",
+            textfont=dict(color=color, size=11),
+            hovertemplate=(
+                f"<b>{u['id']}</b><br>"
+                f"위치: ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)<br>"
+                f"고도: {elev:.0f}m<br>"
+                f"전투력: {cp:.1f}%<br>"
+                f"상태: {u['status']}<br>"
+                f"행동: {u['current_action']}<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} "
+                 f"{'▶ 진행 중' if state.get('running') else '⏸ 정지'}",
+            font=dict(color="#dddddd", size=14),
+        ),
+        xaxis=dict(
+            title="동쪽 (m)", range=[0, MAP_W],
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaa"),
+        ),
+        yaxis=dict(
+            title="북쪽 (m)", range=[0, MAP_H],
+            scaleanchor="x", scaleratio=1,
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaa"),
+        ),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f1923",
+        font=dict(color="#dddddd"),
+        legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)),
+        height=640,
+        margin=dict(l=60, r=20, t=50, b=50),
+        hovermode="closest",
+    )
+    return fig
+
+
+def _wg_status_text(state: dict) -> str:
+    lines = [f"게임 시간: {state.get('game_time_str','00:00:00')} | Tick: {state.get('tick',0)}"]
+    winner = state.get("winner")
+    if winner:
+        lines.append(f"★ 전투 종료: {winner} 승리")
+    lines.append("")
+    for u in state.get("units", []):
+        icon = "🔵" if u["side"] == "BLUFOR" else "🔴"
+        bar = "█" * int(u["combat_power"] / 10) + "░" * (10 - int(u["combat_power"] / 10))
+        lines.append(f"{icon} {u['id']:6s} [{bar}] {u['combat_power']:5.1f}%  {u['status']}")
+    return "\n".join(lines)
+
+
+def wargame_refresh():
+    """현재 워게임 상태를 UI에 반영."""
+    eng = _wg_ensure_engine()
+    if eng is None:
+        msg = f"워게임 모듈 로드 실패: {_wg_err if not _WARGAME_OK else '엔진 없음'}"
+        return None, msg, ""
+    state = eng.get_state()
+    fig = _build_wargame_map(state)
+    status = _wg_status_text(state)
+    events = eng.db.get_recent_events(20)
+    log_text = "\n".join(
+        f"[{e['event_type']:10s}] T={e['tick']:4d} {e['message']}"
+        for e in events
+    )
+    return fig, status, log_text
+
+
+def wargame_start_pause():
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return "워게임 초기화 실패", *wargame_refresh()
+    if eng.running:
+        eng.stop()
+        label = "▶ 시뮬레이션 시작"
+    else:
+        eng.start()
+        label = "⏸ 일시정지"
+    fig, status, log_text = wargame_refresh()
+    return label, fig, status, log_text
+
+
+def wargame_reset_sim():
+    global _wg_engine, _wg_last_plan
+    if not _WARGAME_OK:
+        return "초기화 실패", None, "", ""
+    units = setup_bn_vs_bn()
+    if _wg_engine is not None:
+        _wg_engine.reset(units)
+    else:
+        _wg_engine = WargameEngine(units)
+    _wg_last_plan = {}
+    fig, status, log_text = wargame_refresh()
+    return "▶ 시뮬레이션 시작", fig, status, log_text
+
+
+def wargame_set_timescale(scale: float):
+    eng = _wg_ensure_engine()
+    if eng:
+        eng.time_scale = float(scale)
+    return wargame_refresh()
+
+
+def wargame_request_llm_plan():
+    global _wg_last_plan
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return "워게임 초기화 실패", None, "", ""
+    if _wg_planner is None:
+        return "Planner 없음", None, "", ""
+    state = eng.get_state()
+    import json
+    plan = _wg_planner.plan(state)
+    _wg_last_plan = plan
+    eng.apply_mission_plan(plan)
+    plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
+    fig, status, log_text = wargame_refresh()
+    return plan_text, fig, status, log_text
+
+
 def clear_chat_history() -> Tuple[List, str]:
     """채팅 히스토리와 상황 메모리를 초기화합니다."""
     global _last_situation_analysis
@@ -606,7 +822,60 @@ def create_app(agent=None) -> gr.Blocks:
                     label="클릭하여 예시 쿼리 입력",
                 )
 
-          # ─── 전장 지도 탭 ─────────────────────────────────
+          # ─── 워게임 시뮬레이터 탭 ────────────────────────────
+          with gr.Tab("⚔️ 워게임 시뮬레이터"):
+            if not _WARGAME_OK:
+                gr.Markdown(f"⚠️ 워게임 모듈 로드 실패: `{_wg_err}`")
+            else:
+                gr.Markdown(
+                    "## 파이썬 워게임 시뮬레이터\n"
+                    "LLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다."
+                )
+                with gr.Row():
+                    # ── 지도 (좌) ───────────────────────────────
+                    with gr.Column(scale=3):
+                        wg_map = gr.Plot(label="전장 지도", show_label=False)
+
+                    # ── 제어·상태 패널 (우) ──────────────────────
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 시뮬레이션 제어")
+                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
+                        wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
+
+                        wg_timescale = gr.Slider(
+                            minimum=10, maximum=600, value=60, step=10,
+                            label="시간 배율 (실제 1초 = X 게임 초)",
+                        )
+                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
+
+                        gr.Markdown("### LLM 임무계획")
+                        wg_plan_btn = gr.Button("🧠 LLM 임무계획 생성", variant="primary")
+                        gr.Markdown(
+                            "- **Claude API**: `ANTHROPIC_API_KEY` 설정 시 자동 사용\n"
+                            "- **vLLM**: `VLLM_BASE_URL` 설정 시 사용\n"
+                            "- 미설정: 규칙 기반 자동 계획"
+                        )
+
+                        gr.Markdown("### 부대 전력 현황")
+                        wg_status = gr.Textbox(
+                            label="", lines=8, interactive=False,
+                            elem_id="wg_status",
+                        )
+
+                with gr.Row():
+                    gr.Markdown("### 임무계획 (JSON)")
+                with gr.Row():
+                    wg_plan_box = gr.Code(
+                        language="json", lines=12, interactive=False,
+                        label="LLM 생성 임무계획",
+                    )
+                    wg_event_log = gr.Textbox(
+                        label="전투 이벤트 로그", lines=12, interactive=False,
+                    )
+
+                wg_timer = gr.Timer(value=2)
+
+          # ─── 전장 지도 탭 (ARMA3) ─────────────────────────────
           with gr.Tab("🗺️ 전장 지도"):
             gr.Markdown(
                 "ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다.  "
@@ -686,6 +955,36 @@ def create_app(agent=None) -> gr.Blocks:
             fn=get_situation_memory_status,
             outputs=[memory_status_box],
         )
+
+        # ─── 워게임 이벤트 핸들러 ────────────────────────────
+        if _WARGAME_OK:
+            _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
+
+            wg_startstop_btn.click(
+                fn=wargame_start_pause,
+                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],
+            )
+            wg_reset_btn.click(
+                fn=wargame_reset_sim,
+                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],
+            )
+            wg_apply_scale_btn.click(
+                fn=wargame_set_timescale,
+                inputs=[wg_timescale],
+                outputs=_WG_OUTPUTS,
+            )
+            wg_plan_btn.click(
+                fn=wargame_request_llm_plan,
+                outputs=[wg_plan_box, wg_map, wg_status, wg_event_log],
+            )
+            wg_timer.tick(
+                fn=wargame_refresh,
+                outputs=_WG_OUTPUTS,
+            )
+            app.load(
+                fn=wargame_refresh,
+                outputs=_WG_OUTPUTS,
+            )
 
         # ─── 전장 지도 이벤트 ────────────────────────────────
         map_refresh_btn.click(
