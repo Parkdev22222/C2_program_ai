@@ -19,64 +19,51 @@ GRID_H = MAP_H // GRID_RES   # 300
 
 
 def _generate_heightmap(seed: int = 42) -> np.ndarray:
-    """
-    Altis 지형을 모사한 고도 행렬 생성.
-
-    남부(y<8km): 평지 (BLUFOR 집결지)
-    중부(8-22km): 구릉지 (교전 지역)
-    북부(y>22km): 구릉 평지 (OPFOR 집결지)
-    """
+    """임의 고도 행렬 생성 (프랙탈 노이즈 합성)."""
     rng = np.random.default_rng(seed)
+
     h = np.zeros((GRID_H, GRID_W), dtype=np.float32)
 
-    xv, yv = np.meshgrid(np.arange(GRID_W), np.arange(GRID_H))
-
-    # 주요 능선 및 구릉 (교전 지역 중부에 집중)
-    hills = [
-        # (cx, cy, height, sigma_x, sigma_y) — 격자 단위
-        (120, 130, 280, 25, 20),
-        (80,  150, 200, 18, 15),
-        (180, 140, 240, 22, 18),
-        (150, 110, 180, 15, 20),
-        (100, 180, 160, 20, 12),
-        (200, 160, 190, 16, 22),
-        (60,  120, 150, 14, 14),
-        (240, 130, 170, 18, 16),
-        (130, 200, 140, 20, 18),
-        (170, 90,  120, 16, 16),
-        # 소규모 구릉
-        (50,  100, 80, 10, 10),
-        (220, 100, 90, 12, 10),
-        (140, 155, 200, 30, 10),  # 중앙 능선
-        (70,  170, 110, 10, 14),
-        (190, 175, 130, 12, 10),
+    # 옥타브 노이즈: 여러 해상도 랜덤 레이어를 합산
+    octaves = [
+        (8,  200.0),   # 대규모 산맥
+        (16,  80.0),   # 중규모 구릉
+        (32,  30.0),   # 소규모 언덕
+        (64,  12.0),   # 세부 지형
+        (128,  5.0),   # 미세 굴곡
     ]
-    for cx, cy, ht, sx, sy in hills:
-        h += ht * np.exp(
-            -(((xv - cx) ** 2) / (2 * sx ** 2) + ((yv - cy) ** 2) / (2 * sy ** 2))
+    for grid_div, amplitude in octaves:
+        # 작은 격자에 랜덤 값 생성 후 업샘플
+        small_h = rng.uniform(0, 1, (grid_div, grid_div)).astype(np.float32)
+        # 선형 보간 업샘플
+        from_h = np.linspace(0, grid_div - 1, GRID_H)
+        from_w = np.linspace(0, grid_div - 1, GRID_W)
+        ih = np.floor(from_h).astype(int).clip(0, grid_div - 2)
+        iw = np.floor(from_w).astype(int).clip(0, grid_div - 2)
+        fh = (from_h - ih)[:, None]
+        fw = (from_w - iw)[None, :]
+        upsampled = (
+            small_h[ih[:, None], iw[None, :]] * (1 - fh) * (1 - fw)
+            + small_h[(ih+1)[:, None], iw[None, :]] * fh * (1 - fw)
+            + small_h[ih[:, None], (iw+1)[None, :]] * (1 - fh) * fw
+            + small_h[(ih+1)[:, None], (iw+1)[None, :]] * fh * fw
         )
+        h += upsampled * amplitude
 
-    # 노이즈 추가
-    noise = rng.uniform(-20, 20, (GRID_H, GRID_W)).astype(np.float32)
-    h += noise
-
-    # 스무딩 (scipy 없이 간단 박스필터)
-    kernel_size = 5
-    pad = kernel_size // 2
+    # 박스 스무딩 (scipy 없이)
+    k = 7
+    pad = k // 2
     h_pad = np.pad(h, pad, mode="edge")
-    h_smooth = np.zeros_like(h)
-    for dy in range(kernel_size):
-        for dx in range(kernel_size):
-            h_smooth += h_pad[dy:dy+GRID_H, dx:dx+GRID_W]
-    h = h_smooth / (kernel_size ** 2)
+    h_s = np.zeros_like(h)
+    for dy in range(k):
+        for dx in range(k):
+            h_s += h_pad[dy:dy+GRID_H, dx:dx+GRID_W]
+    h = h_s / (k * k)
 
-    # 남북 평지 마스크: 남부(y<80) 및 북부(y>220)는 낮게 유지
-    south_mask = np.maximum(0, (80 - yv) / 80)   # 0→1 as y→0
-    north_mask = np.maximum(0, (yv - 220) / 80)  # 0→1 as y→300
-    h *= (1 - south_mask * 0.85)
-    h *= (1 - north_mask * 0.7)
+    # 0~400m 범위로 정규화
+    h = (h - h.min()) / (h.max() - h.min()) * 400
 
-    return np.clip(h, 0, 400).astype(np.float32)
+    return h.astype(np.float32)
 
 
 # 전역 싱글턴 지형
