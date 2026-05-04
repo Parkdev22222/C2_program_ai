@@ -9,6 +9,7 @@ BattlefieldAgent.run()을 통해 현재 구축된 LLM 에이전트 시스템을 
   2. 규칙 기반 폴백 (에이전트 없거나 실패 시)
 """
 
+import ast
 import json
 import logging
 import re
@@ -201,10 +202,19 @@ class MissionPlanner:
             m2 = re.search(r"\{[\s\S]*\}", text)
             if m2:
                 text = m2.group()
+        # JSON 파싱 시도
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            return None
+            pass
+        # Python dict 리터럴(홑따옴표) 폴백
+        try:
+            result = ast.literal_eval(text)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+        return None
 
     # ── 규칙 기반 폴백 ────────────────────────────────────────────
 
