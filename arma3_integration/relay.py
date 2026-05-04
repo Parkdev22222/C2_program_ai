@@ -43,8 +43,9 @@ log = logging.getLogger(__name__)
 
 C2AI_PREFIX = "[C2AI_DATA]"
 
-# macOS CrossOver에서 .rpt 외에 .dat 확장자로 생성되는 경우도 있음
-_LOG_EXTENSIONS = ("*.rpt", "*.dat")
+# macOS 네이티브 ARMA3는 arma3*.dat 형식으로 로그 생성
+# CrossOver는 arma3*.rpt 형식
+_LOG_EXTENSIONS = ("arma3*.rpt", "arma3*.dat")
 
 
 # ── ARMA3 로그 경로 탐색 ──────────────────────────────────────────

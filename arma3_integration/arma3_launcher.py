@@ -200,10 +200,15 @@ def find_mission_folder(mission_name: str, world: str, multiplayer: bool = True)
             log.info(f"미션 폴더 발견: {candidate}")
             return str(candidate)
 
+    # 존재하는 첫 번째 부모 폴더 → 복사 위치 안내
+    copy_target = next((str(r) for r in search_roots if r.parent.exists()), str(search_roots[0]))
     log.warning(
         f"미션 폴더를 찾을 수 없음: {folder_name}\n"
-        f"  탐색 위치: {[str(r) for r in search_roots[:5]]} (상위 5개)\n"
-        f"  scenarios.yaml의 mission_dir에 절대 경로를 직접 입력하세요."
+        f"  → 아래 경로에 미션 폴더를 복사하세요:\n"
+        f"     {copy_target}/\n"
+        f"  복사 명령 예시:\n"
+        f"     cp -r arma3_integration/mission_template/{folder_name} \"{copy_target}/\"\n"
+        f"  또는 scenarios.yaml의 mission_dir에 절대 경로를 직접 입력하세요."
     )
     return None
 

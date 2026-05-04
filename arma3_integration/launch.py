@@ -16,6 +16,7 @@ C2AI 통합 런처 — 시나리오명 하나로 전체 시스템 자동 시작
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -223,7 +224,20 @@ def main():
     try:
         if arma3_proc is not None:
             log.info("ARMA3 종료 시 relay도 자동 종료됩니다. (Ctrl+C로 강제 종료)")
-            arma3_proc.wait()
+            if sys.platform == "darwin":
+                # macOS: open -a는 즉시 리턴 → pgrep으로 실제 프로세스 감시
+                log.info("macOS: ARMA3 프로세스 감시 중 (pgrep)...")
+                time.sleep(15)  # ARMA3 기동 시간 대기
+                while True:
+                    r = subprocess.run(
+                        ["pgrep", "-i", "arma3"],
+                        capture_output=True,
+                    )
+                    if r.returncode != 0:
+                        break
+                    time.sleep(10)
+            else:
+                arma3_proc.wait()
             log.info("ARMA3 종료됨. 5초 후 relay 종료...")
             time.sleep(5)
         else:
