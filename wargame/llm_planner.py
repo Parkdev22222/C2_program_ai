@@ -16,98 +16,34 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ── Few-Shot 예시 (모델에게 출력 형식을 학습시킴) ────────────────────
+# ── Few-Shot 예시 (간결 버전) ─────────────────────────────────────
 
-_FEW_SHOT_EXAMPLES = """
-=== 임무계획 JSON 출력 예시 ===
+_FEW_SHOT_EXAMPLES = """\
+[예시1] 전력우세·정면공격
+{"reasoning":"Alpha 우익 우회, Bravo 정면 압박으로 협공.",
+ "mission_plans":[
+  {"company_id":"Alpha","mission_type":"flank","waypoints":[[9000,8000],[13000,11000],[15000,13000]],"objective":"Red1 측방 공격"},
+  {"company_id":"Bravo","mission_type":"attack","waypoints":[[10000,9000],[14000,13000]],"objective":"Red2 정면 압박"}
+ ]}
 
-[예시 1] 아군 전력 우세, 적 거리 8km
-상황: Alpha(100%, 7.5km,5.0km,고도45m), Bravo(100%, 7.5km,6.5km,고도52m)
-      vs Red1(85%, 15km,13km,고도180m), Red2(90%, 16km,13.5km,고도165m)
-      중앙 능선(12km,12km 부근) 고도 280m — 고지 선점 필요
+[예시2] 전력열세·방어
+{"reasoning":"전투력 30%↓, 고지 철수 후 방어.",
+ "mission_plans":[
+  {"company_id":"Alpha","mission_type":"defend","waypoints":[[14000,12000]],"objective":"고지 방어"},
+  {"company_id":"Bravo","mission_type":"withdraw","waypoints":[[13000,12500],[14000,12000]],"objective":"Alpha 합류"}
+ ]}
 
-출력:
-```json
-{
-  "reasoning": "적이 고지(180m)를 선점하고 있어 정면 돌격 시 불리하다. Alpha는 서측 우회로로 접근해 적 측방을 위협하고, Bravo는 중앙 능선 고지를 선점하여 화력 우위를 확보한 후 협공한다.",
-  "mission_plans": [
-    {
-      "company_id": "Alpha",
-      "mission_type": "flank",
-      "waypoints": [[9000, 8000], [11000, 10000], [13000, 12000], [15000, 13000]],
-      "objective": "서측 우회 기동으로 Red1 측방 공격"
-    },
-    {
-      "company_id": "Bravo",
-      "mission_type": "attack",
-      "waypoints": [[9500, 9000], [12000, 11500], [14000, 13000], [16000, 13500]],
-      "objective": "중앙 능선 고지 선점 후 Red2 정면 공격"
-    }
-  ]
-}
-```
-
-[예시 2] 아군 열세(전투력 저하), 방어 전환
-상황: Alpha(35%, 13km,12km,고도120m), Bravo(28%, 12km,13km,고도95m)
-      vs Red1(70%, 17km,14km,고도200m), Red2(65%, 18km,13km,고도185m)
-      아군 고지(14km,12km) 고도 240m — 방어 진지 적합
-
-출력:
-```json
-{
-  "reasoning": "아군 전투력이 30% 내외로 저하되었고 적이 고지에서 화력 우위를 점하고 있다. Alpha와 Bravo 모두 인근 고지로 철수하여 방어 진지를 구축하고 증원을 기다린다.",
-  "mission_plans": [
-    {
-      "company_id": "Alpha",
-      "mission_type": "defend",
-      "waypoints": [[14000, 12000], [14000, 12000]],
-      "objective": "고지(14km,12km) 방어 진지 구축 및 현위치 고수"
-    },
-    {
-      "company_id": "Bravo",
-      "mission_type": "withdraw",
-      "waypoints": [[13000, 12500], [14000, 12000]],
-      "objective": "Alpha 진지로 철수 후 통합 방어"
-    }
-  ]
-}
-```
-
-[예시 3] 교전 중, 적 1개 중대 전투불능
-상황: Alpha(80%, 16km,14km,고도210m), Bravo(72%, 15km,15km,고도195m)
-      vs Red1(destroyed), Red2(45%, 20km,19km,고도130m)
-      적 Red2 후방 보급로 차단 가능
-
-출력:
-```json
-{
-  "reasoning": "Red1이 전투불능 상태이며 Red2는 전투력이 45%로 저하되었다. Alpha가 고지 우위를 유지하며 정면 압박하고, Bravo는 우회하여 Red2 후방 보급로를 차단해 포위 섬멸한다.",
-  "mission_plans": [
-    {
-      "company_id": "Alpha",
-      "mission_type": "attack",
-      "waypoints": [[17000, 15000], [18000, 17000], [20000, 19000]],
-      "objective": "Red2 정면 압박 및 고지 우위 유지"
-    },
-    {
-      "company_id": "Bravo",
-      "mission_type": "flank",
-      "waypoints": [[17000, 17000], [20000, 20000], [22000, 21000]],
-      "objective": "Red2 후방 우회 차단으로 포위 섬멸"
-    }
-  ]
-}
-```
-"""
+[예시3] 포위 섬멸
+{"reasoning":"Red1 전투불능. Delta 고속 우회, Charlie 정면으로 Red2 포위.",
+ "mission_plans":[
+  {"company_id":"Charlie","mission_type":"attack","waypoints":[[18000,16000],[21000,19000]],"objective":"정면 압박"},
+  {"company_id":"Delta","mission_type":"flank","waypoints":[[20000,21000],[23000,22000]],"objective":"후방 차단"}
+ ]}"""
 
 # ── 고도맵 샘플링 ─────────────────────────────────────────────────
 
 def _sample_elevation_map(state: dict) -> str:
-    """
-    작전 지역 핵심 지점의 고도를 샘플링하여 텍스트로 반환.
-    - 각 부대 위치
-    - 아군-적군 중간 접촉 예상 구역 (5x5 격자)
-    """
+    """작전 지역 핵심 지점 고도 요약 (토큰 최소화)."""
     try:
         from wargame.terrain import terrain as _terrain
     except Exception:
@@ -115,61 +51,45 @@ def _sample_elevation_map(state: dict) -> str:
 
     lines = []
 
-    # 1. 각 부대 위치 고도
-    lines.append("[ 부대 위치 고도 ]")
+    # 부대 위치 고도 (한 줄씩)
     for u in state.get("units", []):
         if u["status"] == "destroyed":
             continue
-        elev = _terrain.elevation(u["x"], u["y"])
+        elev  = _terrain.elevation(u["x"], u["y"])
         cover = _terrain.cover_factor(u["x"], u["y"])
         lines.append(
-            f"  {u['id']:6s} ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) "
-            f"→ 고도 {elev:.0f}m  엄폐 {cover:.2f}"
+            f"{u['id']}({u['x']/1000:.0f}k,{u['y']/1000:.0f}k) "
+            f"→{elev:.0f}m 엄폐{cover:.2f}"
         )
 
-    # 2. 접촉 예상 구역 격자 샘플 (아-적 중간 영역)
+    # 접촉 예상 구역 3×3 샘플
     blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
     opfor  = [u for u in state["units"] if u["side"] == "OPFOR"  and u["status"] != "destroyed"]
-
     if blufor and opfor:
-        bl_cx = sum(u["x"] for u in blufor) / len(blufor)
-        bl_cy = sum(u["y"] for u in blufor) / len(blufor)
-        op_cx = sum(u["x"] for u in opfor)  / len(opfor)
-        op_cy = sum(u["y"] for u in opfor)  / len(opfor)
-
-        # 중간 지점 중심 ±4km 격자 (4x4 = 16 샘플)
-        cx = (bl_cx + op_cx) / 2
-        cy = (bl_cy + op_cy) / 2
-        span = 4000
-        steps = 4
-
-        lines.append(f"\n[ 접촉 예상 구역 고도 샘플 (중심 {cx/1000:.1f}km,{cy/1000:.1f}km ±4km) ]")
-        row_lines = []
-        for row in range(steps):
-            ys = cy - span + row * (2 * span / (steps - 1))
-            cols = []
-            for col in range(steps):
-                xs = cx - span + col * (2 * span / (steps - 1))
-                elev = _terrain.elevation(max(0, xs), max(0, ys))
-                cols.append(f"({xs/1000:.1f}k,{ys/1000:.1f}k)={elev:.0f}m")
-            row_lines.append("  " + "  ".join(cols))
-        lines.extend(row_lines)
-
-        # 최고 고지 힌트
-        high_pts = []
-        for row in range(10):
-            for col in range(10):
-                xs = cx - span * 1.5 + col * (span * 3 / 9)
-                ys = cy - span * 1.5 + row * (span * 3 / 9)
+        cx = (sum(u["x"] for u in blufor)/len(blufor) + sum(u["x"] for u in opfor)/len(opfor)) / 2
+        cy = (sum(u["y"] for u in blufor)/len(blufor) + sum(u["y"] for u in opfor)/len(opfor)) / 2
+        span, steps = 3000, 3
+        grid = []
+        for r in range(steps):
+            for c in range(steps):
+                xs = cx - span + c * span
+                ys = cy - span + r * span
                 xs = max(0, min(29999, xs))
                 ys = max(0, min(29999, ys))
-                elev = _terrain.elevation(xs, ys)
-                high_pts.append((elev, xs, ys))
-        high_pts.sort(reverse=True)
-        top3 = high_pts[:3]
-        lines.append("\n[ 작전 지역 최고 고지 TOP3 ]")
-        for elev, xs, ys in top3:
-            lines.append(f"  ({xs/1000:.1f}km, {ys/1000:.1f}km) → {elev:.0f}m ← 고지 선점 고려")
+                grid.append(f"({xs/1000:.0f}k,{ys/1000:.0f}k)={_terrain.elevation(xs,ys):.0f}m")
+        lines.append("접촉구역:" + " ".join(grid))
+
+        # TOP2 고지
+        high = []
+        for r in range(8):
+            for c in range(8):
+                xs = max(0, min(29999, cx - span*1.5 + c * span*3/7))
+                ys = max(0, min(29999, cy - span*1.5 + r * span*3/7))
+                high.append((_terrain.elevation(xs, ys), xs, ys))
+        high.sort(reverse=True)
+        lines.append("고지TOP2:" + " ".join(
+            f"({xs/1000:.0f}k,{ys/1000:.0f}k)={e:.0f}m" for e, xs, ys in high[:2]
+        ))
 
     return "\n".join(lines)
 
@@ -215,55 +135,22 @@ def build_mission_query(state: dict) -> str:
     elev_section = _sample_elevation_map(state)
     winner = state.get("winner")
 
-    query = f"""[군사 작전 임무계획 생성 요청]
+    query = f"""대대급 C2 AI: BLUFOR 임무계획을 JSON으로 출력하라.
 
-당신은 대대급 전투 C2 AI입니다.
-아래 전장 상황, 고도 정보, 출력 예시를 참고하여
-BLUFOR 각 중대의 최적 임무계획을 JSON으로 출력하세요.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 현재 전장 상황 (게임 시간: {state.get('game_time_str','00:00:00')})
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[전장상황] 게임시간:{state.get('game_time_str','00:00:00')} {"종료:"+winner+"승" if winner else ""}
 {chr(10).join(unit_lines)}
+위협:{threat_line}
 
-위협 분석: {threat_line}
-{"※ 전투 종료: " + winner + " 승리" if winner else ""}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 작전 지역 지형 고도 정보
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[지형고도] 좌표(m),x=동쪽,y=북쪽,범위0~30000,고도우위±40%
 {elev_section}
 
-좌표계: x=동쪽(m), y=북쪽(m), 지도 범위 0~30,000m
-고도 우위: 공격자가 80m 이상 높으면 화력 +30%, 80m 이상 낮으면 -20%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 임무계획 JSON 출력 예시 (Few-Shot)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[출력예시]
 {_FEW_SHOT_EXAMPLES}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 출력 규칙
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. 좌표는 m 단위 정수 (0~30000 범위)
-2. 각 중대에 3~5개 웨이포인트
-3. 전투력 30% 이하 부대 → defend 또는 withdraw 우선
-4. 고지 선점, 상호지원, 측방 기동을 전술적으로 고려
-5. 반드시 아래 JSON 형식만 출력 (설명·마크다운 없음)
-
-최종 출력 (```json 블록 사용):
+[규칙] 좌표m정수,WP 3~5개,CP<30%→defend/withdraw,고지선점·측방기동 고려
+아래 JSON만 출력(설명금지):
 ```json
-{{
-  "reasoning": "한국어로 전술 판단 근거 2~3문장",
-  "mission_plans": [
-    {{
-      "company_id": "Alpha",
-      "mission_type": "attack",
-      "waypoints": [[x1,y1],[x2,y2],[x3,y3]],
-      "objective": "임무 목표"
-    }}
-  ]
-}}
+{{"reasoning":"한국어 판단근거","mission_plans":[{{"company_id":"ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[x,y]],"objective":"목표"}}]}}
 ```"""
     return query
 
