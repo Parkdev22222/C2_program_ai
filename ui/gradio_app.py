@@ -18,6 +18,12 @@ import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple, Generator
 
+try:
+    import plotly.graph_objects as go
+    _PLOTLY_OK = True
+except ImportError:
+    _PLOTLY_OK = False
+
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
@@ -283,6 +289,163 @@ def _annotate_dual_model_response(response: str) -> str:
     return response + annotation
 
 
+# ─────────────────────────────────────────────
+# 전장 지도 함수
+# ─────────────────────────────────────────────
+
+# 유닛 카테고리별 마커 설정
+_MARKER_SYMBOL = {
+    "infantry":  "circle",
+    "apc":       "square",
+    "armor":     "diamond",
+    "helicopter":"triangle-up",
+    "aircraft":  "triangle-up",
+    "vehicle":   "square",
+    "truck":     "square",
+    "unknown":   "circle",
+}
+_MARKER_SIZE = {
+    "infantry": 5, "apc": 8, "armor": 9,
+    "helicopter": 8, "aircraft": 8,
+    "vehicle": 6, "truck": 6, "unknown": 5,
+}
+
+
+def _build_map_figure(state: dict):
+    """ARMA3 전장 상태를 Plotly Figure로 변환합니다."""
+    units        = state.get("units", [])
+    groups       = state.get("groups", [])
+    mission_time = state.get("mission_time", 0)
+    last_updated = state.get("last_updated", "데이터 없음")
+
+    fig = go.Figure()
+
+    if not units and not groups:
+        fig.add_annotation(
+            text="ARMA3 데이터 없음<br>relay.py가 실행 중인지 확인하세요",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            font=dict(size=16, color="#aaaaaa"),
+            showarrow=False,
+        )
+    else:
+        # ── 유닛: 진영·카테고리별 그룹화하여 플롯 ──────────────
+        from collections import defaultdict
+        buckets = defaultdict(list)
+        for u in units:
+            side = u.get("side", "UNKNOWN")
+            cat  = u.get("cat", "unknown")
+            buckets[(side, cat)].append(u)
+
+        for (side, cat), unit_list in buckets.items():
+            base_color = "#4a90d9" if side == "BLUFOR" else "#e05252" if side == "OPFOR" else "#aaaaaa"
+            symbol = _MARKER_SYMBOL.get(cat, "circle")
+            size   = _MARKER_SIZE.get(cat, 5)
+            hover  = [
+                f"그룹: {u.get('grp','')}<br>"
+                f"종류: {cat}<br>"
+                f"HP: {u.get('hp', 0)}%<br>"
+                f"위치: ({u.get('x',0):.0f}, {u.get('y',0):.0f})"
+                for u in unit_list
+            ]
+            fig.add_trace(go.Scatter(
+                x=[u.get("x", 0) for u in unit_list],
+                y=[u.get("y", 0) for u in unit_list],
+                mode="markers",
+                name=f"{side} {cat} ({len(unit_list)})",
+                marker=dict(color=base_color, size=size, symbol=symbol,
+                            line=dict(width=0.5, color="rgba(255,255,255,0.3)")),
+                text=hover,
+                hovertemplate="%{text}<extra></extra>",
+                legendgroup=side,
+            ))
+
+        # ── 그룹 지휘관 위치 + 레이블 ─────────────────────────
+        for g in groups:
+            side  = g.get("side", "UNKNOWN")
+            color = "#00aaff" if side == "BLUFOR" else "#ff4444" if side == "OPFOR" else "#aaaaaa"
+            gid   = g.get("id", "?")
+            strength = g.get("strength", 0)
+            fig.add_trace(go.Scatter(
+                x=[g.get("x", 0)],
+                y=[g.get("y", 0)],
+                mode="markers+text",
+                name=gid,
+                marker=dict(color=color, size=14, symbol="diamond",
+                            line=dict(width=1.5, color="white")),
+                text=[f"<b>{gid}</b>"],
+                textposition="top center",
+                textfont=dict(color="white", size=11),
+                hovertemplate=(
+                    f"<b>{gid}</b><br>진영: {side}<br>"
+                    f"잔존 병력: {strength}<br>"
+                    f"위치: ({g.get('x',0):.0f}, {g.get('y',0):.0f})"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
+                legendgroup=side,
+            ))
+
+    mins, secs = divmod(int(mission_time), 60)
+    fig.update_layout(
+        title=dict(
+            text=f"전장 상황도  |  미션 경과: {mins:02d}:{secs:02d}  |  최종 수신: {last_updated}",
+            font=dict(size=14, color="#dddddd"),
+        ),
+        xaxis=dict(
+            title="동쪽 (m)", range=[0, 30000],
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaaaaa"),
+        ),
+        yaxis=dict(
+            title="북쪽 (m)", range=[0, 30000],
+            scaleanchor="x", scaleratio=1,
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaaaaa"),
+        ),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f1923",
+        font=dict(color="#dddddd"),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0.5)",
+            bordercolor="#334455",
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        height=620,
+        margin=dict(l=60, r=20, t=50, b=50),
+        hovermode="closest",
+    )
+    return fig
+
+
+def get_battlefield_map():
+    """전장 지도와 상태 텍스트를 반환합니다."""
+    if not _PLOTLY_OK:
+        return None, "plotly 미설치: pip install plotly"
+
+    try:
+        from core_src.arma3_db_manager import load_state
+        state = load_state()
+    except Exception as e:
+        return None, f"상태 로드 오류: {e}"
+
+    fig = _build_map_figure(state)
+
+    summary = state.get("summary", {})
+    blu = summary.get("blufor", {})
+    opp = summary.get("opfor", {})
+    units = state.get("units", [])
+
+    status_lines = [
+        f"🔵 BLUFOR  보병: {blu.get('infantry', 0):>4}  장갑/APC: {blu.get('armor', 0):>3}  헬기: {blu.get('helicopter', 0):>2}",
+        f"🔴 OPFOR   보병: {opp.get('infantry', 0):>4}  장갑/APC: {opp.get('armor', 0):>3}  헬기: {opp.get('helicopter', 0):>2}",
+        f"────────────────────────────────",
+        f"전체 유닛: {len(units)}  |  미션 시간: {state.get('mission_time', 0)}s",
+        f"최종 수신: {state.get('last_updated', '없음')}",
+    ]
+    return fig, "\n".join(status_lines)
+
+
 def clear_chat_history() -> Tuple[List, str]:
     """채팅 히스토리와 상황 메모리를 초기화합니다."""
     global _last_situation_analysis
@@ -339,9 +502,11 @@ def create_app(agent=None) -> gr.Blocks:
 - **EXAONE Deep**: 전략/전술 전문 추천 (EXAONE4의 상황 분석을 바탕으로 호출됨)
         """)
 
-        with gr.Row():
-            # ─── 왼쪽 패널: 영상 분석 ───────────────────────
-            with gr.Column(scale=1):
+        with gr.Tabs():
+          with gr.Tab("🎖️ AI 에이전트"):
+            with gr.Row():
+              # ─── 왼쪽 패널: 영상 분석 ───────────────────────
+              with gr.Column(scale=1):
                 gr.Markdown("## 영상 분석")
 
                 gr.Markdown("#### 직접 업로드")
@@ -441,6 +606,40 @@ def create_app(agent=None) -> gr.Blocks:
                     label="클릭하여 예시 쿼리 입력",
                 )
 
+          # ─── 전장 지도 탭 ─────────────────────────────────
+          with gr.Tab("🗺️ 전장 지도"):
+            gr.Markdown(
+                "ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다.  "
+                "relay.py 실행 중일 때 10초마다 자동 갱신됩니다."
+            )
+            with gr.Row():
+                with gr.Column(scale=3):
+                    map_plot = gr.Plot(label="전장 상황도", show_label=False)
+                with gr.Column(scale=1):
+                    gr.Markdown("### 병력 현황")
+                    map_status = gr.Textbox(
+                        label="",
+                        lines=6,
+                        interactive=False,
+                        elem_id="map_status",
+                    )
+                    map_refresh_btn = gr.Button("🔄 새로고침", variant="primary")
+                    gr.Markdown(
+                        "**마커 범례**\n"
+                        "- 🔵 원 = BLUFOR 보병\n"
+                        "- 🔵 사각 = BLUFOR APC/차량\n"
+                        "- 🔵 다이아 = BLUFOR 장갑\n"
+                        "- 🔴 원 = OPFOR 보병\n"
+                        "- 🔴 사각 = OPFOR APC/차량\n"
+                        "- 🔴 다이아 = OPFOR 장갑\n"
+                        "- 큰 다이아 = 그룹 지휘관 위치\n\n"
+                        "**좌표계**\n"
+                        "x = 동쪽(m), y = 북쪽(m)\n"
+                        "Altis 맵 기준 (0 ~ 30,000m)"
+                    )
+
+            map_timer = gr.Timer(value=10)
+
         # ─── 이벤트 핸들러 ──────────────────────────────────
 
         analyze_btn.click(
@@ -486,6 +685,21 @@ def create_app(agent=None) -> gr.Blocks:
         memory_status_btn.click(
             fn=get_situation_memory_status,
             outputs=[memory_status_box],
+        )
+
+        # ─── 전장 지도 이벤트 ────────────────────────────────
+        map_refresh_btn.click(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
+        )
+        map_timer.tick(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
+        )
+        # 탭 진입 시 초기 로드
+        app.load(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
         )
 
     return app
