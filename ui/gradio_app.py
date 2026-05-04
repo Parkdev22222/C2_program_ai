@@ -652,9 +652,19 @@ def wargame_request_llm_plan():
         return "워게임 초기화 실패", None, "", ""
     if _wg_planner is None:
         return "Planner 없음", None, "", ""
+
     state = eng.get_state()
+
+    # _agent(BattlefieldAgent)가 있으면 전달, 없으면 규칙 기반 폴백
+    agent = _get_agent()
+    if agent is None:
+        log_msg = "[INFO] BattlefieldAgent 미초기화 → 규칙 기반 임무계획 생성"
+        logger.info(log_msg)
+    else:
+        logger.info("BattlefieldAgent에 전장 상황·고도 정보 포함 임무계획 쿼리 전송")
+
     import json
-    plan = _wg_planner.plan(state)
+    plan = _wg_planner.plan(state, agent=agent)
     _wg_last_plan = plan
     eng.apply_mission_plan(plan)
     plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
