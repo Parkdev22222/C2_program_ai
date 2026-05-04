@@ -581,15 +581,34 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
 
 
 def _wg_status_text(state: dict) -> str:
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        get_unit_type = lambda uid: ""
+
     lines = [f"게임 시간: {state.get('game_time_str','00:00:00')} | Tick: {state.get('tick',0)}"]
     winner = state.get("winner")
     if winner:
         lines.append(f"★ 전투 종료: {winner} 승리")
     lines.append("")
+    lines.append("🔵 BLUFOR")
     for u in state.get("units", []):
-        icon = "🔵" if u["side"] == "BLUFOR" else "🔴"
+        if u["side"] != "BLUFOR":
+            continue
         bar = "█" * int(u["combat_power"] / 10) + "░" * (10 - int(u["combat_power"] / 10))
-        lines.append(f"{icon} {u['id']:6s} [{bar}] {u['combat_power']:5.1f}%  {u['status']}")
+        utype = get_unit_type(u["id"])
+        lines.append(
+            f"  {u['id']:7s}({utype:6s}) [{bar}] {u['combat_power']:5.1f}%  {u['status']}"
+        )
+    lines.append("🔴 OPFOR")
+    for u in state.get("units", []):
+        if u["side"] != "OPFOR":
+            continue
+        bar = "█" * int(u["combat_power"] / 10) + "░" * (10 - int(u["combat_power"] / 10))
+        utype = get_unit_type(u["id"])
+        lines.append(
+            f"  {u['id']:7s}({utype:6s}) [{bar}] {u['combat_power']:5.1f}%  {u['status']}"
+        )
     return "\n".join(lines)
 
 
