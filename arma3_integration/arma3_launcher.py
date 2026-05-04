@@ -170,7 +170,14 @@ def find_mission_folder(mission_name: str, world: str, multiplayer: bool = True)
             for user_dir in (bottle / "drive_c" / "Users").iterdir() if (bottle / "drive_c" / "Users").exists() else []:
                 search_roots.append(user_dir / "Documents" / "Arma 3" / sub)
 
-        # ② macOS 네이티브 Steam (구버전)
+        # ② macOS 네이티브 Steam (com.vpltd.Arma3 번들 ID 경로) — 최우선
+        _vpltd = home / "Library" / "Application Support" / "com.vpltd.Arma3" / "GameDocuments" / "Arma 3"
+        search_roots += [
+            _vpltd / sub,
+            _vpltd / ("missions" if sub == "mpmissions" else "mpmissions"),  # 역방향도 시도
+        ]
+
+        # ③ macOS 네이티브 Steam (구버전)
         search_roots += [
             home / "Documents" / "Arma 3" / sub,
             home / "Library" / "Application Support" / "Arma 3" / sub,
@@ -430,15 +437,18 @@ class Arma3Launcher:
 
         patterns = _log_search_patterns()
 
+        def _expand(pat):
+            return set(glob.glob(pat, recursive=True))
+
         # 기존 파일 목록 스냅샷
         existing = set()
         for pat in patterns:
-            existing.update(glob.glob(pat))
+            existing.update(_expand(pat))
 
         deadline = time.time() + timeout
         while time.time() < deadline:
             for pat in patterns:
-                current = set(glob.glob(pat))
+                current = _expand(pat)
                 new_files = current - existing
                 if new_files:
                     rpt = max(new_files, key=os.path.getmtime)

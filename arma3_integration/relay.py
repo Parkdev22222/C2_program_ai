@@ -64,9 +64,15 @@ def _log_search_patterns() -> list:
 
     if sys.platform == "darwin":
         crossover_base = os.path.join(home, "Library", "Application Support", "CrossOver", "Bottles")
+        vpltd_base = os.path.join(home, "Library", "Application Support", "com.vpltd.Arma3")
         patterns = []
         for ext in _LOG_EXTENSIONS:
             patterns += [
+                # macOS 네이티브 Steam (com.vpltd.Arma3) — 최우선
+                os.path.join(vpltd_base, ext),
+                os.path.join(vpltd_base, "Logs", ext),
+                os.path.join(vpltd_base, "GameDocuments", "Arma 3", ext),
+                os.path.join(vpltd_base, "**", ext),
                 # CrossOver — AppData\Local\Arma 3 (Vista+ 경로)
                 os.path.join(crossover_base, "*", "drive_c", "users", "*",
                              "AppData", "Local", "Arma 3", ext),
@@ -121,6 +127,10 @@ def find_latest_rpt() -> str:
                 "로그 파일 위치 확인 방법:\n"
                 "  python launch.py --find-rpt\n\n"
                 "직접 경로 지정 (.rpt 또는 .dat 모두 가능):\n"
+                "  # macOS 네이티브 Steam (com.vpltd.Arma3):\n"
+                "  python relay.py --url ... --token ... "
+                "--rpt ~/Library/Application\\ Support/com.vpltd.Arma3/arma3_xxx.dat\n"
+                "  # CrossOver:\n"
                 "  python relay.py --url ... --token ... "
                 "--rpt ~/Library/Application\\ Support/CrossOver/Bottles/[병이름]/"
                 "drive_c/Users/crossover/AppData/Local/Arma\\ 3/arma3_xxx.rpt"
