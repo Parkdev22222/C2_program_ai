@@ -9,6 +9,7 @@ BattlefieldAgent.run()을 통해 현재 구축된 LLM 에이전트 시스템을 
   2. 규칙 기반 폴백 (에이전트 없거나 실패 시)
 """
 
+import ast
 import json
 import logging
 import re
@@ -19,26 +20,34 @@ log = logging.getLogger(__name__)
 # ── Few-Shot 예시 (간결 버전) ─────────────────────────────────────
 
 _FEW_SHOT_EXAMPLES = """\
-[예시1] 전력우세·정면공격
-{"reasoning":"Alpha 우익 우회, Bravo 정면 압박으로 협공.",
+[예시1] 전력우세·공중지원 병행
+{"reasoning":"CAS로 Red3 전차 집결지 제압 후 Alpha 측방 기동.",
  "mission_plans":[
   {"company_id":"Alpha","mission_type":"flank","waypoints":[[9000,8000],[13000,11000],[15000,13000]],"objective":"Red1 측방 공격"},
   {"company_id":"Bravo","mission_type":"attack","waypoints":[[10000,9000],[14000,13000]],"objective":"Red2 정면 압박"}
+ ],
+ "air_support_plans":[
+  {"call_sign":"VIPER-1","support_type":"cas","target":[21000,21000],"radius":1500,"delay":60},
+  {"call_sign":"THUNDER-1","support_type":"strike","target":[23000,20000],"radius":400,"delay":120}
  ]}
 
-[예시2] 전력열세·방어
-{"reasoning":"전투력 30%↓, 고지 철수 후 방어.",
+[예시2] 전력열세·방어+포병지원
+{"reasoning":"전투력 30%↓, 고지 철수. 포병으로 적 접근로 차단.",
  "mission_plans":[
   {"company_id":"Alpha","mission_type":"defend","waypoints":[[14000,12000]],"objective":"고지 방어"},
   {"company_id":"Bravo","mission_type":"withdraw","waypoints":[[13000,12500],[14000,12000]],"objective":"Alpha 합류"}
+ ],
+ "air_support_plans":[
+  {"call_sign":"ARTY-1","support_type":"artillery","target":[16000,14000],"radius":2500,"delay":30}
  ]}
 
-[예시3] 포위 섬멸
+[예시3] 공중지원 없음·포위 섬멸
 {"reasoning":"Red1 전투불능. Delta 고속 우회, Charlie 정면으로 Red2 포위.",
  "mission_plans":[
   {"company_id":"Charlie","mission_type":"attack","waypoints":[[18000,16000],[21000,19000]],"objective":"정면 압박"},
   {"company_id":"Delta","mission_type":"flank","waypoints":[[20000,21000],[23000,22000]],"objective":"후방 차단"}
- ]}"""
+ ],
+ "air_support_plans":[]}"""
 
 # ── 고도맵 샘플링 ─────────────────────────────────────────────────
 
@@ -147,10 +156,13 @@ def build_mission_query(state: dict) -> str:
 [출력예시]
 {_FEW_SHOT_EXAMPLES}
 
-[규칙] 좌표m정수,WP 3~5개,CP<30%→defend/withdraw,고지선점·측방기동 고려
+[공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
+[규칙] 좌표m정수,WP 3~5개,CP<30%→defend/withdraw,고지선점·측방기동 고려,공중지원은 필요 시만 사용
 아래 JSON만 출력(설명금지):
 ```json
-{{"reasoning":"한국어 판단근거","mission_plans":[{{"company_id":"ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[x,y]],"objective":"목표"}}]}}
+{{"reasoning":"한국어 판단근거",
+"mission_plans":[{{"company_id":"ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[x,y]],"objective":"목표"}}],
+"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[x,y],"radius":반경m,"delay":지연초}}]}}
 ```"""
     return query
 
@@ -179,7 +191,8 @@ class MissionPlanner:
             raw = agent.run(query, reset=False)
             result = self._parse_json(str(raw))
             if result and "mission_plans" in result:
-                log.info(f"임무계획 수신 완료: {len(result['mission_plans'])}개 중대")
+                n_air = len(result.get("air_support_plans", []))
+                log.info(f"임무계획 수신 완료: {len(result['mission_plans'])}개 중대, 공중지원 {n_air}건")
                 return result
             log.warning(f"JSON 파싱 실패, 원문: {str(raw)[:200]}")
         except Exception as e:
@@ -201,10 +214,19 @@ class MissionPlanner:
             m2 = re.search(r"\{[\s\S]*\}", text)
             if m2:
                 text = m2.group()
+        # JSON 파싱 시도
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            return None
+            pass
+        # Python dict 리터럴(홑따옴표) 폴백
+        try:
+            result = ast.literal_eval(text)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+        return None
 
     # ── 규칙 기반 폴백 ────────────────────────────────────────────
 
