@@ -176,37 +176,6 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
 
-        # ARMA3 실시간 전장 데이터 조회 도구
-        try:
-            from tools.arma3_query_tool import (
-                get_arma3_situation,
-                get_arma3_enemy_units,
-                get_arma3_friendly_units,
-                get_arma3_units_by_category,
-                get_arma3_groups,
-            )
-            tools.extend([
-                get_arma3_situation,
-                get_arma3_enemy_units,
-                get_arma3_friendly_units,
-                get_arma3_units_by_category,
-                get_arma3_groups,
-            ])
-            logger.info("ARMA3 query tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load ARMA3 tools: {e}")
-
-        # ARMA3 임무 명령 송신 도구 (에이전트 → ARMA3)
-        try:
-            from tools.arma3_order_tool import (
-                send_mission_orders_to_arma3,
-                get_arma3_order_status,
-            )
-            tools.extend([send_mission_orders_to_arma3, get_arma3_order_status])
-            logger.info("ARMA3 order tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load ARMA3 order tools: {e}")
-
         # 전략 어드바이저 도구 (핵심 신규 도구)
         try:
             from tools.strategy_advisor_tool import create_strategy_advisor_tool
