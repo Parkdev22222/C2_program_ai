@@ -59,6 +59,10 @@ _last_situation_analysis: str = ""
 _wg_engine: Optional["WargameEngine"] = None
 _wg_planner: Optional["MissionPlanner"] = None
 _wg_last_plan: dict = {}
+_wg_last_opfor_ai_count: int = 0      # 마지막으로 처리한 OPFOR AI 발동 횟수
+_wg_analysis_needed: bool = False      # 자동 LLM 분석 필요 플래그
+import threading as _threading
+_wg_analysis_lock = _threading.Lock()  # 중복 분석 방지
 
 
 def _get_agent():
@@ -658,6 +662,55 @@ def _wg_status_text(state: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_opfor_alert(state: dict) -> str:
+    """OPFOR 기동 감지 시 규칙 기반 알람 메시지 생성."""
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        def get_unit_type(uid): return "부대"
+
+    opfor = [u for u in state["units"] if u["side"] == "OPFOR" and u["status"] != "destroyed"]
+    blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
+
+    if not opfor:
+        return "✅ 모든 적군 전투불능 — 전투 종료"
+
+    lines = [f"⚠️ **OPFOR 기동 감지** (게임시간: {state['game_time_str']})"]
+    lines.append("\n**적군 현황:**")
+    for u in opfor:
+        action_ko = {"attack":"공격","flank":"측방기동","withdraw":"후퇴",
+                     "hold":"대기","defend":"방어","move":"이동"}.get(u["current_action"], u["current_action"])
+        lines.append(f"  • {u['id']}({get_unit_type(u['id'])}): "
+                     f"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) "
+                     f"CP={u['combat_power']:.0f}% [{action_ko}]")
+
+    if blufor and opfor:
+        bl_cx = sum(u["x"] for u in blufor) / len(blufor)
+        bl_cy = sum(u["y"] for u in blufor) / len(blufor)
+        op_cx = sum(u["x"] for u in opfor) / len(opfor)
+        op_cy = sum(u["y"] for u in opfor) / len(opfor)
+        dist = ((bl_cx - op_cx)**2 + (bl_cy - op_cy)**2)**0.5
+        lines.append(f"\n**위협 거리:** {dist/1000:.1f}km")
+
+    lines.append("\n*LLM 상황 분석 중...*")
+    return "\n".join(lines)
+
+
+def _build_situation_query(state: dict) -> str:
+    """LLM 상황 분석용 쿼리 빌드."""
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        def get_unit_type(uid): return "부대"
+    lines = [f"[워게임 상황 분석] 게임시간: {state['game_time_str']}"]
+    for u in state["units"]:
+        s = "전투불능" if u["status"] == "destroyed" else f"CP={u['combat_power']:.0f}%"
+        lines.append(f"  {u['side']} {u['id']}({get_unit_type(u['id'])}): "
+                     f"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {s} 행동={u['current_action']}")
+    lines.append("\n현재 전장 상황을 분석하고, OPFOR의 의도와 BLUFOR 즉각 대응 방안을 3가지 간결하게 제시해줘.")
+    return "\n".join(lines)
+
+
 def wargame_refresh():
     """현재 워게임 상태를 UI에 반영."""
     eng = _wg_ensure_engine()
@@ -797,6 +850,62 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
         history[-1] = (message, f"오류: {e}")
 
     return history, ""
+
+
+def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
+    """타이머 tick용: 지도 갱신 + OPFOR 기동 감지 시 채팅 알람 추가."""
+    global _wg_last_opfor_ai_count, _wg_analysis_needed
+    fig, status, log_text = wargame_refresh()
+    chatbot_history = list(chatbot_history or [])
+
+    eng = _wg_ensure_engine()
+    if eng is not None:
+        state = eng.get_state()
+        current_count = state.get("opfor_ai_fire_count", 0)
+        if current_count > _wg_last_opfor_ai_count:
+            _wg_last_opfor_ai_count = current_count
+            alert_msg = _build_opfor_alert(state)
+            chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
+            _wg_analysis_needed = True
+
+    return fig, status, log_text, chatbot_history
+
+
+def wg_auto_llm_analysis(chatbot_history: List) -> List:
+    """OPFOR 기동 감지 후 LLM 상황 분석 자동 실행 (중복 방지 락 사용)."""
+    global _wg_analysis_needed
+    if not _wg_analysis_needed:
+        return chatbot_history
+
+    if not _wg_analysis_lock.acquire(blocking=False):
+        return chatbot_history  # 이미 분석 실행 중
+
+    _wg_analysis_needed = False
+    chatbot_history = list(chatbot_history)
+
+    try:
+        agent = _get_agent()
+        eng = _wg_ensure_engine()
+        if agent is None or eng is None:
+            # 에이전트 없으면 규칙 기반 요약으로 대체
+            if chatbot_history and chatbot_history[-1][0] == "⚠️ 시스템 알람":
+                prev = chatbot_history[-1][1].replace("*LLM 상황 분석 중...*", "")
+                chatbot_history[-1] = ("⚠️ 시스템 알람",
+                                       prev + "\n\n*(에이전트 미초기화 — 규칙 기반 알람만 제공)*")
+            return chatbot_history
+
+        state = eng.get_state()
+        query = _build_situation_query(state)
+        result = agent.run(query, reset=False)
+
+        chatbot_history.append(("🤖 자동 상황 분석", str(result)))
+    except Exception as e:
+        logger.warning(f"Auto LLM analysis error: {e}")
+        chatbot_history.append(("🤖 자동 상황 분석", f"분석 오류: {e}"))
+    finally:
+        _wg_analysis_lock.release()
+
+    return chatbot_history
 
 
 def clear_chat_history() -> Tuple[List, str]:
@@ -994,8 +1103,8 @@ def create_app(agent=None) -> gr.Blocks:
                 with gr.Row():
                     # 채팅창
                     with gr.Column(scale=3):
+                        wg_alert_md = gr.Markdown("", visible=True)
                         gr.Markdown("### 전술 AI 채팅")
-                        wg_chat_state = gr.State([])
                         wg_chatbot = gr.Chatbot(
                             label="",
                             height=380,
@@ -1122,43 +1231,36 @@ def create_app(agent=None) -> gr.Blocks:
                 inputs=[wg_timescale],
                 outputs=_WG_OUTPUTS,
             )
-            # LLM 임무계획 → 채팅에도 표시
+            # LLM 임무계획 → 채팅에 결과 표시
             wg_plan_btn.click(
                 fn=wargame_request_llm_plan,
-                inputs=[wg_chat_state],
-                outputs=[wg_chat_state, wg_plan_box, wg_map, wg_status, wg_event_log],
-            ).then(
-                fn=lambda h: h,
-                inputs=[wg_chat_state],
-                outputs=[wg_chatbot],
+                inputs=[wg_chatbot],
+                outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log],
             )
-            # 채팅 전송
+            # 직접 채팅 전송
             wg_chat_send_btn.click(
                 fn=wg_chat_send,
-                inputs=[wg_chat_input, wg_chat_state],
-                outputs=[wg_chat_state, wg_chat_input],
-            ).then(
-                fn=lambda h: h,
-                inputs=[wg_chat_state],
-                outputs=[wg_chatbot],
+                inputs=[wg_chat_input, wg_chatbot],
+                outputs=[wg_chatbot, wg_chat_input],
             )
             wg_chat_input.submit(
                 fn=wg_chat_send,
-                inputs=[wg_chat_input, wg_chat_state],
-                outputs=[wg_chat_state, wg_chat_input],
-            ).then(
-                fn=lambda h: h,
-                inputs=[wg_chat_state],
-                outputs=[wg_chatbot],
+                inputs=[wg_chat_input, wg_chatbot],
+                outputs=[wg_chatbot, wg_chat_input],
             )
-            # 대화 초기화
             wg_chat_clear_btn.click(
-                fn=lambda: ([], []),
-                outputs=[wg_chat_state, wg_chatbot],
+                fn=lambda: ([], ""),
+                outputs=[wg_chatbot, wg_chat_input],
             )
+            # 타이머: 지도 갱신 + OPFOR 알람 감지 → LLM 분석 체인
             wg_timer.tick(
-                fn=wargame_refresh,
-                outputs=_WG_OUTPUTS,
+                fn=wargame_refresh_with_alert,
+                inputs=[wg_chatbot],
+                outputs=[wg_map, wg_status, wg_event_log, wg_chatbot],
+            ).then(
+                fn=wg_auto_llm_analysis,
+                inputs=[wg_chatbot],
+                outputs=[wg_chatbot],
             )
             app.load(
                 fn=wargame_refresh,
