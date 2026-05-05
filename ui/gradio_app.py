@@ -470,6 +470,20 @@ def get_battlefield_map():
 # 워게임 시뮬레이터 함수
 # ─────────────────────────────────────────────────────────────────
 
+def _wg_register_engine(engine):
+    """생성된 엔진을 쿼리·임무계획 도구에 등록."""
+    try:
+        from tools.wargame_query_tool import register_wargame_engine as _rq
+        _rq(engine)
+    except Exception:
+        pass
+    try:
+        from tools.wargame_mission_tool import register_wargame_engine as _rm
+        _rm(engine)
+    except Exception:
+        pass
+
+
 def _wg_ensure_engine() -> Optional["WargameEngine"]:
     global _wg_engine, _wg_planner
     if not _WARGAME_OK:
@@ -478,6 +492,7 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         units = setup_bn_vs_bn()
         _wg_engine = WargameEngine(units)
         _wg_planner = MissionPlanner()
+        _wg_register_engine(_wg_engine)
     return _wg_engine
 
 
@@ -623,8 +638,8 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         plot_bgcolor="#0f1923",
         font=dict(color="#dddddd"),
         legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)),
-        height=420,
-        margin=dict(l=60, r=20, t=50, b=50),
+        height=300,
+        margin=dict(l=60, r=20, t=40, b=40),
         hovermode="closest",
     )
     return fig
@@ -751,6 +766,7 @@ def wargame_reset_sim():
         _wg_engine.reset(units)
     else:
         _wg_engine = WargameEngine(units)
+        _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
     fig, status, log_text = wargame_refresh()
     return "▶ 시뮬레이션 시작", fig, status, log_text
@@ -1077,37 +1093,17 @@ def create_app(agent=None) -> gr.Blocks:
                     "## 파이썬 워게임 시뮬레이터\n"
                     "LLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다."
                 )
-                # ── 상단: 지도 + 제어 패널 ──────────────────────
+                # ── 상단: 지도 + 채팅창 ──────────────────────────
                 with gr.Row():
                     with gr.Column(scale=3):
                         wg_map = gr.Plot(label="전장 지도", show_label=False)
 
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 시뮬레이션 제어")
-                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
-                        wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
-                        wg_timescale = gr.Slider(
-                            minimum=10, maximum=600, value=60, step=10,
-                            label="시간 배율 (실제 1초 = X 게임 초)",
-                        )
-                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
-                        gr.Markdown("### LLM 임무계획")
-                        wg_plan_btn = gr.Button("🧠 LLM 임무계획 생성", variant="primary")
-                        gr.Markdown("### 부대 전력 현황")
-                        wg_status = gr.Textbox(
-                            label="", lines=6, interactive=False,
-                            elem_id="wg_status",
-                        )
-
-                # ── 하단: 채팅창 + 임무계획·이벤트 로그 ─────────
-                with gr.Row():
-                    # 채팅창
-                    with gr.Column(scale=3):
+                    with gr.Column(scale=2):
                         wg_alert_md = gr.Markdown("", visible=True)
                         gr.Markdown("### 전술 AI 채팅")
                         wg_chatbot = gr.Chatbot(
                             label="",
-                            height=380,
+                            height=220,
                             show_copy_button=True,
                             bubble_full_width=False,
                         )
@@ -1121,14 +1117,34 @@ def create_app(agent=None) -> gr.Blocks:
                             wg_chat_send_btn = gr.Button("전송", variant="primary", scale=1)
                         wg_chat_clear_btn = gr.Button("대화 초기화", variant="secondary", size="sm")
 
-                    # 임무계획 JSON + 이벤트 로그
+                # ── 하단: 제어 패널 + 임무계획·이벤트 로그 ────────
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 시뮬레이션 제어")
+                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
+                        wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
+                        wg_timescale = gr.Slider(
+                            minimum=10, maximum=600, value=60, step=10,
+                            label="시간 배율 (실제 1초 = X 게임 초)",
+                        )
+                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
+                        gr.Markdown("### LLM 임무계획")
+                        wg_plan_btn = gr.Button("🧠 LLM 임무계획 생성", variant="primary")
+                        gr.Markdown("### 부대 전력 현황")
+                        wg_status = gr.Textbox(
+                            label="", lines=5, interactive=False,
+                            elem_id="wg_status",
+                        )
+
                     with gr.Column(scale=2):
                         wg_plan_box = gr.Code(
-                            language="json", lines=10, interactive=False,
+                            language="json", lines=8, interactive=False,
                             label="LLM 생성 임무계획 (JSON)",
                         )
+
+                    with gr.Column(scale=2):
                         wg_event_log = gr.Textbox(
-                            label="전투 이벤트 로그", lines=10, interactive=False,
+                            label="전투 이벤트 로그", lines=8, interactive=False,
                         )
 
                 wg_timer = gr.Timer(value=2)

@@ -73,6 +73,7 @@ class WargameEngine:
         self.air_supports: List[AirSupport] = []   # 공중지원 임무 목록
         self._opfor_ai_last: float = 0.0           # 마지막 OPFOR AI 갱신 게임시간
         self.opfor_ai_fire_count: int = 0       # OPFOR AI 발동 횟수 (UI 알람용)
+        self._blufor_llm_units: set = set()     # LLM 임무계획 수행 중인 BLUFOR 부대 ID
 
         # 초기 상태 저장
         self.db.save_units(units)
@@ -143,6 +144,7 @@ class WargameEngine:
             self.game_time = 0.0
             self._opfor_ai_last = 0.0
             self.opfor_ai_fire_count = 0
+            self._blufor_llm_units = set()
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -171,6 +173,8 @@ class WargameEngine:
                 wps = [[float(p[0]), float(p[1])] for p in mp.get("waypoints", [])]
                 u.waypoints = wps
                 u.current_action = mp.get("mission_type", "move")
+                if u.side == "BLUFOR" and wps:
+                    self._blufor_llm_units.add(uid)
                 self.db.update_unit(u)
                 self.db.log_event(
                     self.tick, self.game_time, "ORDER",
@@ -239,7 +243,9 @@ class WargameEngine:
         self.tick += 1
         self.game_time += dt
 
-        # 10 tick마다 스냅샷
+        # 매 틱 실시간 상태 저장 (LLM 에이전트 접근용)
+        self.db.save_unit_realtime(self.tick, self.game_time, self.units)
+        # 10 tick마다 스냅샷 (이력용)
         if self.tick % 10 == 0:
             self.db.save_snapshot(self.tick, self.game_time, self.units)
 
@@ -275,6 +281,7 @@ class WargameEngine:
                 u.waypoints.pop(0)
                 if not u.waypoints:
                     u.current_action = "hold"
+                    self._blufor_llm_units.discard(u.id)
                     self.db.log_event(
                         self.tick, self.game_time, "WAYPOINT",
                         f"{u.id} 목표지점 도착"
@@ -425,10 +432,19 @@ class WargameEngine:
             if u.status == "suppressed":
                 u.waypoints = []
                 u.current_action = "defend"
+                # 제압 시 LLM 임무 해제 (교전 대응 우선)
+                if side == "BLUFOR":
+                    self._blufor_llm_units.discard(u.id)
                 continue
 
             nearest = min(enemies, key=lambda e: u.distance_to(e))
             dist = u.distance_to(nearest)
+
+            # BLUFOR가 LLM 임무계획 수행 중이면 교전 상황에서만 룰 기반 AI 개입
+            if side == "BLUFOR" and u.id in self._blufor_llm_units:
+                in_combat = u.combat_power < 30 or dist < 3_000.0
+                if not in_combat:
+                    continue  # LLM 웨이포인트 유지
 
             if u.combat_power < 30:
                 self._ai_withdraw(u, side, log_type)

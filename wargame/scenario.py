@@ -25,58 +25,38 @@ def setup_bn_vs_bn() -> list:
 
         # 기계화보병 Alpha — 좌익
         Unit(
-            id="Alpha",
-            side="BLUFOR",
+            id="Alpha", side="BLUFOR", unit_type="기계화보병",
             x=7_000.0, y=4_000.0,
-            combat_power=100.0,
-            firepower_index=100.0,
-            max_speed=2.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#1E88E5",   # 진파랑
+            combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+            status="active", waypoints=[], current_action="hold", color="#1E88E5",
         ),
         # 기계화보병 Bravo — 우익
         Unit(
-            id="Bravo",
-            side="BLUFOR",
+            id="Bravo", side="BLUFOR", unit_type="기계화보병",
             x=7_000.0, y=7_000.0,
-            combat_power=100.0,
-            firepower_index=100.0,
-            max_speed=2.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#42A5F5",   # 파랑
+            combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+            status="active", waypoints=[], current_action="hold", color="#42A5F5",
         ),
         # 전차 Charlie — 중앙 돌파
         Unit(
-            id="Charlie",
-            side="BLUFOR",
+            id="Charlie", side="BLUFOR", unit_type="전차",
             x=9_000.0, y=5_500.0,
-            combat_power=100.0,
-            firepower_index=160.0,
-            max_speed=2.0,
-            status="active", waypoints=[], current_action="hold",
-            color="#00BCD4",   # 청록
+            combat_power=100.0, firepower_index=160.0, max_speed=2.0,
+            status="active", waypoints=[], current_action="hold", color="#00BCD4",
         ),
         # 정찰 Delta — 선두 정찰
         Unit(
-            id="Delta",
-            side="BLUFOR",
+            id="Delta", side="BLUFOR", unit_type="정찰",
             x=5_500.0, y=5_500.0,
-            combat_power=100.0,
-            firepower_index=45.0,
-            max_speed=4.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#80DEEA",   # 연청록
+            combat_power=100.0, firepower_index=45.0, max_speed=4.5,
+            status="active", waypoints=[], current_action="hold", color="#80DEEA",
         ),
         # 대전차 Echo — 후방 지원
         Unit(
-            id="Echo",
-            side="BLUFOR",
+            id="Echo", side="BLUFOR", unit_type="대전차",
             x=8_500.0, y=3_500.0,
-            combat_power=100.0,
-            firepower_index=90.0,
-            max_speed=2.2,
-            status="active", waypoints=[], current_action="hold",
-            color="#B3E5FC",   # 연하늘
+            combat_power=100.0, firepower_index=90.0, max_speed=2.2,
+            status="active", waypoints=[], current_action="hold", color="#B3E5FC",
         ),
 
         # ══════════════════════════════════════════
@@ -85,58 +65,38 @@ def setup_bn_vs_bn() -> list:
 
         # 기계화보병 Red1 — 좌익
         Unit(
-            id="Red1",
-            side="OPFOR",
+            id="Red1", side="OPFOR", unit_type="기계화보병",
             x=23_000.0, y=19_500.0,
-            combat_power=100.0,
-            firepower_index=100.0,
-            max_speed=2.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#E53935",   # 진빨강
+            combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+            status="active", waypoints=[], current_action="hold", color="#E53935",
         ),
         # 기계화보병 Red2 — 우익
         Unit(
-            id="Red2",
-            side="OPFOR",
+            id="Red2", side="OPFOR", unit_type="기계화보병",
             x=23_000.0, y=22_500.0,
-            combat_power=100.0,
-            firepower_index=100.0,
-            max_speed=2.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#EF5350",   # 빨강
+            combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+            status="active", waypoints=[], current_action="hold", color="#EF5350",
         ),
         # 전차 Red3 — 중앙
         Unit(
-            id="Red3",
-            side="OPFOR",
+            id="Red3", side="OPFOR", unit_type="전차",
             x=21_000.0, y=21_000.0,
-            combat_power=100.0,
-            firepower_index=155.0,
-            max_speed=2.0,
-            status="active", waypoints=[], current_action="hold",
-            color="#FF7043",   # 주황빨강
+            combat_power=100.0, firepower_index=155.0, max_speed=2.0,
+            status="active", waypoints=[], current_action="hold", color="#FF7043",
         ),
         # 정찰 Red4 — 전방 정찰
         Unit(
-            id="Red4",
-            side="OPFOR",
+            id="Red4", side="OPFOR", unit_type="정찰",
             x=24_500.0, y=21_000.0,
-            combat_power=100.0,
-            firepower_index=45.0,
-            max_speed=4.5,
-            status="active", waypoints=[], current_action="hold",
-            color="#FFAB91",   # 연주황
+            combat_power=100.0, firepower_index=45.0, max_speed=4.5,
+            status="active", waypoints=[], current_action="hold", color="#FFAB91",
         ),
         # 자주포 Red5 — 후방 화력지원
         Unit(
-            id="Red5",
-            side="OPFOR",
+            id="Red5", side="OPFOR", unit_type="자주포",
             x=25_000.0, y=20_000.0,
-            combat_power=100.0,
-            firepower_index=130.0,
-            max_speed=1.8,
-            status="active", waypoints=[], current_action="hold",
-            color="#FFCCBC",   # 연살구
+            combat_power=100.0, firepower_index=130.0, max_speed=1.8,
+            status="active", waypoints=[], current_action="hold", color="#FFCCBC",
         ),
     ]
 
