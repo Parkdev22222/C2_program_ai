@@ -619,7 +619,7 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         plot_bgcolor="#0f1923",
         font=dict(color="#dddddd"),
         legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)),
-        height=640,
+        height=420,
         margin=dict(l=60, r=20, t=50, b=50),
         hovermode="closest",
     )
@@ -710,33 +710,93 @@ def wargame_set_timescale(scale: float):
     return wargame_refresh()
 
 
-def wargame_request_llm_plan():
+def wargame_request_llm_plan(history: List = None):
     global _wg_last_plan
+    history = history or []
     eng = _wg_ensure_engine()
     if eng is None:
-        return "워게임 초기화 실패", None, "", ""
+        return history, "워게임 초기화 실패", None, "", ""
     if _wg_planner is None:
-        return "Planner 없음", None, "", ""
+        return history, "Planner 없음", None, "", ""
 
     state = eng.get_state()
-
-    # _agent(BattlefieldAgent)가 있으면 전달, 없으면 규칙 기반 폴백
     agent = _get_agent()
-    if agent is None:
-        log_msg = "[INFO] BattlefieldAgent 미초기화 → 규칙 기반 임무계획 생성"
-        logger.info(log_msg)
-    else:
-        logger.info("BattlefieldAgent에 전장 상황·고도 정보 포함 임무계획 쿼리 전송")
+    agent_label = "BattlefieldAgent" if agent else "규칙 기반"
 
     import json
+    from wargame.llm_planner import build_mission_query
+    query_text = build_mission_query(state)
+
+    # 채팅에 쿼리 추가
+    history = list(history)
+    history.append((f"🧠 **LLM 임무계획 생성 요청** ({agent_label})\n\n"
+                    f"<details><summary>전송된 쿼리 보기</summary>\n\n"
+                    f"```\n{query_text[:800]}{'...(생략)' if len(query_text)>800 else ''}\n```\n</details>",
+                    "처리 중..."))
+
     plan = _wg_planner.plan(state, agent=agent)
     _wg_last_plan = plan
     eng.apply_mission_plan(plan)
     if plan.get("air_support_plans"):
         eng.apply_air_support_plan(plan)
+
     plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
+
+    # 임무계획 요약 채팅에 표시
+    reasoning = plan.get("reasoning", "")
+    n_plans = len(plan.get("mission_plans", []))
+    n_air = len(plan.get("air_support_plans", []))
+    plan_summary = f"**📋 임무계획 생성 완료** ({agent_label})\n\n"
+    if reasoning:
+        plan_summary += f"**판단 근거:** {reasoning}\n\n"
+    plan_summary += f"**지상 임무:** {n_plans}개 중대\n"
+    if n_air:
+        plan_summary += f"**공중지원:** {n_air}건\n"
+    plan_summary += f"\n```json\n{plan_text}\n```"
+    history[-1] = (history[-1][0], plan_summary)
+
     fig, status, log_text = wargame_refresh()
-    return plan_text, fig, status, log_text
+    return history, plan_text, fig, status, log_text
+
+
+def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
+    """워게임 채팅창에서 직접 에이전트 쿼리."""
+    if not message.strip():
+        return history, ""
+    history = list(history)
+
+    agent = _get_agent()
+    eng = _wg_ensure_engine()
+
+    # 워게임 상태를 컨텍스트로 첨부
+    context = ""
+    if eng is not None:
+        state = eng.get_state()
+        context = (
+            f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n"
+            + "\n".join(
+                f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% "
+                f"위치=({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {u['status']}"
+                for u in state["units"]
+            )
+            + "\n\n"
+        )
+
+    history.append((message, "처리 중..."))
+
+    if agent is None:
+        history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")
+        return history, ""
+
+    try:
+        full_query = context + message if context else message
+        response = agent.run(full_query, reset=False)
+        history[-1] = (message, str(response))
+    except Exception as e:
+        logger.error(f"WG chat error: {e}", exc_info=True)
+        history[-1] = (message, f"오류: {e}")
+
+    return history, ""
 
 
 def clear_chat_history() -> Tuple[List, str]:
@@ -908,47 +968,59 @@ def create_app(agent=None) -> gr.Blocks:
                     "## 파이썬 워게임 시뮬레이터\n"
                     "LLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다."
                 )
+                # ── 상단: 지도 + 제어 패널 ──────────────────────
                 with gr.Row():
-                    # ── 지도 (좌) ───────────────────────────────
                     with gr.Column(scale=3):
                         wg_map = gr.Plot(label="전장 지도", show_label=False)
 
-                    # ── 제어·상태 패널 (우) ──────────────────────
                     with gr.Column(scale=1):
                         gr.Markdown("### 시뮬레이션 제어")
                         wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
                         wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
-
                         wg_timescale = gr.Slider(
                             minimum=10, maximum=600, value=60, step=10,
                             label="시간 배율 (실제 1초 = X 게임 초)",
                         )
                         wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
-
                         gr.Markdown("### LLM 임무계획")
                         wg_plan_btn = gr.Button("🧠 LLM 임무계획 생성", variant="primary")
-                        gr.Markdown(
-                            "- **Claude API**: `ANTHROPIC_API_KEY` 설정 시 자동 사용\n"
-                            "- **vLLM**: `VLLM_BASE_URL` 설정 시 사용\n"
-                            "- 미설정: 규칙 기반 자동 계획"
-                        )
-
                         gr.Markdown("### 부대 전력 현황")
                         wg_status = gr.Textbox(
-                            label="", lines=8, interactive=False,
+                            label="", lines=6, interactive=False,
                             elem_id="wg_status",
                         )
 
+                # ── 하단: 채팅창 + 임무계획·이벤트 로그 ─────────
                 with gr.Row():
-                    gr.Markdown("### 임무계획 (JSON)")
-                with gr.Row():
-                    wg_plan_box = gr.Code(
-                        language="json", lines=12, interactive=False,
-                        label="LLM 생성 임무계획",
-                    )
-                    wg_event_log = gr.Textbox(
-                        label="전투 이벤트 로그", lines=12, interactive=False,
-                    )
+                    # 채팅창
+                    with gr.Column(scale=3):
+                        gr.Markdown("### 전술 AI 채팅")
+                        wg_chat_state = gr.State([])
+                        wg_chatbot = gr.Chatbot(
+                            label="",
+                            height=380,
+                            show_copy_button=True,
+                            bubble_full_width=False,
+                        )
+                        with gr.Row():
+                            wg_chat_input = gr.Textbox(
+                                label="",
+                                placeholder="워게임 상황 분석, 전술 조언, 임무계획 수정 등 질문하세요...",
+                                lines=2,
+                                scale=5,
+                            )
+                            wg_chat_send_btn = gr.Button("전송", variant="primary", scale=1)
+                        wg_chat_clear_btn = gr.Button("대화 초기화", variant="secondary", size="sm")
+
+                    # 임무계획 JSON + 이벤트 로그
+                    with gr.Column(scale=2):
+                        wg_plan_box = gr.Code(
+                            language="json", lines=10, interactive=False,
+                            label="LLM 생성 임무계획 (JSON)",
+                        )
+                        wg_event_log = gr.Textbox(
+                            label="전투 이벤트 로그", lines=10, interactive=False,
+                        )
 
                 wg_timer = gr.Timer(value=2)
 
@@ -1050,9 +1122,39 @@ def create_app(agent=None) -> gr.Blocks:
                 inputs=[wg_timescale],
                 outputs=_WG_OUTPUTS,
             )
+            # LLM 임무계획 → 채팅에도 표시
             wg_plan_btn.click(
                 fn=wargame_request_llm_plan,
-                outputs=[wg_plan_box, wg_map, wg_status, wg_event_log],
+                inputs=[wg_chat_state],
+                outputs=[wg_chat_state, wg_plan_box, wg_map, wg_status, wg_event_log],
+            ).then(
+                fn=lambda h: h,
+                inputs=[wg_chat_state],
+                outputs=[wg_chatbot],
+            )
+            # 채팅 전송
+            wg_chat_send_btn.click(
+                fn=wg_chat_send,
+                inputs=[wg_chat_input, wg_chat_state],
+                outputs=[wg_chat_state, wg_chat_input],
+            ).then(
+                fn=lambda h: h,
+                inputs=[wg_chat_state],
+                outputs=[wg_chatbot],
+            )
+            wg_chat_input.submit(
+                fn=wg_chat_send,
+                inputs=[wg_chat_input, wg_chat_state],
+                outputs=[wg_chat_state, wg_chat_input],
+            ).then(
+                fn=lambda h: h,
+                inputs=[wg_chat_state],
+                outputs=[wg_chatbot],
+            )
+            # 대화 초기화
+            wg_chat_clear_btn.click(
+                fn=lambda: ([], []),
+                outputs=[wg_chat_state, wg_chatbot],
             )
             wg_timer.tick(
                 fn=wargame_refresh,
