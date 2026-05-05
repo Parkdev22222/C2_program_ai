@@ -243,7 +243,9 @@ class WargameEngine:
         self.tick += 1
         self.game_time += dt
 
-        # 10 tick마다 스냅샷
+        # 매 틱 실시간 상태 저장 (LLM 에이전트 접근용)
+        self.db.save_unit_realtime(self.tick, self.game_time, self.units)
+        # 10 tick마다 스냅샷 (이력용)
         if self.tick % 10 == 0:
             self.db.save_snapshot(self.tick, self.game_time, self.units)
 

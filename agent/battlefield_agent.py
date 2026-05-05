@@ -144,7 +144,7 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load PDF RAG tools: {e}")
 
-        # 워게임 쿼리 도구
+        # ARMA3 전술지도 쿼리 도구
         try:
             from tools.wargame_query_tool import (
                 get_tactical_situation,
@@ -160,9 +160,41 @@ class BattlefieldAgent:
                 get_unit_details,
                 get_units_by_type,
             ])
-            logger.info("Wargame query tools loaded")
+            logger.info("ARMA3 wargame query tools loaded")
         except Exception as e:
-            logger.warning(f"Failed to load wargame tools: {e}")
+            logger.warning(f"Failed to load ARMA3 wargame tools: {e}")
+
+        # 파이썬 워게임 시뮬레이터 실시간 쿼리 도구
+        try:
+            from tools.wargame_query_tool import (
+                get_wargame_situation,
+                get_wargame_unit_detail,
+                get_wargame_battle_log,
+            )
+            tools.extend([
+                get_wargame_situation,
+                get_wargame_unit_detail,
+                get_wargame_battle_log,
+            ])
+            logger.info("Wargame simulator query tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load wargame simulator query tools: {e}")
+
+        # 파이썬 워게임 시뮬레이터 임무계획 실행 도구
+        try:
+            from tools.wargame_mission_tool import (
+                apply_wargame_mission_plan,
+                apply_wargame_air_support,
+                get_wargame_engine_status,
+            )
+            tools.extend([
+                apply_wargame_mission_plan,
+                apply_wargame_air_support,
+                get_wargame_engine_status,
+            ])
+            logger.info("Wargame mission execution tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load wargame mission tools: {e}")
 
         # 전략 어드바이저 도구 (핵심 신규 도구)
         try:

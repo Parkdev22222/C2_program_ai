@@ -470,6 +470,20 @@ def get_battlefield_map():
 # 워게임 시뮬레이터 함수
 # ─────────────────────────────────────────────────────────────────
 
+def _wg_register_engine(engine):
+    """생성된 엔진을 쿼리·임무계획 도구에 등록."""
+    try:
+        from tools.wargame_query_tool import register_wargame_engine as _rq
+        _rq(engine)
+    except Exception:
+        pass
+    try:
+        from tools.wargame_mission_tool import register_wargame_engine as _rm
+        _rm(engine)
+    except Exception:
+        pass
+
+
 def _wg_ensure_engine() -> Optional["WargameEngine"]:
     global _wg_engine, _wg_planner
     if not _WARGAME_OK:
@@ -478,6 +492,7 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         units = setup_bn_vs_bn()
         _wg_engine = WargameEngine(units)
         _wg_planner = MissionPlanner()
+        _wg_register_engine(_wg_engine)
     return _wg_engine
 
 
@@ -751,6 +766,7 @@ def wargame_reset_sim():
         _wg_engine.reset(units)
     else:
         _wg_engine = WargameEngine(units)
+        _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
     fig, status, log_text = wargame_refresh()
     return "▶ 시뮬레이션 시작", fig, status, log_text
