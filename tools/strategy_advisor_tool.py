@@ -96,18 +96,29 @@ STRATEGY_USER_TEMPLATE = """## 전장 상황 분석 (EXAONE4 제공)
 
 ---
 
+## 병종 상성 및 추천 기동 경로 (워게임 시뮬레이터)
+
+{tactical_recommendation}
+
+---
+
 ## 전략/전술 추천 요청
 
 {user_query}
 
-위 상황 분석을 바탕으로 구체적인 군사 전략 및 전술을 추천해주세요."""
+위 상황 분석과 병종 상성·기동 경로 데이터를 종합하여 구체적인 군사 전략 및 전술을 추천해주세요."""
 
-NO_SITUATION_TEMPLATE = """## 전략/전술 추천 요청
+NO_SITUATION_TEMPLATE = """## 병종 상성 및 추천 기동 경로 (워게임 시뮬레이터)
+
+{tactical_recommendation}
+
+---
+
+## 전략/전술 추천 요청
 
 {user_query}
 
-주의: 사전 영상 분석 결과가 없습니다. 일반적인 군사 원칙에 기반하여 답변합니다.
-실제 운용 시에는 먼저 전장 영상을 분석한 후 전략/전술 쿼리를 입력하시기 바랍니다."""
+주의: 사전 영상 분석 결과가 없습니다. 워게임 전술 데이터와 일반 군사 원칙에 기반하여 답변합니다."""
 
 
 class StrategyAdvisorTool(Tool):
@@ -143,8 +154,49 @@ class StrategyAdvisorTool(Tool):
     }
     output_type = "string"
 
+    def _get_tactical_recommendation_text(self) -> str:
+        """워게임 전술 추천(상성+경로)을 텍스트로 변환합니다."""
+        try:
+            from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
+            result = get_wargame_tactical_recommendation()
+            if result.get("status") != "success":
+                return f"[워게임 전술 데이터 없음: {result.get('message', result.get('status'))}]"
+
+            lines = [f"게임 시각: {result.get('game_time', 'N/A')}"]
+
+            matchups = result.get("matchup_recommendations", [])
+            if matchups:
+                lines.append("\n### 병종 상성 기반 교전 매칭")
+                for m in matchups:
+                    lines.append(
+                        f"- {m['blufor_unit']}({m['blufor_type']}, CP:{m['blufor_cp']}) "
+                        f"→ {m['recommended_target']}({m['target_type']}, CP:{m['target_cp']}) "
+                        f"[{m['advantage']}] 화력배율x{m['firepower_multiplier']} "
+                        f"거리:{m['distance_km']}km | {m['reason']}"
+                    )
+
+            routes = result.get("movement_routes", [])
+            if routes:
+                lines.append("\n### 추천 기동 경로")
+                for r in routes:
+                    wp_str = " → ".join(f"({w[0]},{w[1]})" for w in r["waypoints"])
+                    lines.append(
+                        f"- {r['unit_id']}({r['unit_type']}) "
+                        f"출발({r['from'][0]},{r['from'][1]}) → {r['to_target']}: "
+                        f"{wp_str}\n  {r['terrain_notes']}"
+                    )
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Failed to get tactical recommendation: {e}")
+            return "[워게임 전술 데이터 조회 실패]"
+
     def forward(self, query: str, additional_context: Optional[str] = None) -> str:
         logger.info(f"StrategyAdvisorTool called with query: {query[:100]}...")
+
+        # 워게임 전술 추천 데이터 (상성 + 기동 경로)
+        tactical_text = self._get_tactical_recommendation_text()
+        logger.info("Tactical recommendation data fetched for EXAONE Deep prompt")
 
         # 세션 메모리에서 상황 분석 가져오기
         memory = get_situation_memory()
@@ -166,11 +218,15 @@ class StrategyAdvisorTool(Tool):
 
             user_content = STRATEGY_USER_TEMPLATE.format(
                 situation_analysis=situation_with_extra,
+                tactical_recommendation=tactical_text,
                 user_query=query,
             )
         else:
-            logger.warning("No situation analysis in memory. Using query-only mode.")
-            user_content = NO_SITUATION_TEMPLATE.format(user_query=query)
+            logger.warning("No situation analysis in memory. Using tactical-data-only mode.")
+            user_content = NO_SITUATION_TEMPLATE.format(
+                tactical_recommendation=tactical_text,
+                user_query=query,
+            )
 
         messages = [
             {"role": "system", "content": STRATEGY_SYSTEM_PROMPT},
