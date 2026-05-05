@@ -176,6 +176,14 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
 
+        # 워게임 전술 추천 도구 (상성 + 지형 기반 경로)
+        try:
+            from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
+            tools.append(get_wargame_tactical_recommendation)
+            logger.info("Wargame tactical recommendation tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load wargame strategy tool: {e}")
+
         # 전략 어드바이저 도구 (핵심 신규 도구)
         try:
             from tools.strategy_advisor_tool import create_strategy_advisor_tool

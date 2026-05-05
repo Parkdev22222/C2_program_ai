@@ -189,6 +189,7 @@ class WargameEngine:
                 units_data.append({
                     "id": u.id,
                     "side": u.side,
+                    "unit_type": u.unit_type,
                     "x": round(u.x, 1),
                     "y": round(u.y, 1),
                     "elevation": round(terrain.elevation(u.x, u.y), 1),

@@ -479,6 +479,11 @@ def _wg_register_engine(engine):
         _rm(engine)
     except Exception:
         pass
+    try:
+        from tools.wargame_strategy_tool import register_wargame_engine as _rs
+        _rs(engine)
+    except Exception:
+        pass
 
 
 def _wg_ensure_engine() -> Optional["WargameEngine"]:
