@@ -144,26 +144,6 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load PDF RAG tools: {e}")
 
-        # ARMA3 전술지도 쿼리 도구
-        try:
-            from tools.wargame_query_tool import (
-                get_tactical_situation,
-                get_friendly_units,
-                get_hostile_units,
-                get_unit_details,
-                get_units_by_type,
-            )
-            tools.extend([
-                get_tactical_situation,
-                get_friendly_units,
-                get_hostile_units,
-                get_unit_details,
-                get_units_by_type,
-            ])
-            logger.info("ARMA3 wargame query tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load ARMA3 wargame tools: {e}")
-
         # 파이썬 워게임 시뮬레이터 실시간 쿼리 도구
         try:
             from tools.wargame_query_tool import (
