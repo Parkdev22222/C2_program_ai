@@ -71,6 +71,7 @@ class WargameEngine:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self.air_supports: List[AirSupport] = []   # 공중지원 임무 목록
+        self._opfor_ai_last: float = 0.0           # 마지막 OPFOR AI 갱신 게임시간
 
         # 초기 상태 저장
         self.db.save_units(units)
@@ -139,6 +140,7 @@ class WargameEngine:
             self.air_supports = []
             self.tick = 0
             self.game_time = 0.0
+            self._opfor_ai_last = 0.0
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -229,6 +231,7 @@ class WargameEngine:
         self._move_units(dt)
         self._resolve_combat(dt)
         self._resolve_air_support(dt)
+        self._update_opfor_ai(dt)
         self._update_status()
         self.tick += 1
         self.game_time += dt
@@ -387,6 +390,162 @@ class WargameEngine:
                     self.tick, self.game_time, "AIR_COMPLETE",
                     f"{air.call_sign} ({air.support_type}) 임무 완료"
                 )
+
+    # ── OPFOR 룰 기반 AI ─────────────────────────────────────────
+
+    # AI 재계산 주기 (게임 초): 60초마다 기동 명령 갱신
+    _OPFOR_AI_INTERVAL = 60.0
+
+    def _update_opfor_ai(self, dt: float):
+        """OPFOR 유닛에 룰 기반 행동 결정 및 웨이포인트 설정."""
+        self._opfor_ai_last += dt
+        if self._opfor_ai_last < self._OPFOR_AI_INTERVAL:
+            return
+        self._opfor_ai_last = 0.0
+
+        blufor = [u for u in self.units if u.side == "BLUFOR" and u.is_active()]
+        if not blufor:
+            return
+
+        bl_cx = sum(u.x for u in blufor) / len(blufor)
+        bl_cy = sum(u.y for u in blufor) / len(blufor)
+
+        for u in self.units:
+            if u.side != "OPFOR" or not u.is_active():
+                continue
+            if u.status == "suppressed":
+                # 제압 상태 → 웨이포인트 유지, 기동 중단
+                u.waypoints = []
+                u.current_action = "defend"
+                continue
+
+            nearest = min(blufor, key=lambda b: u.distance_to(b))
+            dist_to_nearest = u.distance_to(nearest)
+
+            # ── 전투력 30% 미만 → 후퇴 ──────────────────────────
+            if u.combat_power < 30:
+                self._opfor_set_withdraw(u)
+                continue
+
+            # ── 유닛 유형 판별 및 행동 결정 ─────────────────────
+            if u.max_speed >= 4.0:
+                # 정찰: 빠른 측방 우회
+                self._opfor_recon_behavior(u, nearest, blufor, bl_cx, bl_cy)
+            elif u.max_speed <= 1.9:
+                # 자주포/중포: 원거리 지원 위치 유지
+                self._opfor_artillery_behavior(u, bl_cx, bl_cy)
+            elif u.firepower_index >= 140:
+                # 전차: 공세적 근접 기동
+                self._opfor_armor_behavior(u, nearest, dist_to_nearest)
+            else:
+                # 기계화보병: 표준 전진 공격
+                self._opfor_infantry_behavior(u, nearest, dist_to_nearest, bl_cx, bl_cy)
+
+    def _opfor_set_withdraw(self, u: Unit):
+        """후퇴: OPFOR 초기 집결지 방향으로 이동."""
+        # OPFOR 시작 영역(북동쪽, x>20000 y>18000) 방향으로 후퇴
+        rally_x = max(u.x, 22_000.0)
+        rally_y = max(u.y, 20_000.0)
+        u.waypoints = [[rally_x, rally_y]]
+        u.current_action = "withdraw"
+        self.db.log_event(self.tick, self.game_time, "OPFOR_AI",
+                          f"{u.id} 전투력저하({u.combat_power:.0f}%) → 후퇴")
+
+    def _opfor_recon_behavior(self, u: Unit, nearest: Unit,
+                               blufor: list, bl_cx: float, bl_cy: float):
+        """정찰: 아군 진형 측방을 고속 우회 기동."""
+        dist = u.distance_to(nearest)
+        if dist <= ENGAGEMENT_RANGE:
+            # 이미 교전 거리 → 측방으로 이탈 후 재기동
+            angle = math.atan2(u.y - nearest.y, u.x - nearest.x) + math.pi / 2
+            flank_x = u.x + math.cos(angle) * 3_000
+            flank_y = u.y + math.sin(angle) * 3_000
+            flank_x = max(0, min(29_999, flank_x))
+            flank_y = max(0, min(29_999, flank_y))
+            u.waypoints = [[flank_x, flank_y],
+                           [nearest.x + math.cos(angle) * 1_500,
+                            nearest.y + math.sin(angle) * 1_500]]
+            u.current_action = "flank"
+        else:
+            # 아군 측방(90도 방향)으로 접근
+            angle = math.atan2(bl_cy - u.y, bl_cx - u.x)
+            side_angle = angle + math.pi / 2  # 측방
+            wp_x = bl_cx + math.cos(side_angle) * 4_000
+            wp_y = bl_cy + math.sin(side_angle) * 4_000
+            u.waypoints = [[max(0, min(29_999, wp_x)),
+                            max(0, min(29_999, wp_y))]]
+            u.current_action = "flank"
+        self.db.log_event(self.tick, self.game_time, "OPFOR_AI",
+                          f"{u.id}(정찰) → 측방 우회 기동")
+
+    def _opfor_artillery_behavior(self, u: Unit, bl_cx: float, bl_cy: float):
+        """자주포: SUPPRESSION_RANGE 경계에서 최적 사격 위치 유지."""
+        dist_to_bl = math.hypot(u.x - bl_cx, u.y - bl_cy)
+        ideal_dist = SUPPRESSION_RANGE * 0.85  # 3,400m — 최대 사거리의 85%
+
+        if abs(dist_to_bl - ideal_dist) < 500:
+            # 이미 적정 위치 → 현위치 유지
+            u.waypoints = []
+            u.current_action = "hold"
+        else:
+            # 적정 거리로 이동
+            angle = math.atan2(u.y - bl_cy, u.x - bl_cx)
+            target_x = bl_cx + math.cos(angle) * ideal_dist
+            target_y = bl_cy + math.sin(angle) * ideal_dist
+            u.waypoints = [[max(0, min(29_999, target_x)),
+                            max(0, min(29_999, target_y))]]
+            u.current_action = "move"
+        self.db.log_event(self.tick, self.game_time, "OPFOR_AI",
+                          f"{u.id}(자주포) → 사격진지 유지 (거리{dist_to_bl/1000:.1f}km)")
+
+    def _opfor_armor_behavior(self, u: Unit, nearest: Unit, dist: float):
+        """전차: 가장 가까운 적을 향해 공세적으로 돌진."""
+        if dist <= 1_500:
+            # 최적 교전거리 도달 → 현위치 사격
+            u.waypoints = []
+            u.current_action = "attack"
+        else:
+            # 교전거리(1,500m)까지 전진
+            angle = math.atan2(nearest.y - u.y, nearest.x - u.x)
+            target_x = nearest.x - math.cos(angle) * 1_200
+            target_y = nearest.y - math.sin(angle) * 1_200
+            # 중간 웨이포인트 추가
+            mid_x = (u.x + target_x) / 2
+            mid_y = (u.y + target_y) / 2
+            u.waypoints = [[max(0, min(29_999, mid_x)),
+                            max(0, min(29_999, mid_y))],
+                           [max(0, min(29_999, target_x)),
+                            max(0, min(29_999, target_y))]]
+            u.current_action = "attack"
+        self.db.log_event(self.tick, self.game_time, "OPFOR_AI",
+                          f"{u.id}(전차) → {nearest.id} 공격 기동 (거리{dist/1000:.1f}km)")
+
+    def _opfor_infantry_behavior(self, u: Unit, nearest: Unit,
+                                  dist: float, bl_cx: float, bl_cy: float):
+        """기계화보병: 교전거리까지 전진, 좌우 엇갈려 정면 압박."""
+        # 짝수/홀수 번호로 좌우 오프셋 구분
+        idx = list({v.id for v in self.units if v.side == "OPFOR"}.intersection({u.id}))
+        side = 1 if u.id[-1] in "135" else -1  # 홀수 우측, 짝수 좌측
+        perp_x = -(bl_cy - u.y)
+        perp_y = bl_cx - u.x
+        perp_len = math.hypot(perp_x, perp_y) or 1
+        offset = 800 * side
+
+        if dist <= ENGAGEMENT_RANGE:
+            # 교전 중 → 현위치에서 사격
+            u.waypoints = []
+            u.current_action = "attack"
+        else:
+            # ENGAGEMENT_RANGE 경계까지 전진
+            angle = math.atan2(bl_cy - u.y, bl_cx - u.x)
+            target_dist = ENGAGEMENT_RANGE * 0.8
+            target_x = bl_cx - math.cos(angle) * target_dist + perp_x / perp_len * offset
+            target_y = bl_cy - math.sin(angle) * target_dist + perp_y / perp_len * offset
+            u.waypoints = [[max(0, min(29_999, target_x)),
+                            max(0, min(29_999, target_y))]]
+            u.current_action = "attack"
+        self.db.log_event(self.tick, self.game_time, "OPFOR_AI",
+                          f"{u.id}(보병) → 정면 압박 (거리{dist/1000:.1f}km)")
 
     # ── 상태 갱신 ─────────────────────────────────────────────────
 
