@@ -17,7 +17,7 @@ import threading
 import time
 from typing import List, Optional, Callable
 
-from .models import Unit, WargameDB
+from .models import Unit, AirSupport, AIR_SUPPORT_PRESETS, WargameDB
 from .terrain import terrain
 
 # 교전 파라미터
@@ -70,6 +70,7 @@ class WargameEngine:
         self.running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self.air_supports: List[AirSupport] = []   # 공중지원 임무 목록
 
         # 초기 상태 저장
         self.db.save_units(units)
@@ -89,12 +90,53 @@ class WargameEngine:
         if self._thread:
             self._thread.join(timeout=3)
 
+    def apply_air_support_plan(self, plan: dict):
+        """
+        공중지원 계획 JSON을 등록.
+
+        plan 형식:
+          {"air_support_plans": [
+            {
+              "call_sign": "DARKSTAR-1",
+              "support_type": "cas",       # cas | strike | artillery | helicopter
+              "target": [x, y],            # 폭격 중심 좌표 (m)
+              "radius": 1500,              # 선택 — 없으면 preset 기본값
+              "delay": 120                 # 선택 — 투입 지연 (게임 초)
+            }, ...
+          ]}
+        """
+        with self._lock:
+            for sp in plan.get("air_support_plans", []):
+                stype = sp.get("support_type", "cas")
+                preset = AIR_SUPPORT_PRESETS.get(stype, AIR_SUPPORT_PRESETS["cas"])
+                target = sp.get("target", [0, 0])
+                as_obj = AirSupport(
+                    call_sign=sp.get("call_sign", f"AIR-{len(self.air_supports)+1}"),
+                    support_type=stype,
+                    target_x=float(target[0]),
+                    target_y=float(target[1]),
+                    radius=float(sp.get("radius", preset["radius"])),
+                    damage_rate=float(sp.get("damage_rate", preset["damage_rate"])),
+                    duration=float(sp.get("duration", preset["duration"])),
+                    delay=float(sp.get("delay", preset["delay"])),
+                    status="pending",
+                    elapsed=0.0,
+                )
+                self.air_supports.append(as_obj)
+                self.db.log_event(
+                    self.tick, self.game_time, "AIR_ORDER",
+                    f"{as_obj.call_sign} ({stype}) 요청 — "
+                    f"목표({target[0]/1000:.1f}km,{target[1]/1000:.1f}km) "
+                    f"반경{as_obj.radius:.0f}m 지연{as_obj.delay:.0f}s"
+                )
+
     def reset(self, units: List[Unit]):
         """시뮬레이션 초기화 (새 부대 목록으로 재설정)."""
         was_running = self.running
         self.stop()
         with self._lock:
             self.units = units
+            self.air_supports = []
             self.tick = 0
             self.game_time = 0.0
             self.db.clear()
@@ -155,6 +197,19 @@ class WargameEngine:
                 "units": units_data,
                 "running": self.running,
                 "winner": self._check_winner(),
+            "air_supports": [
+                {
+                    "call_sign": a.call_sign,
+                    "support_type": a.support_type,
+                    "target_x": a.target_x,
+                    "target_y": a.target_y,
+                    "radius": a.radius,
+                    "status": a.status,
+                    "delay_remaining": max(0.0, a.delay - a.elapsed) if a.status == "pending" else 0.0,
+                    "duration_remaining": max(0.0, a.duration - a.elapsed) if a.status == "active" else 0.0,
+                }
+                for a in self.air_supports
+            ],
             }
 
     # ── 시뮬레이션 루프 ──────────────────────────────────────────
@@ -173,6 +228,7 @@ class WargameEngine:
         dt = self.tick_interval * self.time_scale  # 게임 시간(초)
         self._move_units(dt)
         self._resolve_combat(dt)
+        self._resolve_air_support(dt)
         self._update_status()
         self.tick += 1
         self.game_time += dt
@@ -277,6 +333,60 @@ class WargameEngine:
                 f"{attacker.id}→{defender.id}: -{damage:.1f}% CP "
                 f"(거리{dist/1000:.1f}km, 고도우위{elev_adv:.2f})"
             )
+
+    # ── 공중지원 ─────────────────────────────────────────────────
+
+    def _resolve_air_support(self, dt: float):
+        import random
+        dt_h = dt / 3600.0
+        opfor = [u for u in self.units if u.side == "OPFOR" and u.is_active()]
+
+        for air in self.air_supports:
+            if air.status == "completed":
+                continue
+
+            if air.status == "pending":
+                air.elapsed += dt
+                if air.elapsed >= air.delay:
+                    air.elapsed = 0.0
+                    air.status = "active"
+                    self.db.log_event(
+                        self.tick, self.game_time, "AIR_ACTIVE",
+                        f"{air.call_sign} ({air.support_type}) 투입 — "
+                        f"목표({air.target_x/1000:.1f}km,{air.target_y/1000:.1f}km)"
+                    )
+                continue
+
+            # active: 반경 내 OPFOR에 피해 적용
+            air.elapsed += dt
+            for u in opfor:
+                dist = math.hypot(u.x - air.target_x, u.y - air.target_y)
+                if dist > air.radius:
+                    continue
+                # 거리 감쇠: 중심 1.0 → 반경 끝 0.0
+                proximity = 1.0 - dist / air.radius
+                cover = terrain.cover_factor(u.x, u.y) * 0.5  # 엄폐 절반만 적용
+                damage = (
+                    air.damage_rate
+                    * proximity
+                    * (1.0 - cover)
+                    * dt_h
+                    * random.uniform(0.7, 1.3)
+                )
+                u.combat_power = max(0.0, u.combat_power - damage)
+                if damage >= 3.0:
+                    self.db.log_event(
+                        self.tick, self.game_time, "AIR_STRIKE",
+                        f"{air.call_sign}→{u.id}: -{damage:.1f}% CP "
+                        f"(거리{dist/1000:.1f}km)"
+                    )
+
+            if air.elapsed >= air.duration:
+                air.status = "completed"
+                self.db.log_event(
+                    self.tick, self.game_time, "AIR_COMPLETE",
+                    f"{air.call_sign} ({air.support_type}) 임무 완료"
+                )
 
     # ── 상태 갱신 ─────────────────────────────────────────────────
 

@@ -552,6 +552,52 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
             ),
         ))
 
+    # 공중지원 반경 시각화
+    import math as _math
+    _AIR_COLOR = {
+        "cas":        "#FF6F00",   # 주황
+        "strike":     "#F50057",   # 분홍빨강
+        "artillery":  "#AA00FF",   # 보라
+        "helicopter": "#00BFA5",   # 청록
+    }
+    _AIR_STATUS_ALPHA = {"pending": 0.15, "active": 0.35, "completed": 0.05}
+    for air in state.get("air_supports", []):
+        clr = _AIR_COLOR.get(air["support_type"], "#FFFFFF")
+        alpha = _AIR_STATUS_ALPHA.get(air["status"], 0.1)
+        r = air["radius"]
+        cx, cy = air["target_x"], air["target_y"]
+        # 원 근사 (36 포인트)
+        pts = 36
+        circle_x = [cx + r * _math.cos(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        circle_y = [cy + r * _math.sin(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        label = f"{air['call_sign']} ({air['support_type']})"
+        status_ko = {"pending": "대기", "active": "투입중", "completed": "완료"}.get(air["status"], "")
+        fig.add_trace(go.Scatter(
+            x=circle_x, y=circle_y,
+            mode="lines",
+            fill="toself",
+            fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},{alpha})",
+            line=dict(color=clr, width=2, dash="dash" if air["status"] == "pending" else "solid"),
+            name=label,
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                f"상태: {status_ko}<br>"
+                f"목표: ({cx/1000:.1f}km, {cy/1000:.1f}km)<br>"
+                f"반경: {r:.0f}m<extra></extra>"
+            ),
+        ))
+        # 중심 마커
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy],
+            mode="markers+text",
+            marker=dict(symbol="x", size=12, color=clr),
+            text=[air["call_sign"]],
+            textposition="bottom center",
+            textfont=dict(color=clr, size=10),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
     fig.update_layout(
         title=dict(
             text=f"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} "
@@ -686,6 +732,8 @@ def wargame_request_llm_plan():
     plan = _wg_planner.plan(state, agent=agent)
     _wg_last_plan = plan
     eng.apply_mission_plan(plan)
+    if plan.get("air_support_plans"):
+        eng.apply_air_support_plan(plan)
     plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
     fig, status, log_text = wargame_refresh()
     return plan_text, fig, status, log_text

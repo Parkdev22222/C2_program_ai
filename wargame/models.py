@@ -12,7 +12,53 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
+# 공중지원 유형별 기본 파라미터
+AIR_SUPPORT_PRESETS = {
+    "cas": {           # 근접항공지원 (A-10 류)
+        "damage_rate": 60.0,   # %/hour (반경 중심)
+        "radius": 1_500.0,     # m
+        "duration": 300.0,     # 게임 초
+        "delay": 120.0,        # 게임 초 (투입 전 대기)
+    },
+    "strike": {        # 정밀타격 (F-35 류)
+        "damage_rate": 200.0,
+        "radius": 400.0,
+        "duration": 60.0,
+        "delay": 180.0,
+    },
+    "artillery": {     # 장거리 포병지원
+        "damage_rate": 30.0,
+        "radius": 2_500.0,
+        "duration": 600.0,
+        "delay": 30.0,
+    },
+    "helicopter": {    # 공격헬기 지원
+        "damage_rate": 45.0,
+        "radius": 1_000.0,
+        "duration": 240.0,
+        "delay": 60.0,
+    },
+}
+
 DB_PATH = Path(__file__).parent.parent / "data" / "wargame_state.db"
+
+
+@dataclass
+class AirSupport:
+    """공중지원 임무 단위."""
+    call_sign: str              # 호출부호 (예: "DARKSTAR-1")
+    support_type: str           # "cas" | "strike" | "artillery" | "helicopter"
+    target_x: float             # 폭격 중심 x (m)
+    target_y: float             # 폭격 중심 y (m)
+    radius: float               # 피해 반경 (m)
+    damage_rate: float          # %/hour — 반경 중심 최대 피해율
+    duration: float             # 지속 시간 (게임 초)
+    delay: float                # 투입 지연 (게임 초)
+    status: str = "pending"     # "pending" | "active" | "completed"
+    elapsed: float = 0.0        # 활성화 후 경과 게임 시간 (초)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass
