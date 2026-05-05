@@ -9,11 +9,14 @@ from .videodb_query_tool import (
 )
 from .pdf_rag_tool import pdf_rag_search, add_pdf_to_rag
 from .wargame_query_tool import (
-    get_tactical_situation,
-    get_friendly_units,
-    get_hostile_units,
-    get_unit_details,
-    get_units_by_type,
+    get_wargame_situation,
+    get_wargame_unit_detail,
+    get_wargame_battle_log,
+)
+from .wargame_mission_tool import (
+    apply_wargame_mission_plan,
+    apply_wargame_air_support,
+    get_wargame_engine_status,
 )
 from .strategy_advisor_tool import (
     StrategyAdvisorTool,
@@ -33,11 +36,12 @@ __all__ = [
     "set_active_videos",
     "pdf_rag_search",
     "add_pdf_to_rag",
-    "get_tactical_situation",
-    "get_friendly_units",
-    "get_hostile_units",
-    "get_unit_details",
-    "get_units_by_type",
+    "get_wargame_situation",
+    "get_wargame_unit_detail",
+    "get_wargame_battle_log",
+    "apply_wargame_mission_plan",
+    "apply_wargame_air_support",
+    "get_wargame_engine_status",
     "StrategyAdvisorTool",
     "create_strategy_advisor_tool",
     "update_situation_memory",
