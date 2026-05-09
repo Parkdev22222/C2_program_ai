@@ -20,6 +20,7 @@ from .wargame_mission_tool import (
     get_wargame_engine_status,
 )
 from .wargame_strategy_tool import get_wargame_tactical_recommendation
+from .wargame_attack_advisor_tool import get_optimal_attack_positions
 from .strategy_advisor_tool import (
     StrategyAdvisorTool,
     create_strategy_advisor_tool,
@@ -46,6 +47,7 @@ __all__ = [
     "apply_wargame_air_support",
     "get_wargame_engine_status",
     "get_wargame_tactical_recommendation",
+    "get_optimal_attack_positions",
     "StrategyAdvisorTool",
     "create_strategy_advisor_tool",
     "update_situation_memory",
