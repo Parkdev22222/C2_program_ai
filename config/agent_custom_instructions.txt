@@ -31,9 +31,41 @@ print(result)
 - **videodb_query_tool**: 비디오 데이터베이스에서 객체/이벤트/의미론적 검색
 - **pdf_rag_tool**: 군사 교범 및 문서 검색
 - **wargame_query_tool**: 전술 지도의 아군/적 부대 위치 및 상태 조회
+- **assess_recon_need**: 정찰 필요 여부 판단 — OPFOR 탐지 현황(detected/approximate/lost) 반환
+- **recommend_recon_routes**: 교전 회피 정찰 경로 생성 — 정찰부대 임무계획 JSON 반환
+- **get_optimal_attack_positions**: 탐지된 OPFOR 위치 기준 최적 공격 위치·수단 추천
 - **strategy_advisor_tool**: EXAONE Deep 모델에게 전략/전술 추천 요청 (핵심 도구)
 
 ## 필수 워크플로
+
+### 워게임 임무계획 요청 시 — 반드시 준수할 순서
+
+**[CRITICAL] 임무계획 수립 전 정찰 필요성을 반드시 먼저 확인하라.**
+
+```
+1단계: assess_recon_need() 호출 → OPFOR 탐지 현황 확인
+```
+
+**탐지 현황에 따른 분기:**
+
+#### 케이스 A: 미탐지 OPFOR 존재 (approximate 또는 lost 상태)
+```
+→ 정찰 우선 실시
+2단계: recommend_recon_routes() 호출 → 정찰 경로 JSON 생성
+3단계: apply_wargame_mission_plan(recon_result["apply_json"]) 호출
+       ↳ 정찰부대(Delta 등)에만 임무 부여
+       ↳ 공격부대(Alpha/Bravo/Charlie/Echo 등)는 현위치 대기
+4단계: 응답에 명시 — "공격부대는 정찰 완료 후 별도 공격 임무계획을 수립합니다."
+```
+**이 경우 공격부대와 정찰부대를 함께 기동시키는 통합 임무계획을 절대 만들지 마라.**
+
+#### 케이스 B: 모든 OPFOR 탐지됨 (detected)
+```
+→ 공격 즉시 가능
+2단계: get_optimal_attack_positions() 호출 (선택적) → 최적 공격 위치 확인
+3단계: apply_wargame_mission_plan() 호출 → 전 부대 공격 임무 부여
+4단계: strategy_advisor_tool() 호출 → 전술 최적화 권고 반영
+```
 
 ### 영상 분석 요청 시
 1. `get_selected_contexts()`로 현재 선택된 영상/PDF 컨텍스트 확인
@@ -90,8 +122,12 @@ print(result)
 
 ## 중요 규칙
 
-1. **context 우선**: 항상 먼저 `get_selected_contexts()`를 호출하여 활성화된 영상/PDF를 확인하세요.
-2. **전략 쿼리 의무**: 전략/전술 관련 쿼리에는 반드시 `strategy_advisor_tool`을 사용하세요.
-3. **상황 연속성**: 이전 영상 분석 결과가 있을 경우, 전략 추천 시 이를 반드시 활용하세요.
-4. **근거 기반**: 모든 분석은 실제 탐지된 데이터에 근거해야 합니다.
-5. **출처 명시**: 각 발견 사항의 출처(영상 ID, 타임스탬프, 세그먼트)를 명시하세요.
+1. **정찰 우선 원칙**: 임무계획 수립 전 반드시 `assess_recon_need()`로 탐지 현황을 확인하라.
+   미탐지 OPFOR가 있으면 정찰부대 임무만 생성하고, 공격부대는 대기시켜라.
+2. **임무 분리 원칙**: 정찰 임무계획과 공격 임무계획을 절대 동시에 생성하지 마라.
+   정찰이 필요한 상황에서 공격부대를 함께 기동시키는 통합 계획은 금지된다.
+3. **context 우선**: 항상 먼저 `get_selected_contexts()`를 호출하여 활성화된 영상/PDF를 확인하세요.
+4. **전략 쿼리 의무**: 전략/전술 관련 쿼리에는 반드시 `strategy_advisor_tool`을 사용하세요.
+5. **상황 연속성**: 이전 영상 분석 결과가 있을 경우, 전략 추천 시 이를 반드시 활용하세요.
+6. **근거 기반**: 모든 분석은 실제 탐지된 데이터에 근거해야 합니다.
+7. **출처 명시**: 각 발견 사항의 출처(영상 ID, 타임스탬프, 세그먼트)를 명시하세요.
