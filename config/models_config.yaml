@@ -52,7 +52,7 @@ agent_model:
   tensor_parallel_size: 1          # A100 1장
   gpu_memory_utilization: 0.30     # 80GB × 0.30 = 24GB 예약 (AWQ 실사용 ~18GB + KV 캐시 6GB)
   dtype: "float16"
-  max_model_len: 16384             # 32768→16384: KV 캐시 메모리 절약
+  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
   generation:
     temperature: 0.1
     max_tokens: 4096
@@ -66,7 +66,7 @@ strategy_model:
   tensor_parallel_size: 1          # A100 1장
   gpu_memory_utilization: 0.35     # 80GB × 0.35 = 28GB 예약 (실사용 ~16GB + KV 캐시 12GB)
   dtype: "bfloat16"
-  max_model_len: 16384             # 32768→16384: KV 캐시 메모리 절약
+  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
   generation:
     temperature: 0.2
     max_tokens: 8192
