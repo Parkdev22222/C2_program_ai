@@ -367,11 +367,11 @@ class WargameEngine:
     def _tick(self):
         dt = self.tick_interval * self.time_scale  # 게임 시간(초)
         self._move_units(dt)
+        self._update_intelligence()   # 이동 후 최신 인텔 반영 → 교전에 즉시 적용
         self._resolve_combat(dt)
         self._resolve_air_support(dt)
         self._update_opfor_ai(dt)
         self._update_status()
-        self._update_intelligence()
         self.tick += 1
         self.game_time += dt
 
@@ -456,6 +456,26 @@ class WargameEngine:
         )
         cover = terrain.cover_factor(defender.x, defender.y)
 
+        # ── 전장 안개 교전 수정자 ─────────────────────────────────
+        # 1. 정확도: 공격자가 방어자의 위치를 얼마나 정확히 아는가
+        #    detected=1.0(정밀조준) / approximate=0.6(개략사격) / lost=0.3(맹목사격)
+        atk_intel_status = self._intelligence[attacker.side].get(
+            defender.id, {}
+        ).get("status", "approximate")
+        accuracy_mult = {"detected": 1.0, "approximate": 0.6, "lost": 0.3}.get(
+            atk_intel_status, 0.6
+        )
+
+        # 2. 기습 배율: 방어자가 공격자의 위치를 모를수록 방어 준비 부족
+        #    detected=1.0(방어 준비됨) / approximate=1.3(부분 기습) / lost=1.6(완전 기습)
+        def_intel_status = self._intelligence[defender.side].get(
+            attacker.id, {}
+        ).get("status", "approximate")
+        surprise_mult = {"detected": 1.0, "approximate": 1.3, "lost": 1.6}.get(
+            def_intel_status, 1.0
+        )
+        # ─────────────────────────────────────────────────────────
+
         atk_fp = attacker.effective_firepower()
         damage = (
             atk_fp / 100.0          # 정규화
@@ -463,20 +483,35 @@ class WargameEngine:
             * ef                    # 거리 교전 계수
             * elev_adv              # 고도 우위
             * (1 - cover)           # 엄폐 감소
+            * accuracy_mult         # 탐지 정확도 (공격자→방어자)
+            * surprise_mult         # 기습 효과 (방어자→공격자 미탐지)
             * dt_h                  # 시간 적용
         )
 
         # 난수 변동 ±30%
-        import random
         damage *= random.uniform(0.7, 1.3)
         defender.combat_power = max(0.0, defender.combat_power - damage)
 
-        # 교전 로그 (5% 이상 피해 시만)
-        if damage >= 5.0:
+        # 기습 공격 전용 이벤트 로그
+        if surprise_mult >= 1.6 and damage >= 3.0:
+            self.db.log_event(
+                self.tick, self.game_time, "SURPRISE",
+                f"[기습] {attacker.id} → {defender.id} "
+                f"기습 공격 성공! (×{surprise_mult:.1f}) -{damage:.1f}% CP "
+                f"(거리{dist/1000:.1f}km)"
+            )
+
+        # 일반 교전 로그 (5% 이상 피해 시만)
+        elif damage >= 5.0:
+            fow_tag = ""
+            if surprise_mult > 1.0:
+                fow_tag = f" [부분기습×{surprise_mult:.1f}]"
+            if atk_intel_status != "detected":
+                fow_tag += f" [개략사격]" if atk_intel_status == "approximate" else f" [맹목사격]"
             self.db.log_event(
                 self.tick, self.game_time, "COMBAT",
                 f"{attacker.id}→{defender.id}: -{damage:.1f}% CP "
-                f"(거리{dist/1000:.1f}km, 고도우위{elev_adv:.2f})"
+                f"(거리{dist/1000:.1f}km, 고도우위{elev_adv:.2f}){fow_tag}"
             )
 
     # ── 공중지원 ─────────────────────────────────────────────────
