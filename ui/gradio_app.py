@@ -1,1 +1,1383 @@
-"""\nC2 군사 AI - Gradio 웹 인터페이스\n\n핵심 기능:\n1. 군사 영상 업로드 및 분석 (EXAONE4)\n2. EXAONE4 상황 분석 응답 → situation_memory 자동 갱신\n3. 전략/전술 쿼리 시 EXAONE4 → EXAONE Deep → EXAONE4 파이프라인 자동 실행\n4. 채팅 히스토리 기반 컨텍스트 유지\n\nEXAONE4는 영상 분석 결과를 situation_memory에 저장하고,\n이후 전략/전술 쿼리 시 strategy_advisor_tool이 이를 EXAONE Deep에 자동 전달합니다.\n"""\nimport re\nimport time\nimport logging\nimport gradio as gr\nimport yaml\nfrom pathlib import Path\nfrom typing import List, Optional, Tuple, Generator\n\ntry:\n    import plotly.graph_objects as go\n    _PLOTLY_OK = True\nexcept ImportError:\n    _PLOTLY_OK = False\n\ntry:\n    import sys, pathlib\n    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))\n    from wargame import WargameEngine, setup_bn_vs_bn\n    from wargame.llm_planner import MissionPlanner\n    from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H\n    _WARGAME_OK = True\nexcept Exception as _wg_err:\n    _WARGAME_OK = False\n    _wg_err = str(_wg_err)\n\nlogger = logging.getLogger(__name__)\n\nCONFIG_DIR = Path(__file__).parent.parent / \"config\"\nSAMPLES_DIR = Path(__file__).parent.parent / \"samples\"\n\n\ndef _load_ui_config() -> dict:\n    with open(CONFIG_DIR / \"agent_config.yaml\") as f:\n        return yaml.safe_load(f).get(\"gradio\", {})\n\n\n# ─────────────────────────────────────────────\n# 전역 상태\n# ─────────────────────────────────────────────\n_agent = None\n_video_analysis_system = None\n_analyzed_videos: List[dict] = []\n_active_video_ids: List[str] = []\n_last_situation_analysis: str = \"\"\n\n# ── 워게임 전역 상태 ──────────────────────────────────────────────\n_wg_engine: Optional[\"WargameEngine\"] = None\n_wg_planner: Optional[\"MissionPlanner\"] = None\n_wg_last_plan: dict = {}\n_wg_last_opfor_ai_count: int = 0      # 마지막으로 처리한 OPFOR AI 발동 횟수\n\n\ndef _get_agent():\n    global _agent\n    return _agent\n\n\ndef _is_situation_analysis_response(response: str) -> bool:\n    \"\"\"\n    EXAONE4의 응답이 상황 분석 결과인지 판별합니다.\n    전장 상황 분석 보고서 형식이거나 탐지 정보를 포함하면 True를 반환합니다.\n    \"\"\"\n    situation_markers = [\n        \"전장 상황 분석\",\n        \"탐지된 전력\",\n        \"상황 분석 보고서\",\n        \"battlefield situation\",\n        \"situation analysis\",\n        \"detected\",\n        \"탐지\",\n        \"이동 패턴\",\n        \"threat\",\n        \"위협\",\n        \"tank\", \"soldier\", \"truck\", \"전차\", \"병력\",\n    ]\n    response_lower = response.lower()\n    matched = sum(1 for m in situation_markers if m.lower() in response_lower)\n    return matched >= 2\n\n\ndef _update_situation_memory_if_needed(response: str, video_ids: List[str] = None):\n    \"\"\"\n    EXAONE4 응답이 상황 분석 결과이면 situation_memory를 갱신합니다.\n    strategy_advisor_tool이 이를 읽어 EXAONE Deep에 전달합니다.\n    \"\"\"\n    global _last_situation_analysis\n    if _is_situation_analysis_response(response):\n        _last_situation_analysis = response\n        try:\n            from tools.strategy_advisor_tool import update_situation_memory\n            update_situation_memory(response, video_ids or _active_video_ids)\n            logger.info(\"Situation memory updated from EXAONE4 analysis response\")\n        except Exception as e:\n            logger.warning(f\"Failed to update situation memory: {e}\")\n\n\ndef _is_strategy_query(text: str) -> bool:\n    \"\"\"사용자 쿼리가 전략/전술 추천 요청인지 판별합니다.\"\"\"\n    try:\n        from agent.battlefield_agent import is_strategy_query\n        return is_strategy_query(text)\n    except Exception:\n        strategy_kw = [\"전략\", \"전술\", \"작전\", \"기동\", \"대응방안\", \"추천\", \"제안\",\n                       \"strategy\", \"tactics\", \"maneuver\", \"recommend\"]\n        text_lower = text.lower()\n        return any(kw in text_lower for kw in strategy_kw)\n\n\n# ─────────────────────────────────────────────\n# 비디오 분석 함수\n# ─────────────────────────────────────────────\n\ndef analyze_video(video_file, collection_name: str, progress=gr.Progress()):\n    \"\"\"\n    업로드된 군사 영상을 분석합니다.\n    EXAONE4가 이후 상황 분석에 사용할 수 있도록 DB에 저장합니다.\n    \"\"\"\n    global _video_analysis_system, _analyzed_videos, _active_video_ids\n\n    choices = _get_video_list_choices()\n    if video_file is None:\n        return \"영상 파일을 먼저 업로드하세요.\", gr.update(choices=choices, value=choices)\n\n    try:\n        progress(0.1, desc=\"영상 분석 시스템 초기화 중...\")\n        if _video_analysis_system is None:\n            from core_src.video_analysis_system import VideoAnalysisSystem\n            _video_analysis_system = VideoAnalysisSystem(collection_name=collection_name or \"default\")\n\n        progress(0.3, desc=\"비디오 분석 중 (객체 탐지, 임베딩 생성)...\")\n        summary = _video_analysis_system.analyze_video(\n            video_path=video_file.name if hasattr(video_file, \"name\") else str(video_file),\n        )\n\n        video_id = summary[\"video_id\"]\n        _analyzed_videos.append({\n            \"video_id\": video_id,\n            \"filename\": Path(video_file.name if hasattr(video_file, \"name\") else str(video_file)).name,\n            \"summary\": summary,\n        })\n        _active_video_ids = [v[\"video_id\"] for v in _analyzed_videos]\n\n        # 도구 컨텍스트 업데이트\n        try:\n            from tools.videodb_query_tool import (\n                set_selected_video_ids,\n                register_videodb_manager,\n                register_video_collection,\n            )\n            set_selected_video_ids(_active_video_ids)\n            register_videodb_manager(collection_name or \"default\", _video_analysis_system.videodb)\n            register_video_collection(video_id, collection_name or \"default\")\n        except Exception as e:\n            logger.warning(f\"Failed to update tool context: {e}\")\n\n        if _agent:\n            _agent.set_video_context(_active_video_ids)\n\n        progress(1.0, desc=\"분석 완료!\")\n\n        # 분석 결과 요약 메시지\n        obj_counts = summary.get(\"segments\", [])\n        total_dets = summary.get(\"total_detections\", 0)\n        result_msg = (\n            f\"✓ 영상 분석 완료\\n\"\n            f\"  - 비디오 ID: {video_id}\\n\"\n            f\"  - 총 길이: {summary.get('duration', 0):.1f}초\\n\"\n            f\"  - 세그먼트 수: {summary.get('segment_count', 0)}개\\n\"\n            f\"  - 탐지된 객체 수: {total_dets}건\\n\\n\"\n            f\"이제 채팅창에서 영상에 대해 질문하거나 전략/전술 추천을 요청할 수 있습니다.\"\n        )\n        new_choices = _get_video_list_choices()\n        # gr.update로 choices와 value를 함께 설정해야 CheckboxGroup이 정상 동작\n        return result_msg, gr.update(choices=new_choices, value=new_choices)\n\n    except Exception as e:\n        logger.error(f\"Video analysis error: {e}\", exc_info=True)\n        choices = _get_video_list_choices()\n        return f\"분석 오류: {e}\", gr.update(choices=choices, value=choices)\n\n\ndef _get_video_list_choices() -> list:\n    return [f\"{v['video_id']} - {v['filename']}\" for v in _analyzed_videos]\n\n\ndef _get_sample_video_choices() -> list:\n    \"\"\"samples/ 디렉토리에서 영상 파일 목록을 반환합니다.\"\"\"\n    SAMPLES_DIR.mkdir(exist_ok=True)\n    exts = {\".mp4\", \".avi\", \".mov\", \".mkv\", \".webm\"}\n    return sorted(p.name for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in exts)\n\n\ndef analyze_sample_video(sample_name: str, collection_name: str, progress=gr.Progress()):\n    \"\"\"samples/ 폴더의 영상을 선택하여 분석합니다.\"\"\"\n    if not sample_name:\n        choices = _get_video_list_choices()\n        return \"예시 영상을 선택하세요.\", gr.update(choices=choices, value=choices)\n\n    sample_path = SAMPLES_DIR / sample_name\n    if not sample_path.exists():\n        choices = _get_video_list_choices()\n        return f\"파일을 찾을 수 없습니다: {sample_name}\", gr.update(choices=choices, value=choices)\n\n    # 경로를 name 속성처럼 접근할 수 있는 객체로 래핑\n    class _FileLike:\n        def __init__(self, path):\n            self.name = str(path)\n\n    return analyze_video(_FileLike(sample_path), collection_name, progress)\n\n\ndef update_active_videos(selected_items: List[str]) -> str:\n    \"\"\"UI에서 선택된 비디오를 활성 컨텍스트로 설정합니다.\"\"\"\n    global _active_video_ids\n    _active_video_ids = []\n    for item in (selected_items or []):\n        vid = item.split(\" - \")[0].strip()\n        _active_video_ids.append(vid)\n\n    try:\n        from tools.videodb_query_tool import set_selected_video_ids\n        set_selected_video_ids(_active_video_ids)\n    except Exception as e:\n        logger.warning(f\"Failed to update video context: {e}\")\n\n    if _agent:\n        _agent.set_video_context(_active_video_ids)\n\n    return f\"활성 비디오: {len(_active_video_ids)}개 선택됨\"\n\n\n# ─────────────────────────────────────────────\n# 채팅 처리 함수 (핵심 로직)\n# ─────────────────────────────────────────────\n\ndef chat(\n    message: str,\n    history: List[Tuple[str, str]],\n) -> Tuple[str, List[Tuple[str, str]]]:\n    \"\"\"\n    사용자 메시지를 처리합니다.\n\n    처리 흐름:\n    1. 영상 분석 쿼리 → EXAONE4가 비디오 도구로 직접 처리\n       → 응답이 상황 분석이면 situation_memory 자동 갱신\n    2. 전략/전술 쿼리 → EXAONE4가 strategy_advisor_tool 호출\n       → EXAONE Deep이 [상황 분석 + 쿼리]로 전략/전술 권고 생성\n       → EXAONE4가 최종 종합 응답 반환\n    \"\"\"\n    if not message.strip():\n        return \"\", history\n\n    agent = _get_agent()\n    if agent is None:\n        history.append((message, \"에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.\"))\n        return \"\", history\n\n    # 전략/전술 쿼리 감지 → 사전 상황 분석 확인\n    is_strategy = _is_strategy_query(message)\n    if is_strategy and not _last_situation_analysis:\n        warning = (\n            \"[안내] 전략/전술 추천을 위해서는 먼저 군사 영상을 분석하는 것을 권장합니다.\\n\"\n            \"상황 분석 없이도 일반적인 군사 원칙 기반으로 추천이 가능하지만, \"\n            \"영상 분석 후 쿼리하면 더 정확한 상황 기반 추천을 받을 수 있습니다.\\n\\n\"\n        )\n        history.append((message, warning + \"처리 중...\"))\n    else:\n        history.append((message, \"처리 중...\"))\n\n    try:\n        response = agent.run(message)\n        response_text = str(response)\n\n        # EXAONE4 응답이 상황 분석이면 situation_memory 갱신\n        _update_situation_memory_if_needed(response_text, _active_video_ids)\n\n        # 전략 쿼리 응답에 듀얼 모델 사용 표시 추가\n        if is_strategy:\n            response_text = _annotate_dual_model_response(response_text)\n\n        history[-1] = (message, response_text)\n\n    except Exception as e:\n        logger.error(f\"Agent run error: {e}\", exc_info=True)\n        error_msg = f\"처리 중 오류가 발생했습니다: {e}\"\n        history[-1] = (message, error_msg)\n\n    return \"\", history\n\n\ndef _annotate_dual_model_response(response: str) -> str:\n    \"\"\"전략/전술 응답에 듀얼 모델 처리 표시를 추가합니다.\"\"\"\n    annotation = \"\\n\\n---\\n*이 응답은 EXAONE4(상황 분석) + EXAONE Deep(전략/전술 추천)의 협업으로 생성되었습니다.*\"\n    return response + annotation\n\n\n# ─────────────────────────────────────────────\n# 전장 지도 함수\n# ─────────────────────────────────────────────\n\n# 유닛 카테고리별 마커 설정\n_MARKER_SYMBOL = {\n    \"infantry\":  \"circle\",\n    \"apc\":       \"square\",\n    \"armor\":     \"diamond\",\n    \"helicopter\":\"triangle-up\",\n    \"aircraft\":  \"triangle-up\",\n    \"vehicle\":   \"square\",\n    \"truck\":     \"square\",\n    \"unknown\":   \"circle\",\n}\n_MARKER_SIZE = {\n    \"infantry\": 5, \"apc\": 8, \"armor\": 9,\n    \"helicopter\": 8, \"aircraft\": 8,\n    \"vehicle\": 6, \"truck\": 6, \"unknown\": 5,\n}\n\n\ndef _build_map_figure(state: dict):\n    \"\"\"ARMA3 전장 상태를 Plotly Figure로 변환합니다.\"\"\"\n    units        = state.get(\"units\", [])\n    groups       = state.get(\"groups\", [])\n    mission_time = state.get(\"mission_time\", 0)\n    last_updated = state.get(\"last_updated\", \"데이터 없음\")\n\n    fig = go.Figure()\n\n    if not units and not groups:\n        fig.add_annotation(\n            text=\"ARMA3 데이터 없음<br>relay.py가 실행 중인지 확인하세요\",\n            x=0.5, y=0.5, xref=\"paper\", yref=\"paper\",\n            font=dict(size=16, color=\"#aaaaaa\"),\n            showarrow=False,\n        )\n    else:\n        # ── 유닛: 진영·카테고리별 그룹화하여 플롯 ──────────────\n        from collections import defaultdict\n        buckets = defaultdict(list)\n        for u in units:\n            side = u.get(\"side\", \"UNKNOWN\")\n            cat  = u.get(\"cat\", \"unknown\")\n            buckets[(side, cat)].append(u)\n\n        for (side, cat), unit_list in buckets.items():\n            base_color = \"#4a90d9\" if side == \"BLUFOR\" else \"#e05252\" if side == \"OPFOR\" else \"#aaaaaa\"\n            symbol = _MARKER_SYMBOL.get(cat, \"circle\")\n            size   = _MARKER_SIZE.get(cat, 5)\n            hover  = [\n                f\"그룹: {u.get('grp','')}\\n\"\n                f\"종류: {cat}\\n\"\n                f\"HP: {u.get('hp', 0)}%\\n\"\n                f\"위치: ({u.get('x',0):.0f}, {u.get('y',0):.0f})\"\n                for u in unit_list\n            ]\n            fig.add_trace(go.Scatter(\n                x=[u.get(\"x\", 0) for u in unit_list],\n                y=[u.get(\"y\", 0) for u in unit_list],\n                mode=\"markers\",\n                name=f\"{side} {cat} ({len(unit_list)})\",\n                marker=dict(color=base_color, size=size, symbol=symbol,\n                            line=dict(width=0.5, color=\"rgba(255,255,255,0.3)\")),\n                text=hover,\n                hovertemplate=\"%{text}<extra></extra>\",\n                legendgroup=side,\n            ))\n\n        # ── 그룹 지휘관 위치 + 레이블 ─────────────────────────\n        for g in groups:\n            side  = g.get(\"side\", \"UNKNOWN\")\n            color = \"#00aaff\" if side == \"BLUFOR\" else \"#ff4444\" if side == \"OPFOR\" else \"#aaaaaa\"\n            gid   = g.get(\"id\", \"?\")\n            strength = g.get(\"strength\", 0)\n            fig.add_trace(go.Scatter(\n                x=[g.get(\"x\", 0)],\n                y=[g.get(\"y\", 0)],\n                mode=\"markers+text\",\n                name=gid,\n                marker=dict(color=color, size=14, symbol=\"diamond\",\n                            line=dict(width=1.5, color=\"white\")),\n                text=[f\"<b>{gid}</b>\"],\n                textposition=\"top center\",\n                textfont=dict(color=\"white\", size=11),\n                hovertemplate=(\n                    f\"<b>{gid}</b><br>진영: {side}<br>\"\n                    f\"잔존 병력: {strength}<br>\"\n                    f\"위치: ({g.get('x',0):.0f}, {g.get('y',0):.0f})\"\n                    \"<extra></extra>\"\n                ),\n                showlegend=False,\n                legendgroup=side,\n            ))\n\n    mins, secs = divmod(int(mission_time), 60)\n    fig.update_layout(\n        title=dict(\n            text=f\"전장 상황도  |  미션 경과: {mins:02d}:{secs:02d}  |  최종 수신: {last_updated}\",\n            font=dict(size=14, color=\"#dddddd\"),\n        ),\n        xaxis=dict(\n            title=\"동쪽 (m)\", range=[0, 30000],\n            gridcolor=\"#2a3a4a\", zeroline=False,\n            tickformat=\",d\", tickfont=dict(color=\"#aaaaaa\"),\n        ),\n        yaxis=dict(\n            title=\"북쪽 (m)\", range=[0, 30000],\n            scaleanchor=\"x\", scaleratio=1,\n            gridcolor=\"#2a3a4a\", zeroline=False,\n            tickformat=\",d\", tickfont=dict(color=\"#aaaaaa\"),\n        ),\n        paper_bgcolor=\"#0d1117\",\n        plot_bgcolor=\"#0f1923\",\n        font=dict(color=\"#dddddd\"),\n        legend=dict(\n            bgcolor=\"rgba(0,0,0,0.5)\",\n            bordercolor=\"#334455\",\n            borderwidth=1,\n            font=dict(size=11),\n        ),\n        height=620,\n        margin=dict(l=60, r=20, t=50, b=50),\n        hovermode=\"closest\",\n    )\n    return fig\n\n\ndef get_battlefield_map():\n    \"\"\"전장 지도와 상태 텍스트를 반환합니다.\"\"\"\n    if not _PLOTLY_OK:\n        return None, \"plotly 미설치: pip install plotly\"\n\n    try:\n        from core_src.arma3_db_manager import load_state\n        state = load_state()\n    except Exception as e:\n        return None, f\"상태 로드 오류: {e}\"\n\n    fig = _build_map_figure(state)\n\n    summary = state.get(\"summary\", {})\n    blu = summary.get(\"blufor\", {})\n    opp = summary.get(\"opfor\", {})\n    units = state.get(\"units\", [])\n\n    status_lines = [\n        f\"🔵 BLUFOR  보병: {blu.get('infantry', 0):>4}  장갑/APC: {blu.get('armor', 0):>3}  헬기: {blu.get('helicopter', 0):>2}\",\n        f\"🔴 OPFOR   보병: {opp.get('infantry', 0):>4}  장갑/APC: {opp.get('armor', 0):>3}  헬기: {opp.get('helicopter', 0):>2}\",\n        f\"────────────────────────────────\",\n        f\"전체 유닛: {len(units)}  |  미션 시간: {state.get('mission_time', 0)}s\",\n        f\"최종 수신: {state.get('last_updated', '없음')}\",\n    ]\n    return fig, \"\\n\".join(status_lines)\n\n\n# ─────────────────────────────────────────────────────────────────\n# 워게임 시뮬레이터 함수\n# ─────────────────────────────────────────────────────────────────\n\ndef _wg_register_engine(engine):\n    \"\"\"생성된 엔진을 쿼리·임무계획 도구에 등록.\"\"\"\n    try:\n        from tools.wargame_query_tool import register_wargame_engine as _rq\n        _rq(engine)\n    except Exception:\n        pass\n    try:\n        from tools.wargame_mission_tool import register_wargame_engine as _rm\n        _rm(engine)\n    except Exception:\n        pass\n    try:\n        from tools.wargame_strategy_tool import register_wargame_engine as _rs\n        _rs(engine)\n    except Exception:\n        pass\n    try:\n        from tools.wargame_attack_advisor_tool import register_wargame_engine as _ra\n        _ra(engine)\n    except Exception:\n        pass\n\n\n\ndef _wg_ensure_engine() -> Optional[\"WargameEngine\"]:\n    global _wg_engine, _wg_planner\n    if not _WARGAME_OK:\n        return None\n    if _wg_engine is None:\n        units = setup_bn_vs_bn()\n        _wg_engine = WargameEngine(units)\n        _wg_planner = MissionPlanner()\n        _wg_register_engine(_wg_engine)\n    return _wg_engine\n\n\ndef _build_wargame_map(state: dict) -> Optional[go.Figure]:\n    \"\"\"워게임 현황을 Plotly 지도로 시각화.\"\"\"\n    if not _PLOTLY_OK:\n        return None\n\n    fig = go.Figure()\n\n    # 지형 고도 히트맵 (다운샘플 60x60)\n    try:\n        hm = get_heightmap()\n        step = max(1, GRID_H // 60)\n        hm_down = hm[::step, ::step]\n        x_scale = MAP_W / hm_down.shape[1]\n        y_scale = MAP_H / hm_down.shape[0]\n        fig.add_trace(go.Heatmap(\n            z=hm_down.tolist(),\n            x=[i * x_scale for i in range(hm_down.shape[1])],\n            y=[i * y_scale for i in range(hm_down.shape[0])],\n            colorscale=\"Greens\",\n            showscale=False,\n            opacity=0.35,\n            hoverinfo=\"skip\",\n        ))\n    except Exception:\n        pass\n\n    # 부대 마커 + 웨이포인트 경로\n    _SIDE_COLOR = {\"BLUFOR\": \"#4FC3F7\", \"OPFOR\": \"#EF5350\"}\n    _STATUS_SYM = {\"active\": \"circle\", \"suppressed\": \"triangle-up\", \"destroyed\": \"x\"}\n\n    # BLUFOR 인텔 인덱스 (unit_id → intel entry)\n    blufor_intel_index = {\n        e[\"unit_id\"]: e\n        for e in state.get(\"intelligence\", {}).get(\"BLUFOR\", [])\n    }\n\n    for u in state.get(\"units\", []):\n        color = u.get(\"color\", _SIDE_COLOR.get(u[\"side\"], \"gray\"))\n        sym = _STATUS_SYM.get(u[\"status\"], \"circle\")\n        size = 18 if u[\"status\"] == \"active\" else 12\n        cp = u[\"combat_power\"]\n        elev = u.get(\"elevation\", 0)\n\n        if u[\"side\"] == \"OPFOR\":\n            # OPFOR는 BLUFOR 인텔 기준으로 표시\n            intel = blufor_intel_index.get(u[\"id\"])\n            if intel is None:\n                continue\n\n            det_status = intel[\"status\"]\n            kx, ky = intel[\"known_x\"], intel[\"known_y\"]\n\n            if det_status == \"detected\":\n                # 정확한 위치 — 실제 위치와 동일\n                fig.add_trace(go.Scatter(\n                    x=[kx], y=[ky],\n                    mode=\"markers+text\",\n                    name=f\"OPFOR {u['id']} (탐지됨)\",\n                    marker=dict(symbol=sym, size=size, color=\"#EF5350\",\n                                line=dict(color=\"white\", width=1.5),\n                                opacity=0.3 if u[\"status\"] == \"destroyed\" else 1.0),\n                    text=[f\"{u['id']}<br>{cp:.0f}%\"],\n                    textposition=\"top center\",\n                    textfont=dict(color=\"#EF5350\", size=11),\n                    hovertemplate=(\n                        f\"<b>{u['id']}</b> [탐지됨]<br>\"\n                        f\"위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>\"\n                        f\"고도: {elev:.0f}m<br>\"\n                        f\"전투력: {cp:.1f}%<br>\"\n                        f\"상태: {u['status']}<br>\"\n                        f\"탐지: {intel.get('detected_by','')}<extra></extra>\"\n                    ),\n                ))\n                # 웨이포인트 경로선 (탐지된 경우만)\n                wps = u.get(\"waypoints\", [])\n                if wps:\n                    path_x = [kx] + [w[0] for w in wps]\n                    path_y = [ky] + [w[1] for w in wps]\n                    fig.add_trace(go.Scatter(\n                        x=path_x, y=path_y, mode=\"lines\",\n                        line=dict(color=\"#EF5350\", width=1.5, dash=\"dot\"),\n                        hoverinfo=\"skip\", showlegend=False,\n                    ))\n\n            elif det_status == \"approximate\":\n                # 개략 위치 — 오차 있는 추정 좌표\n                fig.add_trace(go.Scatter(\n                    x=[kx], y=[ky],\n                    mode=\"markers+text\",\n                    name=f\"OPFOR {u['id']} (개략)\",\n                    marker=dict(symbol=\"circle-open\", size=20, color=\"#FFA726\",\n                                line=dict(color=\"#FFA726\", width=2)),\n                    text=[f\"?{u['id']}\"],\n                    textposition=\"top center\",\n                    textfont=dict(color=\"#FFA726\", size=11),\n                    hovertemplate=(\n                        f\"<b>?{u['id']}</b> [개략 위치]<br>\"\n                        f\"추정 위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>\"\n                        f\"종류: 미확인 / 전투력: 미확인<br>\"\n                        f\"<i>정찰부대 파견으로 정확한 위치 파악 가능</i><extra></extra>\"\n                    ),\n                ))\n\n            else:  # \"lost\"\n                # 최종 탐지 위치 — 현재 위치 미확인\n                fig.add_trace(go.Scatter(\n                    x=[kx], y=[ky],\n                    mode=\"markers+text\",\n                    name=f\"OPFOR {u['id']} (탐지 상실)\",\n                    marker=dict(symbol=\"circle-open\", size=16, color=\"#9E9E9E\",\n                                line=dict(color=\"#9E9E9E\", width=1.5), opacity=0.6),\n                    text=[f\"({u['id']})\"],\n                    textposition=\"top center\",\n                    textfont=dict(color=\"#9E9E9E\", size=10),\n                    hovertemplate=(\n                        f\"<b>{u['id']}</b> [탐지 상실]<br>\"\n                        f\"최종 탐지 위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>\"\n                        f\"종류: {intel.get('unit_type') or '미확인'}<br>\"\n                        f\"<i>현재 위치 미확인</i><extra></extra>\"\n                    ),\n                ))\n            continue  # OPFOR 처리 완료\n\n        # BLUFOR — 항상 실제 위치 표시\n        # 웨이포인트 경로선\n        wps = u.get(\"waypoints\", [])\n        if wps:\n            path_x = [u[\"x\"]] + [w[0] for w in wps]\n            path_y = [u[\"y\"]] + [w[1] for w in wps]\n            fig.add_trace(go.Scatter(\n                x=path_x, y=path_y,\n                mode=\"lines\",\n                line=dict(color=color, width=1.5, dash=\"dot\"),\n                hoverinfo=\"skip\",\n                showlegend=False,\n            ))\n\n        # 부대 마커\n        fig.add_trace(go.Scatter(\n            x=[u[\"x\"]], y=[u[\"y\"]],\n            mode=\"markers+text\",\n            name=f\"{u['side']} {u['id']}\",\n            marker=dict(\n                symbol=sym,\n                size=size,\n                color=color,\n                line=dict(color=\"white\", width=1.5),\n                opacity=0.3 if u[\"status\"] == \"destroyed\" else 1.0,\n            ),\n            text=[f\"{u['id']}<br>{cp:.0f}%\"],\n            textposition=\"top center\",\n            textfont=dict(color=color, size=11),\n            hovertemplate=(\n                f\"<b>{u['id']}</b><br>\"\n                f\"위치: ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)<br>\"\n                f\"고도: {elev:.0f}m<br>\"\n                f\"전투력: {cp:.1f}%<br>\"\n                f\"상태: {u['status']}<br>\"\n                f\"행동: {u['current_action']}<extra></extra>\"\n            ),\n        ))\n\n    # 공중지원 반경 시각화\n    import math as _math\n    _AIR_COLOR = {\n        \"cas\":        \"#FF6F00\",   # 주황\n        \"strike\":     \"#F50057\",   # 분홍빨강\n        \"artillery\":  \"#AA00FF\",   # 보라\n        \"helicopter\": \"#00BFA5\",   # 청록\n    }\n    _AIR_STATUS_ALPHA = {\"pending\": 0.15, \"active\": 0.35, \"completed\": 0.05}\n    for air in state.get(\"air_supports\", []):\n        clr = _AIR_COLOR.get(air[\"support_type\"], \"#FFFFFF\")\n        alpha = _AIR_STATUS_ALPHA.get(air[\"status\"], 0.1)\n        r = air[\"radius\"]\n        cx, cy = air[\"target_x\"], air[\"target_y\"]\n        # 원 근사 (36 포인트)\n        pts = 36\n        circle_x = [cx + r * _math.cos(2 * _math.pi * i / pts) for i in range(pts + 1)]\n        circle_y = [cy + r * _math.sin(2 * _math.pi * i / pts) for i in range(pts + 1)]\n        label = f\"{air['call_sign']} ({air['support_type']})\";\n        status_ko = {\"pending\": \"대기\", \"active\": \"투입중\", \"completed\": \"완료\"}.get(air[\"status\"], \"\")\n        fig.add_trace(go.Scatter(\n            x=circle_x, y=circle_y,\n            mode=\"lines\",\n            fill=\"toself\",\n            fillcolor=f\"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},{alpha})\",\n            line=dict(color=clr, width=2, dash=\"dash\" if air[\"status\"] == \"pending\" else \"solid\"),\n            name=label,\n            hovertemplate=(\n                f\"<b>{label}</b><br>\"\n                f\"상태: {status_ko}<br>\"\n                f\"목표: ({cx/1000:.1f}km, {cy/1000:.1f}km)<br>\"\n                f\"반경: {r:.0f}m<extra></extra>\"\n            ),\n        ))\n        # 중심 마커\n        fig.add_trace(go.Scatter(\n            x=[cx], y=[cy],\n            mode=\"markers+text\",\n            marker=dict(symbol=\"x\", size=12, color=clr),\n            text=[air[\"call_sign\"]],\n            textposition=\"bottom center\",\n            textfont=dict(color=clr, size=10),\n            showlegend=False,\n            hoverinfo=\"skip\",\n        ))\n\n    fig.update_layout(\n        title=dict(\n            text=f\"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} \"\n                 f\"{'▶ 진행 중' if state.get('running') else '⏸ 정지'}\",\n            font=dict(color=\"#dddddd\", size=14),\n        ),\n        xaxis=dict(\n            title=\"동쪽 (m)\", range=[0, MAP_W],\n            gridcolor=\"#2a3a4a\", zeroline=False,\n            tickformat=\",d\", tickfont=dict(color=\"#aaa\"),\n        ),\n        yaxis=dict(\n            title=\"북쪽 (m)\", range=[0, MAP_H],\n            scaleanchor=\"x\", scaleratio=1,\n            gridcolor=\"#2a3a4a\", zeroline=False,\n            tickformat=\",d\", tickfont=dict(color=\"#aaa\"),\n        ),\n        paper_bgcolor=\"#0d1117\",\n        plot_bgcolor=\"#0f1923\",\n        font=dict(color=\"#dddddd\"),\n        legend=dict(bgcolor=\"rgba(0,0,0,0.5)\", bordercolor=\"#334455\", borderwidth=1, font=dict(size=10)),\n        height=300,\n        margin=dict(l=60, r=20, t=40, b=40),\n        hovermode=\"closest\",\n    )\n    return fig\n\n\ndef _wg_status_text(state: dict) -> str:\n    try:\n        from wargame.scenario import get_unit_type\n    except Exception:\n        get_unit_type = lambda uid: \"\"\n\n    lines = [f\"게임 시간: {state.get('game_time_str','00:00:00')} | Tick: {state.get('tick',0)}\"]\n    winner = state.get(\"winner\")\n    if winner:\n        lines.append(f\"★ 전투 종료: {winner} 승리\")\n    lines.append(\"\")\n    lines.append(\"🔵 BLUFOR\")\n    for u in state.get(\"units\", []):\n        if u[\"side\"] != \"BLUFOR\":\n            continue\n        bar = \"█\" * int(u[\"combat_power\"] / 10) + \"░\" * (10 - int(u[\"combat_power\"] / 10))\n        utype = get_unit_type(u[\"id\"])\n        lines.append(\n            f\"  {u['id']:7s}({utype:6s}) [{bar}] {u['combat_power']:5.1f}%  {u['status']}\"\n        )\n    _STATUS_KO = {\"detected\": \"탐지됨\", \"approximate\": \"개략위치\", \"lost\": \"탐지상실\"}\n    intel_index = {\n        e[\"unit_id\"]: e\n        for e in state.get(\"intelligence\", {}).get(\"BLUFOR\", [])\n    }\n    lines.append(\"🔴 OPFOR (BLUFOR 인텔 기준)\")\n    for e in state.get(\"intelligence\", {}).get(\"BLUFOR\", []):\n        det = e[\"status\"]\n        det_ko = _STATUS_KO.get(det, det)\n        if det == \"detected\":\n            utype = e.get(\"unit_type\") or \"?\"\n            cp = e.get(\"combat_power\") or 0.0\n            bar = \"█\" * int(cp / 10) + \"░\" * (10 - int(cp / 10))\n            lines.append(\n                f\"  {e['unit_id']:7s}({utype:6s}) [{bar}] {cp:5.1f}%  [{det_ko}]\"\n            )\n        elif det == \"approximate\":\n            lines.append(\n                f\"  ?{e['unit_id']:6s}(미확인) {'?'*10}  ?????  [{det_ko}] \"\n                f\"({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km 추정)\"\n            )\n        else:  # lost\n            utype = e.get(\"unit_type\") or \"미확인\"\n            lines.append(\n                f\"  ({e['unit_id']:6s})({utype:6s}) {'░'*10}  ?????  [{det_ko}] \"\n                f\"최종({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km)\"\n            )\n    return \"\\n\".join(lines)\n\n\ndef _build_opfor_alert(state: dict) -> str:\n    \"\"\"OPFOR 기동 감지 시 규칙 기반 알람 메시지 생성.\"\"\"\n    try:\n        from wargame.scenario import get_unit_type\n    except Exception:\n        def get_unit_type(uid): return \"부대\"\n\n    opfor = [u for u in state[\"units\"] if u[\"side\"] == \"OPFOR\" and u[\"status\"] != \"destroyed\"]\n    blufor = [u for u in state[\"units\"] if u[\"side\"] == \"BLUFOR\" and u[\"status\"] != \"destroyed\"]\n\n    if not opfor:\n        return \"✅ 모든 적군 전투불능 — 전투 종료\"\n\n    lines = [f\"⚠️ **OPFOR 기동 감지** (게임시간: {state['game_time_str']})\"]\n    lines.append(\"\\n**적군 현황:**\")\n    for u in opfor:\n        action_ko = {\"attack\":\"공격\",\"flank\":\"측방기동\",\"withdraw\":\"후퇴\",\n                     \"hold\":\"대기\",\"defend\":\"방어\",\"move\":\"이동\"}.get(u[\"current_action\"], u[\"current_action\"])\n        lines.append(f\"  • {u['id']}({get_unit_type(u['id'])}): \"\n                     f\"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) \"\n                     f\"CP={u['combat_power']:.0f}% [{action_ko}]\")\n\n    if blufor and opfor:\n        bl_cx = sum(u[\"x\"] for u in blufor) / len(blufor)\n        bl_cy = sum(u[\"y\"] for u in blufor) / len(blufor)\n        op_cx = sum(u[\"x\"] for u in opfor) / len(opfor)\n        op_cy = sum(u[\"y\"] for u in opfor) / len(opfor)\n        dist = ((bl_cx - op_cx)**2 + (bl_cy - op_cy)**2)**0.5\n        lines.append(f\"\\n**위협 거리:** {dist/1000:.1f}km\")\n\n    lines.append(\"\\n*LLM 상황 분석 중...*\")\n    return \"\\n\".join(lines)\n\n\ndef _build_situation_query(state: dict) -> str:\n    \"\"\"LLM 상황 분석용 쿼리 빌드.\"\"\"\n    try:\n        from wargame.scenario import get_unit_type\n    except Exception:\n        def get_unit_type(uid): return \"부대\"\n    lines = [f\"[워게임 상황 분석] 게임시간: {state['game_time_str']}\"]\n    for u in state[\"units\"]:\n        s = \"전투불능\" if u[\"status\"] == \"destroyed\" else f\"CP={u['combat_power']:.0f}%\"\n        lines.append(f\"  {u['side']} {u['id']}({get_unit_type(u['id'])}): \"\n                     f\"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {s} 행동={u['current_action']}\")\n    lines.append(\"\\n현재 전장 상황을 분석하고, OPFOR의 의도와 BLUFOR 즉각 대응 방안을 3가지 간결하게 제시해줘.\")\n    return \"\\n\".join(lines)\n\n\ndef wargame_refresh():\n    \"\"\"현재 워게임 상태를 UI에 반영.\"\"\"\n    eng = _wg_ensure_engine()\n    if eng is None:\n        msg = f\"워게임 모듈 로드 실패: {_wg_err if not _WARGAME_OK else '엔진 없음'}\"\n        return None, msg, \"\"\n    state = eng.get_state()\n    fig = _build_wargame_map(state)\n    status = _wg_status_text(state)\n    events = eng.db.get_recent_events(20)\n    log_text = \"\\n\".join(\n        f\"[{e['event_type']:10s}] T={e['tick']:4d} {e['message']}\"\n        for e in events\n    )\n    return fig, status, log_text\n\n\ndef wargame_start_pause():\n    eng = _wg_ensure_engine()\n    if eng is None:\n        return \"워게임 초기화 실패\", *wargame_refresh()\n    if eng.running:\n        eng.stop()\n        label = \"▶ 시뮬레이션 시작\"\n    else:\n        eng.start()\n        label = \"⏸ 일시정지\"\n    fig, status, log_text = wargame_refresh()\n    return label, fig, status, log_text\n\n\ndef wargame_reset_sim():\n    global _wg_engine, _wg_last_plan\n    if not _WARGAME_OK:\n        return \"초기화 실패\", None, \"\", \"\"\n    units = setup_bn_vs_bn()\n    if _wg_engine is not None:\n        _wg_engine.reset(units)\n    else:\n        _wg_engine = WargameEngine(units)\n        _wg_register_engine(_wg_engine)\n    _wg_last_plan = {}\n    fig, status, log_text = wargame_refresh()\n    return \"▶ 시뮬레이션 시작\", fig, status, log_text\n\n\ndef wargame_set_timescale(scale: float):\n    eng = _wg_ensure_engine()\n    if eng:\n        eng.time_scale = float(scale)\n    return wargame_refresh()\n\n\ndef wargame_request_llm_plan(history: List = None):\n    global _wg_last_plan\n    history = history or []\n    eng = _wg_ensure_engine()\n    if eng is None:\n        return history, \"워게임 초기화 실패\", None, \"\", \"\"\n    if _wg_planner is None:\n        return history, \"Planner 없음\", None, \"\", \"\"\n\n    state = eng.get_state()\n    agent = _get_agent()\n    agent_label = \"BattlefieldAgent\" if agent else \"규칙 기반\"\n\n    import json\n    from wargame.llm_planner import build_mission_query\n    query_text = build_mission_query(state)\n\n    # 채팅에 쿼리 추가\n    history = list(history)\n    history.append((f\"🧠 **LLM 임무계획 생성 요청** ({agent_label})\\n\\n\"\n                    f\"<details><summary>전송된 쿼리 보기</summary>\\n\\n\"\n                    f\"```\\n{query_text[:800]}{'...(생략)' if len(query_text)>800 else ''}\\n```\\n</details>\",\n                    \"처리 중...\"))\n\n    plan = _wg_planner.plan(state, agent=agent)\n    _wg_last_plan = plan\n    eng.apply_mission_plan(plan)\n    if plan.get(\"air_support_plans\"):\n        eng.apply_air_support_plan(plan)\n\n    plan_text = json.dumps(plan, ensure_ascii=False, indent=2)\n\n    # 임무계획 요약 채팅에 표시\n    reasoning = plan.get(\"reasoning\", \"\")\n    n_plans = len(plan.get(\"mission_plans\", []))\n    n_air = len(plan.get(\"air_support_plans\", []))\n    plan_summary = f\"**📋 임무계획 생성 완료** ({agent_label})\\n\\n\"\n    if reasoning:\n        plan_summary += f\"**판단 근거:** {reasoning}\\n\\n\"\n    plan_summary += f\"**지상 임무:** {n_plans}개 중대\\n\"\n    if n_air:\n        plan_summary += f\"**공중지원:** {n_air}건\\n\"\n    plan_summary += f\"\\n```json\\n{plan_text}\\n```\"\n    history[-1] = (history[-1][0], plan_summary)\n\n    fig, status, log_text = wargame_refresh()\n    return history, plan_text, fig, status, log_text\n\n\ndef wg_chat_send(message: str, history: List) -> Tuple[List, str]:\n    \"\"\"워게임 채팅창에서 직접 에이전트 쿼리.\"\"\"\n    if not message.strip():\n        return history, \"\"\n    history = list(history)\n\n    agent = _get_agent()\n    eng = _wg_ensure_engine()\n\n    # 워게임 상태를 컨텍스트로 첨부\n    context = \"\"\n    if eng is not None:\n        state = eng.get_state()\n        context = (\n            f\"[현재 워게임 상황] 게임시간={state['game_time_str']}\\n\"\n            + \"\\n\".join(\n                f\"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% \"\n                f\"위치=({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {u['status']}\"\n                for u in state[\"units\"]\n            )\n            + \"\\n\\n\"\n        )\n\n    history.append((message, \"처리 중...\"))\n\n    if agent is None:\n        history[-1] = (message, \"에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.\")\n        return history, \"\"\n\n    try:\n        full_query = context + message if context else message\n        response = agent.run(full_query, reset=False)\n        history[-1] = (message, str(response))\n    except Exception as e:\n        logger.error(f\"WG chat error: {e}\", exc_info=True)\n        history[-1] = (message, f\"오류: {e}\")\n\n    return history, \"\"\n\n\ndef wargame_refresh_with_alert(chatbot_history: List) -> tuple:\n    \"\"\"타이머 tick용: 지도 갱신 + OPFOR 기동 감지 시 채팅 알람 추가.\"\"\"\n    global _wg_last_opfor_ai_count\n    fig, status, log_text = wargame_refresh()\n    chatbot_history = list(chatbot_history or [])\n\n    eng = _wg_ensure_engine()\n    if eng is not None:\n        state = eng.get_state()\n        current_count = state.get(\"opfor_ai_fire_count\", 0)\n        if current_count > _wg_last_opfor_ai_count:\n            _wg_last_opfor_ai_count = current_count\n            alert_msg = _build_opfor_alert(state)\n            chatbot_history.append((\"⚠️ 시스템 알람\", alert_msg))\n\n    return fig, status, log_text, chatbot_history\n\n\n\ndef clear_chat_history() -> Tuple[List, str]:\n    \"\"\"채팅 히스토리와 상황 메모리를 초기화합니다.\"\"\"\n    global _last_situation_analysis\n    _last_situation_analysis = \"\"\n    try:\n        from tools.strategy_advisor_tool import clear_situation_memory\n        clear_situation_memory()\n    except Exception:\n        pass\n    return [], \"대화 기록과 상황 분석 메모리가 초기화되었습니다.\"\n\n\ndef get_situation_memory_status() -> str:\n    \"\"\"현재 상황 분석 메모리 상태를 반환합니다.\"\"\"\n    try:\n        from tools.strategy_advisor_tool import get_situation_memory\n        memory = get_situation_memory()\n        if memory.get(\"situation_analysis\"):\n            ts = memory.get(\"analysis_timestamp\", \"\")\n            preview = memory[\"situation_analysis\"][:200] + \"...\"\n            return f\"상황 분석 메모리 활성 (분석 시각: {ts})\\n\\n미리보기:\\n{preview}\"\n        return \"상황 분석 메모리가 비어 있습니다. 먼저 영상 분석을 수행하세요.\"\n    except Exception as e:\n        return f\"메모리 상태 조회 오류: {e}\"\n\n\n# ─────────────────────────────────────────────\n# Gradio 앱 빌더\n# ─────────────────────────────────────────────\n\ndef create_app(agent=None) -> gr.Blocks:\n    \"\"\"\n    Gradio 앱을 생성하여 반환합니다.\n\n    Args:\n        agent: 초기화된 BattlefieldAgent 인스턴스 (None이면 앱 내 알림)\n    \"\"\"\n    global _agent\n    _agent = agent\n\n    ui_cfg = _load_ui_config()\n\n    with gr.Blocks(\n        title=ui_cfg.get(\"title\", \"C2 군사 전략 AI\"),\n        theme=gr.themes.Base(primary_hue=\"slate\", secondary_hue=\"gray\"),\n    ) as app:\n\n        gr.Markdown(f\"\"\"\n# {ui_cfg.get('title', 'C2 군사 전략 AI - EXAONE4 + EXAONE Deep')}\n{ui_cfg.get('description', '')}\n\n**듀얼 모델 아키텍처:**\n- **EXAONE4**: 영상 분석, 상황 판단, 최종 응답 생성\n- **EXAONE Deep**: 전략/전술 전문 추천 (EXAONE4의 상황 분석을 바탕으로 호출됨)\n        \"\"\")\n\n        with gr.Tabs():\n          with gr.Tab(\"🎖️ AI 에이전트\"):\n            with gr.Row():\n              # ─── 왼쪽 패널: 영상 분석 ───────────────────────\n              with gr.Column(scale=1):\n                gr.Markdown(\"## 영상 분석\")\n\n                gr.Markdown(\"#### 직접 업로드\")\n                video_upload = gr.File(\n                    label=\"군사 영상 업로드 (mp4, avi, mov)\",\n                    file_types=[\".mp4\", \".avi\", \".mov\", \".mkv\"],\n                )\n                collection_input = gr.Textbox(\n                    label=\"컬렉션명\",\n                    value=\"default\",\n                    placeholder=\"컬렉션 이름 입력\",\n                )\n                analyze_btn = gr.Button(\"영상 분석 시작\", variant=\"primary\")\n\n                gr.Markdown(\"#### 예시 영상\")\n                sample_dropdown = gr.Dropdown(\n                    label=\"예시 영상 선택\",\n                    choices=_get_sample_video_choices(),\n                    value=None,\n                    interactive=True,\n                )\n                with gr.Row():\n                    sample_refresh_btn = gr.Button(\"목록 새로고침\", scale=1)\n                    sample_analyze_btn = gr.Button(\"예시 영상 분석\", variant=\"primary\", scale=2)\n\n                analysis_status = gr.Textbox(\n                    label=\"분석 상태\",\n                    lines=6,\n                    interactive=False,\n                )\n\n                gr.Markdown(\"### 분석된 영상 목록\")\n                video_list = gr.CheckboxGroup(\n                    label=\"쿼리할 영상 선택\",\n                    choices=[],\n                    value=[],\n                )\n                video_select_status = gr.Textbox(\n                    label=\"선택 상태\",\n                    value=\"선택된 비디오 없음\",\n                    interactive=False,\n                )\n\n                gr.Markdown(\"### 상황 분석 메모리\")\n                memory_status_btn = gr.Button(\"메모리 상태 확인\")\n                memory_status_box = gr.Textbox(\n                    label=\"EXAONE4 상황 분석 메모리\",\n                    lines=5,\n                    interactive=False,\n                )\n\n            # ─── 오른쪽 패널: 채팅 인터페이스 ───────────────\n            with gr.Column(scale=2):\n                gr.Markdown(\"## AI 에이전트 채팅\")\n                gr.Markdown(\n                    \"영상 분석 및 전략/전술 관련 질문을 입력하세요. \"\n                    \"전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.\"\n                )\n\n                chatbot = gr.Chatbot(\n                    label=\"대화\",\n                    height=500,\n                    show_copy_button=True,\n                )\n\n                with gr.Row():\n                    query_input = gr.Textbox(\n                        label=\"쿼리 입력\",\n                        placeholder=(\n                            \"예: '영상에서 탐지된 적 기갑부대를 분석해줘' 또는 \"\n                            \"'현재 상황에서 방어 전술을 추천해줘'\"\n                        ),\n                        lines=2,\n                        scale=5,\n                    )\n                    send_btn = gr.Button(\"전송\", variant=\"primary\", scale=1)\n\n                with gr.Row():\n                    clear_btn = gr.Button(\"대화 초기화\", variant=\"secondary\")\n                    clear_status = gr.Textbox(\n                        label=\"\",\n                        value=\"\",\n                        interactive=False,\n                        scale=3,\n                    )\n\n                gr.Markdown(\"### 예시 쿼리\")\n                example_queries = ui_cfg.get(\"examples\", [\n                    \"영상에서 탐지된 적 전력을 분석해줘\",\n                    \"현재 전장 상황에 대한 전략적 대응 방안을 추천해줘\",\n                    \"적 기갑부대에 대한 전술적 대응 방안을 제안해줘\",\n                    \"아군 방어 진지 구축을 위한 전략을 수립해줘\",\n                ])\n                gr.Examples(\n                    examples=[[q] for q in example_queries],\n                    inputs=[query_input],\n                    label=\"클릭하여 예시 쿼리 입력\",\n                )\n\n          # ─── 워게임 시뮬레이터 탭 ────────────────────────────\n          with gr.Tab(\"⚔️ 워게임 시뮬레이터\"):\n            if not _WARGAME_OK:\n                gr.Markdown(f\"⚠️ 워게임 모듈 로드 실패: `{_wg_err}`\")\n            else:\n                gr.Markdown(\n                    \"## 파이썬 워게임 시뮬레이터\\n\"\n                    \"LLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다.\"\n                )\n                # ── 상단: 지도 + 채팅창 ──────────────────────────\n                with gr.Row():\n                    with gr.Column(scale=3):\n                        wg_map = gr.Plot(label=\"전장 지도\", show_label=False)\n\n                    with gr.Column(scale=2):\n                        wg_alert_md = gr.Markdown(\"\", visible=True)\n                        gr.Markdown(\"### 전술 AI 채팅\")\n                        wg_chatbot = gr.Chatbot(\n                            label=\"\",\n                            height=220,\n                            show_copy_button=True,\n                            bubble_full_width=False,\n                        )\n                        with gr.Row():\n                            wg_chat_input = gr.Textbox(\n                                label=\"\",\n                                placeholder=\"워게임 상황 분석, 전술 조언, 임무계획 수정 등 질문하세요...\",\n                                lines=2,\n                                scale=5,\n                            )\n                            wg_chat_send_btn = gr.Button(\"전송\", variant=\"primary\", scale=1)\n                        wg_chat_clear_btn = gr.Button(\"대화 초기화\", variant=\"secondary\", size=\"sm\")\n\n                # ── 하단: 제어 패널 + 임무계획·이벤트 로그 ────────\n                with gr.Row():\n                    with gr.Column(scale=1):\n                        gr.Markdown(\"### 시뮬레이션 제어\")\n                        wg_startstop_btn = gr.Button(\"▶ 시뮬레이션 시작\", variant=\"primary\")\n                        wg_reset_btn     = gr.Button(\"⏹ 초기화\", variant=\"secondary\")\n                        wg_timescale = gr.Slider(\n                            minimum=0.1, maximum=600, value=60, step=0.1,\n                            label=\"시간 배율 (실제 1초 = X 게임 초)\",\n                        )\n                        wg_apply_scale_btn = gr.Button(\"배율 적용\", size=\"sm\")\n                        gr.Markdown(\"### LLM 임무계획\")\n                        wg_plan_btn = gr.Button(\"🧠 LLM 임무계획 생성\", variant=\"primary\")\n                        gr.Markdown(\"### 부대 전력 현황\")\n                        wg_status = gr.Textbox(\n                            label=\"\", lines=5, interactive=False,\n                            elem_id=\"wg_status\",\n                        )\n\n                    with gr.Column(scale=2):\n                        wg_plan_box = gr.Code(\n                            language=\"json\", lines=8, interactive=False,\n                            label=\"LLM 생성 임무계획 (JSON)\",\n                        )\n\n                    with gr.Column(scale=2):\n                        wg_event_log = gr.Textbox(\n                            label=\"전투 이벤트 로그\", lines=8, interactive=False,\n                        )\n\n                wg_timer = gr.Timer(value=2)\n\n          # ─── 전장 지도 탭 (ARMA3) ─────────────────────────────\n          with gr.Tab(\"🗺️ 전장 지도\"):\n            gr.Markdown(\n                \"ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다.  \"\n                \"relay.py 실행 중일 때 10초마다 자동 갱신됩니다.\"\n            )\n            with gr.Row():\n                with gr.Column(scale=3):\n                    map_plot = gr.Plot(label=\"전장 상황도\", show_label=False)\n                with gr.Column(scale=1):\n                    gr.Markdown(\"### 병력 현황\")\n                    map_status = gr.Textbox(\n                        label=\"\",\n                        lines=6,\n                        interactive=False,\n                        elem_id=\"map_status\",\n                    )\n                    map_refresh_btn = gr.Button(\"🔄 새로고침\", variant=\"primary\")\n                    gr.Markdown(\n                        \"**마커 범례**\\n\"\n                        \"- 🔵 원 = BLUFOR 보병\\n\"\n                        \"- 🔵 사각 = BLUFOR APC/차량\\n\"\n                        \"- 🔵 다이아 = BLUFOR 장갑\\n\"\n                        \"- 🔴 원 = OPFOR 보병\\n\"\n                        \"- 🔴 사각 = OPFOR APC/차량\\n\"\n                        \"- 🔴 다이아 = OPFOR 장갑\\n\"\n                        \"- 큰 다이아 = 그룹 지휘관 위치\\n\\n\"\n                        \"**좌표계**\\n\"\n                        \"x = 동쪽(m), y = 북쪽(m)\\n\"\n                        \"Altis 맵 기준 (0 ~ 30,000m)\"\n                    )\n\n            map_timer = gr.Timer(value=10)\n\n        # ─── 이벤트 핸들러 ──────────────────────────────────\n\n        analyze_btn.click(\n            fn=analyze_video,\n            inputs=[video_upload, collection_input],\n            outputs=[analysis_status, video_list],\n        )\n\n        sample_analyze_btn.click(\n            fn=analyze_sample_video,\n            inputs=[sample_dropdown, collection_input],\n            outputs=[analysis_status, video_list],\n        )\n\n        sample_refresh_btn.click(\n            fn=lambda: gr.update(choices=_get_sample_video_choices()),\n            outputs=[sample_dropdown],\n        )\n\n        video_list.change(\n            fn=update_active_videos,\n            inputs=[video_list],\n            outputs=[video_select_status],\n        )\n\n        send_btn.click(\n            fn=chat,\n            inputs=[query_input, chatbot],\n            outputs=[query_input, chatbot],\n        )\n\n        query_input.submit(\n            fn=chat,\n            inputs=[query_input, chatbot],\n            outputs=[query_input, chatbot],\n        )\n\n        clear_btn.click(\n            fn=clear_chat_history,\n            outputs=[chatbot, clear_status],\n        )\n\n        memory_status_btn.click(\n            fn=get_situation_memory_status,\n            outputs=[memory_status_box],\n        )\n\n        # ─── 워게임 이벤트 핸들러 ────────────────────────────\n        if _WARGAME_OK:\n            _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]\n\n            wg_startstop_btn.click(\n                fn=wargame_start_pause,\n                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],\n            )\n            wg_reset_btn.click(\n                fn=wargame_reset_sim,\n                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],\n            )\n            wg_apply_scale_btn.click(\n                fn=wargame_set_timescale,\n                inputs=[wg_timescale],\n                outputs=_WG_OUTPUTS,\n            )\n            # LLM 임무계획 → 채팅에 결과 표시\n            wg_plan_btn.click(\n                fn=wargame_request_llm_plan,\n                inputs=[wg_chatbot],\n                outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log],\n            )\n            # 직접 채팅 전송\n            wg_chat_send_btn.click(\n                fn=wg_chat_send,\n                inputs=[wg_chat_input, wg_chatbot],\n                outputs=[wg_chatbot, wg_chat_input],\n            )\n            wg_chat_input.submit(\n                fn=wg_chat_send,\n                inputs=[wg_chat_input, wg_chatbot],\n                outputs=[wg_chatbot, wg_chat_input],\n            )\n            wg_chat_clear_btn.click(\n                fn=lambda: ([], \"\"),\n                outputs=[wg_chatbot, wg_chat_input],\n            )\n            # 타이머: 지도 갱신 + OPFOR 기동 알람\n            wg_timer.tick(\n                fn=wargame_refresh_with_alert,\n                inputs=[wg_chatbot],\n                outputs=[wg_map, wg_status, wg_event_log, wg_chatbot],\n            )\n            app.load(\n                fn=wargame_refresh,\n                outputs=_WG_OUTPUTS,\n            )\n\n        # ─── 전장 지도 이벤트 ────────────────────────────────\n        map_refresh_btn.click(\n            fn=get_battlefield_map,\n            outputs=[map_plot, map_status],\n        )\n        map_timer.tick(\n            fn=get_battlefield_map,\n            outputs=[map_plot, map_status],\n        )\n        # 탭 진입 시 초기 로드\n        app.load(\n            fn=get_battlefield_map,\n            outputs=[map_plot, map_status],\n        )\n\n    return app\n\n\ndef launch_app(agent=None, **kwargs):\n    \"\"\"앱을 생성하고 실행합니다.\"\"\"\n    ui_cfg = _load_ui_config()\n    app = create_app(agent=agent)\n    app.launch(\n        server_name=kwargs.get(\"server_name\", ui_cfg.get(\"server_name\", \"0.0.0.0\")),\n        server_port=kwargs.get(\"server_port\", ui_cfg.get(\"server_port\", 7860)),\n        share=kwargs.get(\"share\", ui_cfg.get(\"share\", False)),\n    )\n
+"""
+C2 군사 AI - Gradio 웹 인터페이스
+
+핵심 기능:
+1. 군사 영상 업로드 및 분석 (EXAONE4)
+2. EXAONE4 상황 분석 응답 → situation_memory 자동 갱신
+3. 전략/전술 쿼리 시 EXAONE4 → EXAONE Deep → EXAONE4 파이프라인 자동 실행
+4. 채팅 히스토리 기반 컨텍스트 유지
+
+EXAONE4는 영상 분석 결과를 situation_memory에 저장하고,
+이후 전략/전술 쿼리 시 strategy_advisor_tool이 이를 EXAONE Deep에 자동 전달합니다.
+"""
+import re
+import time
+import logging
+import gradio as gr
+import yaml
+from pathlib import Path
+from typing import List, Optional, Tuple, Generator
+
+try:
+    import plotly.graph_objects as go
+    _PLOTLY_OK = True
+except ImportError:
+    _PLOTLY_OK = False
+
+try:
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+    from wargame import WargameEngine, setup_bn_vs_bn
+    from wargame.llm_planner import MissionPlanner
+    from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
+    _WARGAME_OK = True
+except Exception as _wg_err:
+    _WARGAME_OK = False
+    _wg_err = str(_wg_err)
+
+logger = logging.getLogger(__name__)
+
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+SAMPLES_DIR = Path(__file__).parent.parent / "samples"
+
+
+def _load_ui_config() -> dict:
+    with open(CONFIG_DIR / "agent_config.yaml") as f:
+        return yaml.safe_load(f).get("gradio", {})
+
+
+# ─────────────────────────────────────────────
+# 전역 상태
+# ─────────────────────────────────────────────
+_agent = None
+_video_analysis_system = None
+_analyzed_videos: List[dict] = []
+_active_video_ids: List[str] = []
+_last_situation_analysis: str = ""
+
+# ── 워게임 전역 상태 ──────────────────────────────────────────────
+_wg_engine: Optional["WargameEngine"] = None
+_wg_planner: Optional["MissionPlanner"] = None
+_wg_last_plan: dict = {}
+_wg_last_opfor_ai_count: int = 0      # 마지막으로 처리한 OPFOR AI 발동 횟수
+
+
+def _get_agent():
+    global _agent
+    return _agent
+
+
+def _is_situation_analysis_response(response: str) -> bool:
+    """
+    EXAONE4의 응답이 상황 분석 결과인지 판별합니다.
+    전장 상황 분석 보고서 형식이거나 탐지 정보를 포함하면 True를 반환합니다.
+    """
+    situation_markers = [
+        "전장 상황 분석",
+        "탐지된 전력",
+        "상황 분석 보고서",
+        "battlefield situation",
+        "situation analysis",
+        "detected",
+        "탐지",
+        "이동 패턴",
+        "threat",
+        "위협",
+        "tank", "soldier", "truck", "전차", "병력",
+    ]
+    response_lower = response.lower()
+    matched = sum(1 for m in situation_markers if m.lower() in response_lower)
+    return matched >= 2
+
+
+def _update_situation_memory_if_needed(response: str, video_ids: List[str] = None):
+    """
+    EXAONE4 응답이 상황 분석 결과이면 situation_memory를 갱신합니다.
+    strategy_advisor_tool이 이를 읽어 EXAONE Deep에 전달합니다.
+    """
+    global _last_situation_analysis
+    if _is_situation_analysis_response(response):
+        _last_situation_analysis = response
+        try:
+            from tools.strategy_advisor_tool import update_situation_memory
+            update_situation_memory(response, video_ids or _active_video_ids)
+            logger.info("Situation memory updated from EXAONE4 analysis response")
+        except Exception as e:
+            logger.warning(f"Failed to update situation memory: {e}")
+
+
+def _is_strategy_query(text: str) -> bool:
+    """사용자 쿼리가 전략/전술 추천 요청인지 판별합니다."""
+    try:
+        from agent.battlefield_agent import is_strategy_query
+        return is_strategy_query(text)
+    except Exception:
+        strategy_kw = ["전략", "전술", "작전", "기동", "대응방안", "추천", "제안",
+                       "strategy", "tactics", "maneuver", "recommend"]
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in strategy_kw)
+
+
+# ─────────────────────────────────────────────
+# 비디오 분석 함수
+# ─────────────────────────────────────────────
+
+def analyze_video(video_file, collection_name: str, progress=gr.Progress()):
+    """
+    업로드된 군사 영상을 분석합니다.
+    EXAONE4가 이후 상황 분석에 사용할 수 있도록 DB에 저장합니다.
+    """
+    global _video_analysis_system, _analyzed_videos, _active_video_ids
+
+    choices = _get_video_list_choices()
+    if video_file is None:
+        return "영상 파일을 먼저 업로드하세요.", gr.update(choices=choices, value=choices)
+
+    try:
+        progress(0.1, desc="영상 분석 시스템 초기화 중...")
+        if _video_analysis_system is None:
+            from core_src.video_analysis_system import VideoAnalysisSystem
+            _video_analysis_system = VideoAnalysisSystem(collection_name=collection_name or "default")
+
+        progress(0.3, desc="비디오 분석 중 (객체 탐지, 임베딩 생성)...")
+        summary = _video_analysis_system.analyze_video(
+            video_path=video_file.name if hasattr(video_file, "name") else str(video_file),
+        )
+
+        video_id = summary["video_id"]
+        _analyzed_videos.append({
+            "video_id": video_id,
+            "filename": Path(video_file.name if hasattr(video_file, "name") else str(video_file)).name,
+            "summary": summary,
+        })
+        _active_video_ids = [v["video_id"] for v in _analyzed_videos]
+
+        # 도구 컨텍스트 업데이트
+        try:
+            from tools.videodb_query_tool import (
+                set_selected_video_ids,
+                register_videodb_manager,
+                register_video_collection,
+            )
+            set_selected_video_ids(_active_video_ids)
+            register_videodb_manager(collection_name or "default", _video_analysis_system.videodb)
+            register_video_collection(video_id, collection_name or "default")
+        except Exception as e:
+            logger.warning(f"Failed to update tool context: {e}")
+
+        if _agent:
+            _agent.set_video_context(_active_video_ids)
+
+        progress(1.0, desc="분석 완료!")
+
+        # 분석 결과 요약 메시지
+        obj_counts = summary.get("segments", [])
+        total_dets = summary.get("total_detections", 0)
+        result_msg = (
+            f"✓ 영상 분석 완료"
+            f"  - 비디오 ID: {video_id}"
+            f"  - 총 길이: {summary.get('duration', 0):.1f}초"
+            f"  - 세그먼트 수: {summary.get('segment_count', 0)}개"
+            f"  - 탐지된 객체 수: {total_dets}건"
+            f"이제 채팅창에서 영상에 대해 질문하거나 전략/전술 추천을 요청할 수 있습니다."
+        )
+        new_choices = _get_video_list_choices()
+        # gr.update로 choices와 value를 함께 설정해야 CheckboxGroup이 정상 동작
+        return result_msg, gr.update(choices=new_choices, value=new_choices)
+
+    except Exception as e:
+        logger.error(f"Video analysis error: {e}", exc_info=True)
+        choices = _get_video_list_choices()
+        return f"분석 오류: {e}", gr.update(choices=choices, value=choices)
+
+
+def _get_video_list_choices() -> list:
+    return [f"{v['video_id']} - {v['filename']}" for v in _analyzed_videos]
+
+
+def _get_sample_video_choices() -> list:
+    """samples/ 디렉토리에서 영상 파일 목록을 반환합니다."""
+    SAMPLES_DIR.mkdir(exist_ok=True)
+    exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+    return sorted(p.name for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in exts)
+
+
+def analyze_sample_video(sample_name: str, collection_name: str, progress=gr.Progress()):
+    """samples/ 폴더의 영상을 선택하여 분석합니다."""
+    if not sample_name:
+        choices = _get_video_list_choices()
+        return "예시 영상을 선택하세요.", gr.update(choices=choices, value=choices)
+
+    sample_path = SAMPLES_DIR / sample_name
+    if not sample_path.exists():
+        choices = _get_video_list_choices()
+        return f"파일을 찾을 수 없습니다: {sample_name}", gr.update(choices=choices, value=choices)
+
+    # 경로를 name 속성처럼 접근할 수 있는 객체로 래핑
+    class _FileLike:
+        def __init__(self, path):
+            self.name = str(path)
+
+    return analyze_video(_FileLike(sample_path), collection_name, progress)
+
+
+def update_active_videos(selected_items: List[str]) -> str:
+    """UI에서 선택된 비디오를 활성 컨텍스트로 설정합니다."""
+    global _active_video_ids
+    _active_video_ids = []
+    for item in (selected_items or []):
+        vid = item.split(" - ")[0].strip()
+        _active_video_ids.append(vid)
+
+    try:
+        from tools.videodb_query_tool import set_selected_video_ids
+        set_selected_video_ids(_active_video_ids)
+    except Exception as e:
+        logger.warning(f"Failed to update video context: {e}")
+
+    if _agent:
+        _agent.set_video_context(_active_video_ids)
+
+    return f"활성 비디오: {len(_active_video_ids)}개 선택됨"
+
+
+# ─────────────────────────────────────────────
+# 채팅 처리 함수 (핵심 로직)
+# ─────────────────────────────────────────────
+
+def chat(
+    message: str,
+    history: List[Tuple[str, str]],
+) -> Tuple[str, List[Tuple[str, str]]]:
+    """
+    사용자 메시지를 처리합니다.
+
+    처리 흐름:
+    1. 영상 분석 쿼리 → EXAONE4가 비디오 도구로 직접 처리
+       → 응답이 상황 분석이면 situation_memory 자동 갱신
+    2. 전략/전술 쿼리 → EXAONE4가 strategy_advisor_tool 호출
+       → EXAONE Deep이 [상황 분석 + 쿼리]로 전략/전술 권고 생성
+       → EXAONE4가 최종 종합 응답 반환
+    """
+    if not message.strip():
+        return "", history
+
+    agent = _get_agent()
+    if agent is None:
+        history.append((message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요."))
+        return "", history
+
+    # 전략/전술 쿼리 감지 → 사전 상황 분석 확인
+    is_strategy = _is_strategy_query(message)
+    if is_strategy and not _last_situation_analysis:
+        warning = (
+            "[안내] 전략/전술 추천을 위해서는 먼저 군사 영상을 분석하는 것을 권장합니다."
+            "상황 분석 없이도 일반적인 군사 원칙 기반으로 추천이 가능하지만, "
+            "영상 분석 후 쿼리하면 더 정확한 상황 기반 추천을 받을 수 있습니다."
+        )
+        history.append((message, warning + "처리 중..."))
+    else:
+        history.append((message, "처리 중..."))
+
+    try:
+        response = agent.run(message)
+        response_text = str(response)
+
+        # EXAONE4 응답이 상황 분석이면 situation_memory 갱신
+        _update_situation_memory_if_needed(response_text, _active_video_ids)
+
+        # 전략 쿼리 응답에 듀얼 모델 사용 표시 추가
+        if is_strategy:
+            response_text = _annotate_dual_model_response(response_text)
+
+        history[-1] = (message, response_text)
+
+    except Exception as e:
+        logger.error(f"Agent run error: {e}", exc_info=True)
+        error_msg = f"처리 중 오류가 발생했습니다: {e}"
+        history[-1] = (message, error_msg)
+
+    return "", history
+
+
+def _annotate_dual_model_response(response: str) -> str:
+    """전략/전술 응답에 듀얼 모델 처리 표시를 추가합니다."""
+    annotation = "---*이 응답은 EXAONE4(상황 분석) + EXAONE Deep(전략/전술 추천)의 협업으로 생성되었습니다.*"
+    return response + annotation
+
+
+# ─────────────────────────────────────────────
+# 전장 지도 함수
+# ─────────────────────────────────────────────
+
+# 유닛 카테고리별 마커 설정
+_MARKER_SYMBOL = {
+    "infantry":  "circle",
+    "apc":       "square",
+    "armor":     "diamond",
+    "helicopter":"triangle-up",
+    "aircraft":  "triangle-up",
+    "vehicle":   "square",
+    "truck":     "square",
+    "unknown":   "circle",
+}
+_MARKER_SIZE = {
+    "infantry": 5, "apc": 8, "armor": 9,
+    "helicopter": 8, "aircraft": 8,
+    "vehicle": 6, "truck": 6, "unknown": 5,
+}
+
+
+def _build_map_figure(state: dict):
+    """ARMA3 전장 상태를 Plotly Figure로 변환합니다."""
+    units        = state.get("units", [])
+    groups       = state.get("groups", [])
+    mission_time = state.get("mission_time", 0)
+    last_updated = state.get("last_updated", "데이터 없음")
+
+    fig = go.Figure()
+
+    if not units and not groups:
+        fig.add_annotation(
+            text="ARMA3 데이터 없음<br>relay.py가 실행 중인지 확인하세요",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            font=dict(size=16, color="#aaaaaa"),
+            showarrow=False,
+        )
+    else:
+        # ── 유닛: 진영·카테고리별 그룹화하여 플롯 ──────────────
+        from collections import defaultdict
+        buckets = defaultdict(list)
+        for u in units:
+            side = u.get("side", "UNKNOWN")
+            cat  = u.get("cat", "unknown")
+            buckets[(side, cat)].append(u)
+
+        for (side, cat), unit_list in buckets.items():
+            base_color = "#4a90d9" if side == "BLUFOR" else "#e05252" if side == "OPFOR" else "#aaaaaa"
+            symbol = _MARKER_SYMBOL.get(cat, "circle")
+            size   = _MARKER_SIZE.get(cat, 5)
+            hover  = [
+                f"그룹: {u.get('grp','')}"
+                f"종류: {cat}"
+                f"HP: {u.get('hp', 0)}%"
+                f"위치: ({u.get('x',0):.0f}, {u.get('y',0):.0f})"
+                for u in unit_list
+            ]
+            fig.add_trace(go.Scatter(
+                x=[u.get("x", 0) for u in unit_list],
+                y=[u.get("y", 0) for u in unit_list],
+                mode="markers",
+                name=f"{side} {cat} ({len(unit_list)})",
+                marker=dict(color=base_color, size=size, symbol=symbol,
+                            line=dict(width=0.5, color="rgba(255,255,255,0.3)")),
+                text=hover,
+                hovertemplate="%{text}<extra></extra>",
+                legendgroup=side,
+            ))
+
+        # ── 그룹 지휘관 위치 + 레이블 ─────────────────────────
+        for g in groups:
+            side  = g.get("side", "UNKNOWN")
+            color = "#00aaff" if side == "BLUFOR" else "#ff4444" if side == "OPFOR" else "#aaaaaa"
+            gid   = g.get("id", "?")
+            strength = g.get("strength", 0)
+            fig.add_trace(go.Scatter(
+                x=[g.get("x", 0)],
+                y=[g.get("y", 0)],
+                mode="markers+text",
+                name=gid,
+                marker=dict(color=color, size=14, symbol="diamond",
+                            line=dict(width=1.5, color="white")),
+                text=[f"<b>{gid}</b>"],
+                textposition="top center",
+                textfont=dict(color="white", size=11),
+                hovertemplate=(
+                    f"<b>{gid}</b><br>진영: {side}<br>"
+                    f"잔존 병력: {strength}<br>"
+                    f"위치: ({g.get('x',0):.0f}, {g.get('y',0):.0f})"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
+                legendgroup=side,
+            ))
+
+    mins, secs = divmod(int(mission_time), 60)
+    fig.update_layout(
+        title=dict(
+            text=f"전장 상황도  |  미션 경과: {mins:02d}:{secs:02d}  |  최종 수신: {last_updated}",
+            font=dict(size=14, color="#dddddd"),
+        ),
+        xaxis=dict(
+            title="동쪽 (m)", range=[0, 30000],
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaaaaa"),
+        ),
+        yaxis=dict(
+            title="북쪽 (m)", range=[0, 30000],
+            scaleanchor="x", scaleratio=1,
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaaaaa"),
+        ),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f1923",
+        font=dict(color="#dddddd"),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0.5)",
+            bordercolor="#334455",
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        height=620,
+        margin=dict(l=60, r=20, t=50, b=50),
+        hovermode="closest",
+    )
+    return fig
+
+
+def get_battlefield_map():
+    """전장 지도와 상태 텍스트를 반환합니다."""
+    if not _PLOTLY_OK:
+        return None, "plotly 미설치: pip install plotly"
+
+    try:
+        from core_src.arma3_db_manager import load_state
+        state = load_state()
+    except Exception as e:
+        return None, f"상태 로드 오류: {e}"
+
+    fig = _build_map_figure(state)
+
+    summary = state.get("summary", {})
+    blu = summary.get("blufor", {})
+    opp = summary.get("opfor", {})
+    units = state.get("units", [])
+
+    status_lines = [
+        f"🔵 BLUFOR  보병: {blu.get('infantry', 0):>4}  장갑/APC: {blu.get('armor', 0):>3}  헬기: {blu.get('helicopter', 0):>2}",
+        f"🔴 OPFOR   보병: {opp.get('infantry', 0):>4}  장갑/APC: {opp.get('armor', 0):>3}  헬기: {opp.get('helicopter', 0):>2}",
+        f"────────────────────────────────",
+        f"전체 유닛: {len(units)}  |  미션 시간: {state.get('mission_time', 0)}s",
+        f"최종 수신: {state.get('last_updated', '없음')}",
+    ]
+    return fig, "".join(status_lines)
+
+
+# ─────────────────────────────────────────────────────────────────
+# 워게임 시뮬레이터 함수
+# ─────────────────────────────────────────────────────────────────
+
+def _wg_register_engine(engine):
+    """생성된 엔진을 쿼리·임무계획 도구에 등록."""
+    try:
+        from tools.wargame_query_tool import register_wargame_engine as _rq
+        _rq(engine)
+    except Exception:
+        pass
+    try:
+        from tools.wargame_mission_tool import register_wargame_engine as _rm
+        _rm(engine)
+    except Exception:
+        pass
+    try:
+        from tools.wargame_strategy_tool import register_wargame_engine as _rs
+        _rs(engine)
+    except Exception:
+        pass
+    try:
+        from tools.wargame_attack_advisor_tool import register_wargame_engine as _ra
+        _ra(engine)
+    except Exception:
+        pass
+
+
+
+def _wg_ensure_engine() -> Optional["WargameEngine"]:
+    global _wg_engine, _wg_planner
+    if not _WARGAME_OK:
+        return None
+    if _wg_engine is None:
+        units = setup_bn_vs_bn()
+        _wg_engine = WargameEngine(units)
+        _wg_planner = MissionPlanner()
+        _wg_register_engine(_wg_engine)
+    return _wg_engine
+
+
+def _build_wargame_map(state: dict) -> Optional[go.Figure]:
+    """워게임 현황을 Plotly 지도로 시각화."""
+    if not _PLOTLY_OK:
+        return None
+
+    fig = go.Figure()
+
+    # 지형 고도 히트맵 (다운샘플 60x60)
+    try:
+        hm = get_heightmap()
+        step = max(1, GRID_H // 60)
+        hm_down = hm[::step, ::step]
+        x_scale = MAP_W / hm_down.shape[1]
+        y_scale = MAP_H / hm_down.shape[0]
+        fig.add_trace(go.Heatmap(
+            z=hm_down.tolist(),
+            x=[i * x_scale for i in range(hm_down.shape[1])],
+            y=[i * y_scale for i in range(hm_down.shape[0])],
+            colorscale="Greens",
+            showscale=False,
+            opacity=0.35,
+            hoverinfo="skip",
+        ))
+    except Exception:
+        pass
+
+    # 부대 마커 + 웨이포인트 경로
+    _SIDE_COLOR = {"BLUFOR": "#4FC3F7", "OPFOR": "#EF5350"}
+    _STATUS_SYM = {"active": "circle", "suppressed": "triangle-up", "destroyed": "x"}
+
+    # BLUFOR 인텔 인덱스 (unit_id → intel entry)
+    blufor_intel_index = {
+        e["unit_id"]: e
+        for e in state.get("intelligence", {}).get("BLUFOR", [])
+    }
+
+    for u in state.get("units", []):
+        color = u.get("color", _SIDE_COLOR.get(u["side"], "gray"))
+        sym = _STATUS_SYM.get(u["status"], "circle")
+        size = 18 if u["status"] == "active" else 12
+        cp = u["combat_power"]
+        elev = u.get("elevation", 0)
+
+        if u["side"] == "OPFOR":
+            # OPFOR는 BLUFOR 인텔 기준으로 표시
+            intel = blufor_intel_index.get(u["id"])
+            if intel is None:
+                continue
+
+            det_status = intel["status"]
+            kx, ky = intel["known_x"], intel["known_y"]
+
+            if det_status == "detected":
+                # 정확한 위치 — 실제 위치와 동일
+                fig.add_trace(go.Scatter(
+                    x=[kx], y=[ky],
+                    mode="markers+text",
+                    name=f"OPFOR {u['id']} (탐지됨)",
+                    marker=dict(symbol=sym, size=size, color="#EF5350",
+                                line=dict(color="white", width=1.5),
+                                opacity=0.3 if u["status"] == "destroyed" else 1.0),
+                    text=[f"{u['id']}<br>{cp:.0f}%"],
+                    textposition="top center",
+                    textfont=dict(color="#EF5350", size=11),
+                    hovertemplate=(
+                        f"<b>{u['id']}</b> [탐지됨]<br>"
+                        f"위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>"
+                        f"고도: {elev:.0f}m<br>"
+                        f"전투력: {cp:.1f}%<br>"
+                        f"상태: {u['status']}<br>"
+                        f"탐지: {intel.get('detected_by','')}<extra></extra>"
+                    ),
+                ))
+                # 웨이포인트 경로선 (탐지된 경우만)
+                wps = u.get("waypoints", [])
+                if wps:
+                    path_x = [kx] + [w[0] for w in wps]
+                    path_y = [ky] + [w[1] for w in wps]
+                    fig.add_trace(go.Scatter(
+                        x=path_x, y=path_y, mode="lines",
+                        line=dict(color="#EF5350", width=1.5, dash="dot"),
+                        hoverinfo="skip", showlegend=False,
+                    ))
+
+            elif det_status == "approximate":
+                # 개략 위치 — 오차 있는 추정 좌표
+                fig.add_trace(go.Scatter(
+                    x=[kx], y=[ky],
+                    mode="markers+text",
+                    name=f"OPFOR {u['id']} (개략)",
+                    marker=dict(symbol="circle-open", size=20, color="#FFA726",
+                                line=dict(color="#FFA726", width=2)),
+                    text=[f"?{u['id']}"],
+                    textposition="top center",
+                    textfont=dict(color="#FFA726", size=11),
+                    hovertemplate=(
+                        f"<b>?{u['id']}</b> [개략 위치]<br>"
+                        f"추정 위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>"
+                        f"종류: 미확인 / 전투력: 미확인<br>"
+                        f"<i>정찰부대 파견으로 정확한 위치 파악 가능</i><extra></extra>"
+                    ),
+                ))
+
+            else:  # "lost"
+                # 최종 탐지 위치 — 현재 위치 미확인
+                fig.add_trace(go.Scatter(
+                    x=[kx], y=[ky],
+                    mode="markers+text",
+                    name=f"OPFOR {u['id']} (탐지 상실)",
+                    marker=dict(symbol="circle-open", size=16, color="#9E9E9E",
+                                line=dict(color="#9E9E9E", width=1.5), opacity=0.6),
+                    text=[f"({u['id']})"],
+                    textposition="top center",
+                    textfont=dict(color="#9E9E9E", size=10),
+                    hovertemplate=(
+                        f"<b>{u['id']}</b> [탐지 상실]<br>"
+                        f"최종 탐지 위치: ({kx/1000:.1f}km, {ky/1000:.1f}km)<br>"
+                        f"종류: {intel.get('unit_type') or '미확인'}<br>"
+                        f"<i>현재 위치 미확인</i><extra></extra>"
+                    ),
+                ))
+            continue  # OPFOR 처리 완료
+
+        # BLUFOR — 항상 실제 위치 표시
+        # 웨이포인트 경로선
+        wps = u.get("waypoints", [])
+        if wps:
+            path_x = [u["x"]] + [w[0] for w in wps]
+            path_y = [u["y"]] + [w[1] for w in wps]
+            fig.add_trace(go.Scatter(
+                x=path_x, y=path_y,
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dot"),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+
+        # 부대 마커
+        fig.add_trace(go.Scatter(
+            x=[u["x"]], y=[u["y"]],
+            mode="markers+text",
+            name=f"{u['side']} {u['id']}",
+            marker=dict(
+                symbol=sym,
+                size=size,
+                color=color,
+                line=dict(color="white", width=1.5),
+                opacity=0.3 if u["status"] == "destroyed" else 1.0,
+            ),
+            text=[f"{u['id']}<br>{cp:.0f}%"],
+            textposition="top center",
+            textfont=dict(color=color, size=11),
+            hovertemplate=(
+                f"<b>{u['id']}</b><br>"
+                f"위치: ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)<br>"
+                f"고도: {elev:.0f}m<br>"
+                f"전투력: {cp:.1f}%<br>"
+                f"상태: {u['status']}<br>"
+                f"행동: {u['current_action']}<extra></extra>"
+            ),
+        ))
+
+    # 공중지원 반경 시각화
+    import math as _math
+    _AIR_COLOR = {
+        "cas":        "#FF6F00",   # 주황
+        "strike":     "#F50057",   # 분홍빨강
+        "artillery":  "#AA00FF",   # 보라
+        "helicopter": "#00BFA5",   # 청록
+    }
+    _AIR_STATUS_ALPHA = {"pending": 0.15, "active": 0.35, "completed": 0.05}
+    for air in state.get("air_supports", []):
+        clr = _AIR_COLOR.get(air["support_type"], "#FFFFFF")
+        alpha = _AIR_STATUS_ALPHA.get(air["status"], 0.1)
+        r = air["radius"]
+        cx, cy = air["target_x"], air["target_y"]
+        # 원 근사 (36 포인트)
+        pts = 36
+        circle_x = [cx + r * _math.cos(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        circle_y = [cy + r * _math.sin(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        label = f"{air['call_sign']} ({air['support_type']})";
+        status_ko = {"pending": "대기", "active": "투입중", "completed": "완료"}.get(air["status"], "")
+        fig.add_trace(go.Scatter(
+            x=circle_x, y=circle_y,
+            mode="lines",
+            fill="toself",
+            fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},{alpha})",
+            line=dict(color=clr, width=2, dash="dash" if air["status"] == "pending" else "solid"),
+            name=label,
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                f"상태: {status_ko}<br>"
+                f"목표: ({cx/1000:.1f}km, {cy/1000:.1f}km)<br>"
+                f"반경: {r:.0f}m<extra></extra>"
+            ),
+        ))
+        # 중심 마커
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy],
+            mode="markers+text",
+            marker=dict(symbol="x", size=12, color=clr),
+            text=[air["call_sign"]],
+            textposition="bottom center",
+            textfont=dict(color=clr, size=10),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} "
+                 f"{'▶ 진행 중' if state.get('running') else '⏸ 정지'}",
+            font=dict(color="#dddddd", size=14),
+        ),
+        xaxis=dict(
+            title="동쪽 (m)", range=[0, MAP_W],
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaa"),
+        ),
+        yaxis=dict(
+            title="북쪽 (m)", range=[0, MAP_H],
+            scaleanchor="x", scaleratio=1,
+            gridcolor="#2a3a4a", zeroline=False,
+            tickformat=",d", tickfont=dict(color="#aaa"),
+        ),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f1923",
+        font=dict(color="#dddddd"),
+        legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)),
+        height=300,
+        margin=dict(l=60, r=20, t=40, b=40),
+        hovermode="closest",
+    )
+    return fig
+
+
+def _wg_status_text(state: dict) -> str:
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        get_unit_type = lambda uid: ""
+
+    lines = [f"게임 시간: {state.get('game_time_str','00:00:00')} | Tick: {state.get('tick',0)}"]
+    winner = state.get("winner")
+    if winner:
+        lines.append(f"★ 전투 종료: {winner} 승리")
+    lines.append("")
+    lines.append("🔵 BLUFOR")
+    for u in state.get("units", []):
+        if u["side"] != "BLUFOR":
+            continue
+        bar = "█" * int(u["combat_power"] / 10) + "░" * (10 - int(u["combat_power"] / 10))
+        utype = get_unit_type(u["id"])
+        lines.append(
+            f"  {u['id']:7s}({utype:6s}) [{bar}] {u['combat_power']:5.1f}%  {u['status']}"
+        )
+    _STATUS_KO = {"detected": "탐지됨", "approximate": "개략위치", "lost": "탐지상실"}
+    intel_index = {
+        e["unit_id"]: e
+        for e in state.get("intelligence", {}).get("BLUFOR", [])
+    }
+    lines.append("🔴 OPFOR (BLUFOR 인텔 기준)")
+    for e in state.get("intelligence", {}).get("BLUFOR", []):
+        det = e["status"]
+        det_ko = _STATUS_KO.get(det, det)
+        if det == "detected":
+            utype = e.get("unit_type") or "?"
+            cp = e.get("combat_power") or 0.0
+            bar = "█" * int(cp / 10) + "░" * (10 - int(cp / 10))
+            lines.append(
+                f"  {e['unit_id']:7s}({utype:6s}) [{bar}] {cp:5.1f}%  [{det_ko}]"
+            )
+        elif det == "approximate":
+            lines.append(
+                f"  ?{e['unit_id']:6s}(미확인) {'?'*10}  ?????  [{det_ko}] "
+                f"({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km 추정)"
+            )
+        else:  # lost
+            utype = e.get("unit_type") or "미확인"
+            lines.append(
+                f"  ({e['unit_id']:6s})({utype:6s}) {'░'*10}  ?????  [{det_ko}] "
+                f"최종({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km)"
+            )
+    return "".join(lines)
+
+
+def _build_opfor_alert(state: dict) -> str:
+    """OPFOR 기동 감지 시 규칙 기반 알람 메시지 생성."""
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        def get_unit_type(uid): return "부대"
+
+    opfor = [u for u in state["units"] if u["side"] == "OPFOR" and u["status"] != "destroyed"]
+    blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
+
+    if not opfor:
+        return "✅ 모든 적군 전투불능 — 전투 종료"
+
+    lines = [f"⚠️ **OPFOR 기동 감지** (게임시간: {state['game_time_str']})"]
+    lines.append("**적군 현황:**")
+    for u in opfor:
+        action_ko = {"attack":"공격","flank":"측방기동","withdraw":"후퇴",
+                     "hold":"대기","defend":"방어","move":"이동"}.get(u["current_action"], u["current_action"])
+        lines.append(f"  • {u['id']}({get_unit_type(u['id'])}): "
+                     f"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) "
+                     f"CP={u['combat_power']:.0f}% [{action_ko}]")
+
+    if blufor and opfor:
+        bl_cx = sum(u["x"] for u in blufor) / len(blufor)
+        bl_cy = sum(u["y"] for u in blufor) / len(blufor)
+        op_cx = sum(u["x"] for u in opfor) / len(opfor)
+        op_cy = sum(u["y"] for u in opfor) / len(opfor)
+        dist = ((bl_cx - op_cx)**2 + (bl_cy - op_cy)**2)**0.5
+        lines.append(f"**위협 거리:** {dist/1000:.1f}km")
+
+    lines.append("*LLM 상황 분석 중...*")
+    return "".join(lines)
+
+
+def _build_situation_query(state: dict) -> str:
+    """LLM 상황 분석용 쿼리 빌드."""
+    try:
+        from wargame.scenario import get_unit_type
+    except Exception:
+        def get_unit_type(uid): return "부대"
+    lines = [f"[워게임 상황 분석] 게임시간: {state['game_time_str']}"]
+    for u in state["units"]:
+        s = "전투불능" if u["status"] == "destroyed" else f"CP={u['combat_power']:.0f}%"
+        lines.append(f"  {u['side']} {u['id']}({get_unit_type(u['id'])}): "
+                     f"({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {s} 행동={u['current_action']}")
+    lines.append("현재 전장 상황을 분석하고, OPFOR의 의도와 BLUFOR 즉각 대응 방안을 3가지 간결하게 제시해줘.")
+    return "".join(lines)
+
+
+def wargame_refresh():
+    """현재 워게임 상태를 UI에 반영."""
+    eng = _wg_ensure_engine()
+    if eng is None:
+        msg = f"워게임 모듈 로드 실패: {_wg_err if not _WARGAME_OK else '엔진 없음'}"
+        return None, msg, ""
+    state = eng.get_state()
+    fig = _build_wargame_map(state)
+    status = _wg_status_text(state)
+    events = eng.db.get_recent_events(20)
+    log_text = "".join(
+        f"[{e['event_type']:10s}] T={e['tick']:4d} {e['message']}"
+        for e in events
+    )
+    return fig, status, log_text
+
+
+def wargame_start_pause():
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return "워게임 초기화 실패", *wargame_refresh()
+    if eng.running:
+        eng.stop()
+        label = "▶ 시뮬레이션 시작"
+    else:
+        eng.start()
+        label = "⏸ 일시정지"
+    fig, status, log_text = wargame_refresh()
+    return label, fig, status, log_text
+
+
+def wargame_reset_sim():
+    global _wg_engine, _wg_last_plan
+    if not _WARGAME_OK:
+        return "초기화 실패", None, "", ""
+    units = setup_bn_vs_bn()
+    if _wg_engine is not None:
+        _wg_engine.reset(units)
+    else:
+        _wg_engine = WargameEngine(units)
+        _wg_register_engine(_wg_engine)
+    _wg_last_plan = {}
+    fig, status, log_text = wargame_refresh()
+    return "▶ 시뮬레이션 시작", fig, status, log_text
+
+
+def wargame_set_timescale(scale: float):
+    eng = _wg_ensure_engine()
+    if eng:
+        eng.time_scale = float(scale)
+    return wargame_refresh()
+
+
+def wargame_request_llm_plan(history: List = None):
+    global _wg_last_plan
+    history = history or []
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return history, "워게임 초기화 실패", None, "", ""
+    if _wg_planner is None:
+        return history, "Planner 없음", None, "", ""
+
+    state = eng.get_state()
+    agent = _get_agent()
+    agent_label = "BattlefieldAgent" if agent else "규칙 기반"
+
+    import json
+    from wargame.llm_planner import build_mission_query
+    query_text = build_mission_query(state)
+
+    # 채팅에 쿼리 추가
+    history = list(history)
+    history.append((f"🧠 **LLM 임무계획 생성 요청** ({agent_label})"
+                    f"<details><summary>전송된 쿼리 보기</summary>"
+                    f"```{query_text[:800]}{'...(생략)' if len(query_text)>800 else ''}```</details>","처리 중..."))
+
+    plan = _wg_planner.plan(state, agent=agent)
+    _wg_last_plan = plan
+    eng.apply_mission_plan(plan)
+    if plan.get("air_support_plans"):
+        eng.apply_air_support_plan(plan)
+
+    plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
+
+    # 임무계획 요약 채팅에 표시
+    reasoning = plan.get("reasoning", "")
+    n_plans = len(plan.get("mission_plans", []))
+    n_air = len(plan.get("air_support_plans", []))
+    plan_summary = f"**📋 임무계획 생성 완료** ({agent_label})"
+    if reasoning:
+        plan_summary += f"**판단 근거:** {reasoning}"
+    plan_summary += f"**지상 임무:** {n_plans}개 중대"
+    if n_air:
+        plan_summary += f"**공중지원:** {n_air}건"
+    plan_summary += f"```json{plan_text}```"
+    history[-1] = (history[-1][0], plan_summary)
+
+    fig, status, log_text = wargame_refresh()
+    return history, plan_text, fig, status, log_text
+
+
+def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
+    """워게임 채팅창에서 직접 에이전트 쿼리."""
+    if not message.strip():
+        return history, ""
+    history = list(history)
+
+    agent = _get_agent()
+    eng = _wg_ensure_engine()
+
+    # 워게임 상태를 컨텍스트로 첨부
+    context = ""
+    if eng is not None:
+        state = eng.get_state()
+        context = (
+            f"[현재 워게임 상황] 게임시간={state['game_time_str']}"
+            + "".join(
+                f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% "
+                f"위치=({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {u['status']}"
+                for u in state["units"]
+            )
+            + ""
+        )
+
+    history.append((message, "처리 중..."))
+
+    if agent is None:
+        history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")
+        return history, ""
+
+    try:
+        full_query = context + message if context else message
+        response = agent.run(full_query, reset=False)
+        history[-1] = (message, str(response))
+    except Exception as e:
+        logger.error(f"WG chat error: {e}", exc_info=True)
+        history[-1] = (message, f"오류: {e}")
+
+    return history, ""
+
+
+def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
+    """타이머 tick용: 지도 갱신 + OPFOR 기동 감지 시 채팅 알람 추가."""
+    global _wg_last_opfor_ai_count
+    fig, status, log_text = wargame_refresh()
+    chatbot_history = list(chatbot_history or [])
+
+    eng = _wg_ensure_engine()
+    if eng is not None:
+        state = eng.get_state()
+        current_count = state.get("opfor_ai_fire_count", 0)
+        if current_count > _wg_last_opfor_ai_count:
+            _wg_last_opfor_ai_count = current_count
+            alert_msg = _build_opfor_alert(state)
+            chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
+
+    return fig, status, log_text, chatbot_history
+
+
+
+def clear_chat_history() -> Tuple[List, str]:
+    """채팅 히스토리와 상황 메모리를 초기화합니다."""
+    global _last_situation_analysis
+    _last_situation_analysis = ""
+    try:
+        from tools.strategy_advisor_tool import clear_situation_memory
+        clear_situation_memory()
+    except Exception:
+        pass
+    return [], "대화 기록과 상황 분석 메모리가 초기화되었습니다."
+
+
+def get_situation_memory_status() -> str:
+    """현재 상황 분석 메모리 상태를 반환합니다."""
+    try:
+        from tools.strategy_advisor_tool import get_situation_memory
+        memory = get_situation_memory()
+        if memory.get("situation_analysis"):
+            ts = memory.get("analysis_timestamp", "")
+            preview = memory["situation_analysis"][:200] + "..."
+            return f"상황 분석 메모리 활성 (분석 시각: {ts})미리보기:{preview}"
+        return "상황 분석 메모리가 비어 있습니다. 먼저 영상 분석을 수행하세요."
+    except Exception as e:
+        return f"메모리 상태 조회 오류: {e}"
+
+
+# ─────────────────────────────────────────────
+# Gradio 앱 빌더
+# ─────────────────────────────────────────────
+
+def create_app(agent=None) -> gr.Blocks:
+    """
+    Gradio 앱을 생성하여 반환합니다.
+
+    Args:
+        agent: 초기화된 BattlefieldAgent 인스턴스 (None이면 앱 내 알림)
+    """
+    global _agent
+    _agent = agent
+
+    ui_cfg = _load_ui_config()
+
+    with gr.Blocks(
+        title=ui_cfg.get("title", "C2 군사 전략 AI"),
+        theme=gr.themes.Base(primary_hue="slate", secondary_hue="gray"),
+    ) as app:
+
+        gr.Markdown(f"""
+# {ui_cfg.get('title', 'C2 군사 전략 AI - EXAONE4 + EXAONE Deep')}
+{ui_cfg.get('description', '')}
+
+**듀얼 모델 아키텍처:**
+- **EXAONE4**: 영상 분석, 상황 판단, 최종 응답 생성
+- **EXAONE Deep**: 전략/전술 전문 추천 (EXAONE4의 상황 분석을 바탕으로 호출됨)
+        """)
+
+        with gr.Tabs():
+          with gr.Tab("🎖️ AI 에이전트"):
+            with gr.Row():
+              # ─── 왼쪽 패널: 영상 분석 ───────────────────────
+              with gr.Column(scale=1):
+                gr.Markdown("## 영상 분석")
+
+                gr.Markdown("#### 직접 업로드")
+                video_upload = gr.File(
+                    label="군사 영상 업로드 (mp4, avi, mov)",
+                    file_types=[".mp4", ".avi", ".mov", ".mkv"],
+                )
+                collection_input = gr.Textbox(
+                    label="컬렉션명",
+                    value="default",
+                    placeholder="컬렉션 이름 입력",
+                )
+                analyze_btn = gr.Button("영상 분석 시작", variant="primary")
+
+                gr.Markdown("#### 예시 영상")
+                sample_dropdown = gr.Dropdown(
+                    label="예시 영상 선택",
+                    choices=_get_sample_video_choices(),
+                    value=None,
+                    interactive=True,
+                )
+                with gr.Row():
+                    sample_refresh_btn = gr.Button("목록 새로고침", scale=1)
+                    sample_analyze_btn = gr.Button("예시 영상 분석", variant="primary", scale=2)
+
+                analysis_status = gr.Textbox(
+                    label="분석 상태",
+                    lines=6,
+                    interactive=False,
+                )
+
+                gr.Markdown("### 분석된 영상 목록")
+                video_list = gr.CheckboxGroup(
+                    label="쿼리할 영상 선택",
+                    choices=[],
+                    value=[],
+                )
+                video_select_status = gr.Textbox(
+                    label="선택 상태",
+                    value="선택된 비디오 없음",
+                    interactive=False,
+                )
+
+                gr.Markdown("### 상황 분석 메모리")
+                memory_status_btn = gr.Button("메모리 상태 확인")
+                memory_status_box = gr.Textbox(
+                    label="EXAONE4 상황 분석 메모리",
+                    lines=5,
+                    interactive=False,
+                )
+
+            # ─── 오른쪽 패널: 채팅 인터페이스 ───────────────
+            with gr.Column(scale=2):
+                gr.Markdown("## AI 에이전트 채팅")
+                gr.Markdown(
+                    "영상 분석 및 전략/전술 관련 질문을 입력하세요. "
+                    "전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다."
+                )
+
+                chatbot = gr.Chatbot(
+                    label="대화",
+                    height=500,
+                    show_copy_button=True,
+                )
+
+                with gr.Row():
+                    query_input = gr.Textbox(
+                        label="쿼리 입력",
+                        placeholder=(
+                            "예: '영상에서 탐지된 적 기갑부대를 분석해줘' 또는 "
+                            "'현재 상황에서 방어 전술을 추천해줘'"
+                        ),
+                        lines=2,
+                        scale=5,
+                    )
+                    send_btn = gr.Button("전송", variant="primary", scale=1)
+
+                with gr.Row():
+                    clear_btn = gr.Button("대화 초기화", variant="secondary")
+                    clear_status = gr.Textbox(
+                        label="",
+                        value="",
+                        interactive=False,
+                        scale=3,
+                    )
+
+                gr.Markdown("### 예시 쿼리")
+                example_queries = ui_cfg.get("examples", [
+                    "영상에서 탐지된 적 전력을 분석해줘",
+                    "현재 전장 상황에 대한 전략적 대응 방안을 추천해줘",
+                    "적 기갑부대에 대한 전술적 대응 방안을 제안해줘",
+                    "아군 방어 진지 구축을 위한 전략을 수립해줘",
+                ])
+                gr.Examples(
+                    examples=[[q] for q in example_queries],
+                    inputs=[query_input],
+                    label="클릭하여 예시 쿼리 입력",
+                )
+
+          # ─── 워게임 시뮬레이터 탭 ────────────────────────────
+          with gr.Tab("⚔️ 워게임 시뮬레이터"):
+            if not _WARGAME_OK:
+                gr.Markdown(f"⚠️ 워게임 모듈 로드 실패: `{_wg_err}`")
+            else:
+                gr.Markdown(
+                    "## 파이썬 워게임 시뮬레이터"
+                    "LLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다."
+                )
+                # ── 상단: 지도 + 채팅창 ──────────────────────────
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        wg_map = gr.Plot(label="전장 지도", show_label=False)
+
+                    with gr.Column(scale=2):
+                        wg_alert_md = gr.Markdown("", visible=True)
+                        gr.Markdown("### 전술 AI 채팅")
+                        wg_chatbot = gr.Chatbot(
+                            label="",
+                            height=220,
+                            show_copy_button=True,
+                            bubble_full_width=False,
+                        )
+                        with gr.Row():
+                            wg_chat_input = gr.Textbox(
+                                label="",
+                                placeholder="워게임 상황 분석, 전술 조언, 임무계획 수정 등 질문하세요...",
+                                lines=2,
+                                scale=5,
+                            )
+                            wg_chat_send_btn = gr.Button("전송", variant="primary", scale=1)
+                        wg_chat_clear_btn = gr.Button("대화 초기화", variant="secondary", size="sm")
+
+                # ── 하단: 제어 패널 + 임무계획·이벤트 로그 ────────
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 시뮬레이션 제어")
+                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
+                        wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
+                        wg_timescale = gr.Slider(
+                            minimum=0.1, maximum=600, value=60, step=0.1,
+                            label="시간 배율 (실제 1초 = X 게임 초)",
+                        )
+                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
+                        gr.Markdown("### LLM 임무계획")
+                        wg_plan_btn = gr.Button("🧠 LLM 임무계획 생성", variant="primary")
+                        gr.Markdown("### 부대 전력 현황")
+                        wg_status = gr.Textbox(
+                            label="", lines=5, interactive=False,
+                            elem_id="wg_status",
+                        )
+
+                    with gr.Column(scale=2):
+                        wg_plan_box = gr.Code(
+                            language="json", lines=8, interactive=False,
+                            label="LLM 생성 임무계획 (JSON)",
+                        )
+
+                    with gr.Column(scale=2):
+                        wg_event_log = gr.Textbox(
+                            label="전투 이벤트 로그", lines=8, interactive=False,
+                        )
+
+                wg_timer = gr.Timer(value=2)
+
+          # ─── 전장 지도 탭 (ARMA3) ─────────────────────────────
+          with gr.Tab("🗺️ 전장 지도"):
+            gr.Markdown(
+                "ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다.  "
+                "relay.py 실행 중일 때 10초마다 자동 갱신됩니다."
+            )
+            with gr.Row():
+                with gr.Column(scale=3):
+                    map_plot = gr.Plot(label="전장 상황도", show_label=False)
+                with gr.Column(scale=1):
+                    gr.Markdown("### 병력 현황")
+                    map_status = gr.Textbox(
+                        label="",
+                        lines=6,
+                        interactive=False,
+                        elem_id="map_status",
+                    )
+                    map_refresh_btn = gr.Button("🔄 새로고침", variant="primary")
+                    gr.Markdown(
+                        "**마커 범례**"
+                        "- 🔵 원 = BLUFOR 보병"
+                        "- 🔵 사각 = BLUFOR APC/차량"
+                        "- 🔵 다이아 = BLUFOR 장갑"
+                        "- 🔴 원 = OPFOR 보병"
+                        "- 🔴 사각 = OPFOR APC/차량"
+                        "- 🔴 다이아 = OPFOR 장갑"
+                        "- 큰 다이아 = 그룹 지휘관 위치"
+                        "**좌표계**"
+                        "x = 동쪽(m), y = 북쪽(m)"
+                        "Altis 맵 기준 (0 ~ 30,000m)"
+                    )
+
+            map_timer = gr.Timer(value=10)
+
+        # ─── 이벤트 핸들러 ──────────────────────────────────
+
+        analyze_btn.click(
+            fn=analyze_video,
+            inputs=[video_upload, collection_input],
+            outputs=[analysis_status, video_list],
+        )
+
+        sample_analyze_btn.click(
+            fn=analyze_sample_video,
+            inputs=[sample_dropdown, collection_input],
+            outputs=[analysis_status, video_list],
+        )
+
+        sample_refresh_btn.click(
+            fn=lambda: gr.update(choices=_get_sample_video_choices()),
+            outputs=[sample_dropdown],
+        )
+
+        video_list.change(
+            fn=update_active_videos,
+            inputs=[video_list],
+            outputs=[video_select_status],
+        )
+
+        send_btn.click(
+            fn=chat,
+            inputs=[query_input, chatbot],
+            outputs=[query_input, chatbot],
+        )
+
+        query_input.submit(
+            fn=chat,
+            inputs=[query_input, chatbot],
+            outputs=[query_input, chatbot],
+        )
+
+        clear_btn.click(
+            fn=clear_chat_history,
+            outputs=[chatbot, clear_status],
+        )
+
+        memory_status_btn.click(
+            fn=get_situation_memory_status,
+            outputs=[memory_status_box],
+        )
+
+        # ─── 워게임 이벤트 핸들러 ────────────────────────────
+        if _WARGAME_OK:
+            _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
+
+            wg_startstop_btn.click(
+                fn=wargame_start_pause,
+                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],
+            )
+            wg_reset_btn.click(
+                fn=wargame_reset_sim,
+                outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log],
+            )
+            wg_apply_scale_btn.click(
+                fn=wargame_set_timescale,
+                inputs=[wg_timescale],
+                outputs=_WG_OUTPUTS,
+            )
+            # LLM 임무계획 → 채팅에 결과 표시
+            wg_plan_btn.click(
+                fn=wargame_request_llm_plan,
+                inputs=[wg_chatbot],
+                outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log],
+            )
+            # 직접 채팅 전송
+            wg_chat_send_btn.click(
+                fn=wg_chat_send,
+                inputs=[wg_chat_input, wg_chatbot],
+                outputs=[wg_chatbot, wg_chat_input],
+            )
+            wg_chat_input.submit(
+                fn=wg_chat_send,
+                inputs=[wg_chat_input, wg_chatbot],
+                outputs=[wg_chatbot, wg_chat_input],
+            )
+            wg_chat_clear_btn.click(
+                fn=lambda: ([], ""),
+                outputs=[wg_chatbot, wg_chat_input],
+            )
+            # 타이머: 지도 갱신 + OPFOR 기동 알람
+            wg_timer.tick(
+                fn=wargame_refresh_with_alert,
+                inputs=[wg_chatbot],
+                outputs=[wg_map, wg_status, wg_event_log, wg_chatbot],
+            )
+            app.load(
+                fn=wargame_refresh,
+                outputs=_WG_OUTPUTS,
+            )
+
+        # ─── 전장 지도 이벤트 ────────────────────────────────
+        map_refresh_btn.click(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
+        )
+        map_timer.tick(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
+        )
+        # 탭 진입 시 초기 로드
+        app.load(
+            fn=get_battlefield_map,
+            outputs=[map_plot, map_status],
+        )
+
+    return app
+
+
+def launch_app(agent=None, **kwargs):
+    """앱을 생성하고 실행합니다."""
+    ui_cfg = _load_ui_config()
+    app = create_app(agent=agent)
+    app.launch(
+        server_name=kwargs.get("server_name", ui_cfg.get("server_name", "0.0.0.0")),
+        server_port=kwargs.get("server_port", ui_cfg.get("server_port", 7860)),
+        share=kwargs.get("share", ui_cfg.get("share", False)),
+    )
