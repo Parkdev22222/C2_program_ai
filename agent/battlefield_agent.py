@@ -150,11 +150,13 @@ class BattlefieldAgent:
                 get_wargame_situation,
                 get_wargame_unit_detail,
                 get_wargame_battle_log,
+                get_intelligence_report,
             )
             tools.extend([
                 get_wargame_situation,
                 get_wargame_unit_detail,
                 get_wargame_battle_log,
+                get_intelligence_report,
             ])
             logger.info("Wargame simulator query tools loaded")
         except Exception as e:
@@ -213,9 +215,6 @@ class BattlefieldAgent:
         # stream_outputs: 구버전에만 존재
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
-
-        # system_prompt: 구버전에서 직접 전달 가능하지만 기본값에 덧붙이는 방식 사용
-        # (기본 포맷 지시사항을 보존하기 위해 직접 전달하지 않음)
 
         # CodeAgent 생성 (기본 system_prompt 포함)
         agent = CodeAgent(**kwargs)

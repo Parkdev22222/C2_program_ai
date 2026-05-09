@@ -12,6 +12,7 @@ from .wargame_query_tool import (
     get_wargame_situation,
     get_wargame_unit_detail,
     get_wargame_battle_log,
+    get_intelligence_report,
 )
 from .wargame_mission_tool import (
     apply_wargame_mission_plan,
@@ -40,6 +41,7 @@ __all__ = [
     "get_wargame_situation",
     "get_wargame_unit_detail",
     "get_wargame_battle_log",
+    "get_intelligence_report",
     "apply_wargame_mission_plan",
     "apply_wargame_air_support",
     "get_wargame_engine_status",

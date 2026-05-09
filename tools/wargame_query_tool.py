@@ -20,31 +20,34 @@ def register_wargame_engine(engine):
 @tool
 def get_wargame_situation() -> dict:
     """
-    현재 워게임 시뮬레이터의 전체 전장 상황을 반환합니다.
-    아군(BLUFOR)/적군(OPFOR) 전 부대의 종류·위치·전투력(%)·상태·행동을 포함합니다.
+    현재 워게임 시뮬레이터의 전장 상황을 반환합니다.
+    아군(BLUFOR)은 실제 위치/전투력을 제공하고,
+    적군(OPFOR)은 탐지 상태에 따라 인텔 필터가 적용됩니다.
+
+    탐지 상태:
+      - "detected"   : 정찰·근접 조우로 정확한 위치·종류·전투력 확인됨
+      - "approximate": 초기 개략 정보 (위치 오차 ±수km, 종류·전투력 미확인)
+      - "lost"       : 이전에 탐지됐으나 현재 탐지 범위 밖 (최종 탐지 위치 유지)
 
     Returns:
         {
             "status": "success" | "engine_not_ready",
             "game_time": str,
             "tick": int,
-            "units": [
-                {
-                    "unit_id": str,          # "Alpha", "Red1" 등
-                    "side": str,             # "BLUFOR" | "OPFOR"
-                    "unit_type": str,        # "기계화보병" | "전차" | "정찰" | "대전차" | "자주포"
-                    "x_km": float,           # 동쪽 좌표 (km)
-                    "y_km": float,           # 북쪽 좌표 (km)
-                    "combat_power_pct": float,  # 전투력 0~100%
-                    "status": str,           # "active" | "suppressed" | "destroyed"
-                    "current_action": str    # "hold" | "attack" | "defend" | "move" 등
-                }, ...
+            "blufor_units": [
+                { "unit_id", "unit_type", "x_km", "y_km",
+                  "combat_power_pct", "status", "current_action" }, ...
+            ],
+            "opfor_intel": [
+                { "unit_id", "detection_status",
+                  "known_x_km", "known_y_km",
+                  "unit_type",       # 탐지 전: "미확인"
+                  "combat_power",    # 탐지 전: null
+                  "detected_by" }, ...
             ],
             "summary": {
-                "blufor_alive": int,
-                "opfor_alive": int,
-                "blufor_avg_cp": float,
-                "opfor_avg_cp": float
+                "blufor_alive": int, "opfor_detected": int,
+                "blufor_avg_cp": float
             }
         }
     """
@@ -52,51 +55,99 @@ def get_wargame_situation() -> dict:
         return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
 
     try:
-        rows = _wargame_engine.db.get_latest_unit_states()
-        if not rows:
-            state = _wargame_engine.get_state()
-            rows = [
-                {
-                    "unit_id": u["id"], "side": u["side"],
-                    "unit_type": u.get("unit_type", ""),
-                    "x": u["x"], "y": u["y"],
-                    "combat_power": u["combat_power"],
-                    "status": u["status"], "current_action": u.get("current_action", "hold"),
-                }
-                for u in state.get("units", [])
-            ]
+        state = _wargame_engine.get_state()
 
-        units = []
-        for r in rows:
-            units.append({
-                "unit_id": r.get("unit_id", r.get("id", "")),
-                "side": r["side"],
-                "unit_type": r.get("unit_type", ""),
-                "x_km": round(r["x"] / 1000, 2),
-                "y_km": round(r["y"] / 1000, 2),
-                "combat_power_pct": round(r["combat_power"], 1),
-                "status": r["status"],
-                "current_action": r.get("current_action", "hold"),
-            })
+        # BLUFOR 아군 실제 정보
+        blufor_units = [
+            {
+                "unit_id":         u["id"],
+                "unit_type":       u.get("unit_type", ""),
+                "x_km":            round(u["x"] / 1000, 2),
+                "y_km":            round(u["y"] / 1000, 2),
+                "combat_power_pct": round(u["combat_power"], 1),
+                "status":          u["status"],
+                "current_action":  u.get("current_action", "hold"),
+            }
+            for u in state.get("units", []) if u["side"] == "BLUFOR"
+        ]
 
-        blufor = [u for u in units if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
-        opfor  = [u for u in units if u["side"] == "OPFOR"  and u["status"] != "destroyed"]
+        # OPFOR 인텔 필터 적용
+        blufor_intel_entries = state.get("intelligence", {}).get("BLUFOR", [])
+        opfor_intel = [
+            {
+                "unit_id":          e["unit_id"],
+                "detection_status": e["status"],
+                "known_x_km":       round(e["known_x"] / 1000, 2),
+                "known_y_km":       round(e["known_y"] / 1000, 2),
+                "unit_type":        e["unit_type"] or "미확인",
+                "combat_power":     e["combat_power"],
+                "detected_by":      e["detected_by"],
+            }
+            for e in blufor_intel_entries
+        ]
 
-        state_info = _wargame_engine.get_state()
+        blufor_alive = [u for u in blufor_units if u["status"] != "destroyed"]
+        opfor_detected = [e for e in opfor_intel if e["detection_status"] == "detected"]
+
         return {
-            "status": "success",
-            "game_time": state_info.get("game_time_str", "00:00:00"),
-            "tick": state_info.get("tick", 0),
-            "units": units,
+            "status":      "success",
+            "game_time":   state.get("game_time_str", "00:00:00"),
+            "tick":        state.get("tick", 0),
+            "blufor_units": blufor_units,
+            "opfor_intel":  opfor_intel,
             "summary": {
-                "blufor_alive": len(blufor),
-                "opfor_alive": len(opfor),
-                "blufor_avg_cp": round(sum(u["combat_power_pct"] for u in blufor) / len(blufor), 1) if blufor else 0.0,
-                "opfor_avg_cp":  round(sum(u["combat_power_pct"] for u in opfor)  / len(opfor),  1) if opfor  else 0.0,
+                "blufor_alive":    len(blufor_alive),
+                "opfor_detected":  len(opfor_detected),
+                "blufor_avg_cp":   round(
+                    sum(u["combat_power_pct"] for u in blufor_alive) / len(blufor_alive), 1
+                ) if blufor_alive else 0.0,
             },
         }
     except Exception as e:
         logger.error(f"get_wargame_situation error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@tool
+def get_intelligence_report(side: str = "BLUFOR") -> dict:
+    """
+    특정 진영의 적 탐지 인텔 보고서를 반환합니다.
+    탐지 상태에 따라 적 위치 정확도가 다릅니다.
+
+    탐지 상태:
+      - "detected"   : 정찰부대 탐지 또는 근접 조우 → 정확한 위치·종류·전투력
+      - "approximate": 초기 개략 정보 → 위치 오차 ±수km, 종류·전투력 미확인
+      - "lost"       : 탐지 해제 → 마지막 탐지 위치 유지, 현재 위치 미확인
+
+    Args:
+        side: 조회할 진영 ("BLUFOR" | "OPFOR"), 기본값 "BLUFOR"
+
+    Returns:
+        {
+            "status": "success" | "engine_not_ready",
+            "side": str,
+            "game_time": str,
+            "enemy_intel": [
+                {
+                    "unit_id": str,
+                    "status": "detected" | "approximate" | "lost",
+                    "known_x_km": float,
+                    "known_y_km": float,
+                    "unit_type": str,           # 탐지 전: "미확인"
+                    "combat_power": float | None,  # 탐지 전: null
+                    "detected_by": str | None,
+                    "last_detected_tick": int
+                }, ...
+            ]
+        }
+    """
+    if _wargame_engine is None:
+        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
+    try:
+        report = _wargame_engine.get_intelligence_report(side)
+        return {"status": "success", **report}
+    except Exception as e:
+        logger.error(f"get_intelligence_report error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 
