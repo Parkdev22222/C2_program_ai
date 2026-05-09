@@ -549,22 +549,143 @@ ARMA3 .rpt 로그:
 
 ## 에이전트 도구 목록
 
-### ARMA3 전장 조회 도구
+총 **26개** 도구가 등록되어 있으며 역할별로 7개 그룹으로 분류됩니다.
 
-| 도구 | 설명 |
-|------|------|
-| `get_arma3_situation()` | 전체 전장 요약 (미션 시간, 진영별 병력 수) |
-| `get_arma3_enemy_units(category)` | OPFOR 유닛 목록. category: `"armor"`, `"infantry"`, `"helicopter"` 등 |
-| `get_arma3_friendly_units(category)` | BLUFOR 유닛 목록 |
-| `get_arma3_units_by_category(category)` | 전 진영 특정 카테고리 유닛 (전차 위치 파악 등) |
-| `get_arma3_groups(side)` | 그룹/분대 목록. side: `"OPFOR"`, `"BLUFOR"` |
+---
 
-### ARMA3 임무 명령 도구
+### 1. 영상 DB 조회 도구 (`videodb_query_tool.py`)
 
-| 도구 | 설명 |
-|------|------|
-| `send_mission_orders_to_arma3(json)` | 중대 임무 경로 JSON → ARMA3 전송 |
-| `get_arma3_order_status()` | 최근 임무 명령 전달 현황 확인 |
+SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_selected_contexts()` | — | 현재 선택된 비디오·PDF 컨텍스트 목록 반환 |
+| `query_video_semantic(query, top_k)` | query: 자연어, top_k: 최대 결과 수(기본 5) | 자연어로 영상 세그먼트를 의미론적 검색 |
+| `query_video_by_object(object_class)` | object_class: 군사 객체 유형 | 특정 객체(전차, 헬기 등)가 등장하는 세그먼트 검색 |
+| `query_video_by_event(keyword)` | keyword: 이벤트 키워드 | AI 생성 설명에서 특정 이벤트 키워드로 세그먼트 검색 |
+| `get_video_summary(video_id)` | video_id: 비디오 ID | 특정 비디오의 요약 통계(객체·이벤트 수 등) 반환 |
+| `get_segment_details(segment_id)` | segment_id: 세그먼트 ID | 특정 세그먼트의 상세 정보(타임스탬프, 객체 목록 등) 반환 |
+| `set_active_videos(video_ids)` | video_ids: 비디오 ID 리스트 | 에이전트가 쿼리할 활성 비디오 목록 설정 |
+
+---
+
+### 2. PDF RAG 도구 (`pdf_rag_tool.py`)
+
+군사 교범·문서를 벡터 DB에 색인하고 검색합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `pdf_rag_search(query, top_k)` | query: 검색 쿼리, top_k: 결과 수(기본 5) | 군사 교범·PDF에서 관련 내용 시맨틱 검색 |
+| `add_pdf_to_rag(pdf_path)` | pdf_path: PDF 파일 경로 | PDF를 RAG 시스템에 추가(청킹 + 임베딩 색인) |
+
+---
+
+### 3. 워게임 시뮬레이터 조회 도구 (`wargame_query_tool.py`)
+
+내장 파이썬 워게임 엔진의 실시간 전장 상황을 조회합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_wargame_situation()` | — | 현재 워게임의 전체 전장 상황(부대 위치·HP·진영 등) 반환 |
+| `get_intelligence_report(side)` | side: `"BLUFOR"` / `"OPFOR"` | 특정 진영의 적 탐지 인텔 보고서 반환 (FOW 상태 포함) |
+| `get_wargame_unit_detail(unit_id)` | unit_id: 부대 ID | 특정 부대의 상세 정보·최근 이동 이력 반환 |
+| `get_wargame_battle_log(n)` | n: 가져올 로그 수(기본 20) | 최근 전투 이벤트 로그 반환 (교전·기습·이동 기록) |
+
+> **FOW(Fog of War) 상태값:** `"detected"` (정확) / `"approximate"` (대략) / `"lost"` (탐지 소실)
+
+---
+
+### 4. 워게임 임무계획 실행 도구 (`wargame_mission_tool.py`)
+
+워게임 엔진에 임무계획 및 공중지원 명령을 직접 적용합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `apply_wargame_mission_plan(plan_json)` | plan_json: 임무계획 JSON 문자열 | BLUFOR 임무계획(이동 경로·목표)을 워게임에 적용 |
+| `apply_wargame_air_support(support_json)` | support_json: 공중지원 계획 JSON | CAS(근접항공지원) 임무를 워게임 엔진에 적용 |
+| `get_wargame_engine_status()` | — | 워게임 엔진 상태(실행 중 여부, 시간 배율, 현재 틱 등) 반환 |
+
+---
+
+### 5. 워게임 전술 분석 도구
+
+상성·지형·고도 기반으로 전술 권고와 최적 공격 위치를 분석합니다.
+
+#### 5-1. 전술 권고 (`wargame_strategy_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_wargame_tactical_recommendation()` | — | 현재 전장 상황의 병종 상성 분석 + 지형 기반 최적 기동 경로 추천 |
+
+#### 5-2. 최적 공격 위치·수단 추천 (`wargame_attack_advisor_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_optimal_attack_positions(top_n)` | top_n: 적 목표별 추천 위치 수(기본 3) | 탐지된 OPFOR 위치·고도·엄폐를 분석하여 아군 피해 최소·적 피해 최대 공격 위치 및 수단 추천 |
+
+**위치 후보 생성 방식:** 각 OPFOR 목표 기준 16방향 × 4거리(1.2/2.0/3.0/4.5 km) = 64개 후보
+
+**점수 가중치:**
+
+| 요소 | 가중치 | 설명 |
+|------|--------|------|
+| 고도 우위 (elevation) | 30% | 공격자가 더 높을수록 유리 |
+| 공격자 엄폐 (atk_cover) | 25% | 공격 위치의 지형 엄폐율 |
+| 적 노출도 (target_exposure) | 20% | 적의 엄폐가 낮을수록 고점수 |
+| 교전 효율 (engagement) | 15% | 거리별 교전 효율(1.2 km 최적) |
+| 시선 품질 (LOS) | 10% | 지형 차폐 없이 적을 관측 가능한 정도 |
+
+**추천 공격 수단:** 직접 지상화력 / 측방 포위기동 / 포병 간접사격 / 공중지원(CAS) / 정찰 후 확인사격
+
+---
+
+### 6. 전략 어드바이저 도구 (`strategy_advisor_tool.py`)
+
+EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `strategy_advisor_tool(query)` | query: 전략/전술 질문 | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전술 권고 생성 |
+
+> 에이전트가 전략/전술 쿼리를 감지하면 자동으로 이 도구를 사용합니다.  
+> `is_strategy_query()` 함수가 `agent_config.yaml`의 `strategy_keywords`를 기준으로 판별합니다.
+
+---
+
+### 7. ARMA3 연동 도구
+
+실제 ARMA3 게임과 직접 연동하여 전장 데이터를 수신하고 임무 명령을 발령합니다.
+
+#### 7-1. 전장 조회 (`arma3_query_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_arma3_situation()` | — | 전체 전장 요약 (미션 시간, 진영별 병력·차량 수) |
+| `get_arma3_enemy_units(category)` | category: `"armor"` / `"infantry"` / `"helicopter"` 등 | OPFOR 유닛 목록 |
+| `get_arma3_friendly_units(category)` | category: 유닛 카테고리 | BLUFOR 유닛 목록 |
+| `get_arma3_units_by_category(category)` | category: 유닛 카테고리 | 전 진영 특정 카테고리 유닛 목록 |
+| `get_arma3_groups(side)` | side: `"OPFOR"` / `"BLUFOR"` | 그룹(분대·중대) 목록 |
+
+#### 7-2. 임무 명령 (`arma3_order_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `send_mission_orders_to_arma3(mission_orders_json)` | mission_orders_json: 임무 경로 JSON 문자열 | 중대 임무 경로 JSON → ARMA3 전송 |
+| `get_arma3_order_status()` | — | 최근 임무 명령 전달 현황 확인 |
+
+---
+
+### 도구 그룹 요약
+
+| 그룹 | 파일 | 도구 수 | 주요 용도 |
+|------|------|---------|----------|
+| 영상 DB 조회 | `videodb_query_tool.py` | 7 | SAM3 분석 영상 세그먼트 검색 |
+| PDF RAG | `pdf_rag_tool.py` | 2 | 군사 교범 문서 검색 |
+| 워게임 조회 | `wargame_query_tool.py` | 4 | 시뮬레이터 실시간 전장 상황 |
+| 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 적용 |
+| 전술 분석 | `wargame_strategy_tool.py` + `wargame_attack_advisor_tool.py` | 2 | 상성·지형 기반 전술 권고 및 최적 공격 위치 |
+| 전략 어드바이저 | `strategy_advisor_tool.py` | 1 | EXAONE Deep 전략·전술 권고 |
+| ARMA3 연동 | `arma3_query_tool.py` + `arma3_order_tool.py` | 7 | 실제 ARMA3 게임 연동 |
 
 ---
 
