@@ -185,7 +185,13 @@ class BattlefieldAgent:
             logger.info("Wargame tactical recommendation tool loaded")
         except Exception as e:
             logger.warning(f"Failed to load wargame strategy tool: {e}")
-
+        # 최적 공격 위치·수단 추천 도구
+        try:
+            from tools.wargame_attack_advisor_tool import get_optimal_attack_positions
+            tools.append(get_optimal_attack_positions)
+            logger.info("Wargame attack position advisor tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load attack advisor tool: {e}")
         # 전략 어드바이저 도구 (핵심 신규 도구)
         try:
             from tools.strategy_advisor_tool import create_strategy_advisor_tool
