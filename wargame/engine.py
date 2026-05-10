@@ -13,6 +13,7 @@
 """
 
 import math
+import random
 import threading
 import time
 from typing import List, Optional, Callable
@@ -23,6 +24,17 @@ from .terrain import terrain
 # 교전 파라미터
 ENGAGEMENT_RANGE = 2_500.0       # m — 기계화 보병 직사거리
 SUPPRESSION_RANGE = 4_000.0      # m — 제압사격 거리
+
+# 탐지 파라미터 (전장 안개)
+_DETECTION_RANGE = {
+    "정찰":      8_000,   # 정찰부대 최고 탐지력
+    "전차":      4_000,
+    "기계화보병": 3_000,
+    "대전차":    3_000,
+    "자주포":    2_000,   # 후방 포병, 직접 관측 제한
+}
+_CONTACT_RANGE = 1_500    # 근접 조우 탐지 (병종 무관)
+_APPROX_NOISE  = 4_000    # 초기 개략 위치 노이즈 ±m
 BASE_ATTRITION_RATE = 20.0       # %/hour at full strength, full engagement
 SUPPRESSION_THRESHOLD = 40.0     # % 이하 전투력 → 제압 상태
 DESTROYED_THRESHOLD = 5.0        # % 이하 → 전투 불능
@@ -74,6 +86,11 @@ class WargameEngine:
         self._opfor_ai_last: float = 0.0           # 마지막 OPFOR AI 갱신 게임시간
         self.opfor_ai_fire_count: int = 0       # OPFOR AI 발동 횟수 (UI 알람용)
         self._blufor_llm_units: set = set()     # LLM 임무계획 수행 중인 BLUFOR 부대 ID
+
+        # 전장 안개(FOW) 인텔: 각 진영이 적에 대해 알고 있는 정보
+        # {"BLUFOR": {unit_id: intel_entry}, "OPFOR": {unit_id: intel_entry}}
+        self._intelligence: dict = {"BLUFOR": {}, "OPFOR": {}}
+        self._init_intelligence()
 
         # 초기 상태 저장
         self.db.save_units(units)
@@ -145,6 +162,8 @@ class WargameEngine:
             self._opfor_ai_last = 0.0
             self.opfor_ai_fire_count = 0
             self._blufor_llm_units = set()
+            self._intelligence = {"BLUFOR": {}, "OPFOR": {}}
+            self._init_intelligence()
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -181,6 +200,100 @@ class WargameEngine:
                     f"{uid} 임무부여: {u.current_action} → {len(wps)}개 WP"
                 )
 
+    # ── 전장 안개(FOW) 인텔 ──────────────────────────────────────────
+
+    def _init_intelligence(self):
+        """양측에 적 위치 개략 정보(approximate) 부여."""
+        for observer in ("BLUFOR", "OPFOR"):
+            enemy_side = "OPFOR" if observer == "BLUFOR" else "BLUFOR"
+            self._intelligence[observer] = {}
+            for u in self.units:
+                if u.side != enemy_side:
+                    continue
+                nx = random.uniform(-_APPROX_NOISE, _APPROX_NOISE)
+                ny = random.uniform(-_APPROX_NOISE, _APPROX_NOISE)
+                self._intelligence[observer][u.id] = {
+                    "unit_id":           u.id,
+                    "enemy_side":        enemy_side,
+                    "status":            "approximate",
+                    "known_x":           max(0.0, min(29_999.0, u.x + nx)),
+                    "known_y":           max(0.0, min(29_999.0, u.y + ny)),
+                    "unit_type":         "",    # 탐지 전 미확인
+                    "combat_power":      None,  # 탐지 전 미확인
+                    "last_detected_tick": -1,
+                    "detected_by":       None,
+                }
+
+    def _update_intelligence(self):
+        """매 틱 호출 — 탐지 범위 기반으로 양측 인텔 갱신."""
+        for observer in ("BLUFOR", "OPFOR"):
+            enemy_side = "OPFOR" if observer == "BLUFOR" else "BLUFOR"
+            obs_units   = [u for u in self.units if u.side == observer and u.is_active()]
+            enemy_units = [u for u in self.units if u.side == enemy_side]
+
+            for enemy in enemy_units:
+                entry = self._intelligence[observer].get(enemy.id)
+                if entry is None:
+                    continue
+
+                detecting_unit = None
+                for obs in obs_units:
+                    dist = obs.distance_to(enemy)
+                    det_range = max(_DETECTION_RANGE.get(obs.unit_type, 3_000), _CONTACT_RANGE)
+                    if dist <= det_range:
+                        detecting_unit = obs
+                        break
+
+                if detecting_unit is not None:
+                    prev_status = entry["status"]
+                    entry.update({
+                        "status":            "detected",
+                        "known_x":           enemy.x,
+                        "known_y":           enemy.y,
+                        "unit_type":         enemy.unit_type,
+                        "combat_power":      round(enemy.combat_power, 1),
+                        "last_detected_tick": self.tick,
+                        "detected_by":       detecting_unit.id,
+                    })
+                    if prev_status != "detected":
+                        self.db.log_event(
+                            self.tick, self.game_time, "DETECTION",
+                            f"[{observer}] {detecting_unit.id}({detecting_unit.unit_type})가 "
+                            f"적 {enemy.id}({enemy.unit_type}) 탐지 — "
+                            f"위치({enemy.x/1000:.1f}km, {enemy.y/1000:.1f}km)"
+                        )
+                else:
+                    if entry["status"] == "detected":
+                        entry["status"] = "lost"
+                        self.db.log_event(
+                            self.tick, self.game_time, "DETECTION_LOST",
+                            f"[{observer}] 적 {enemy.id} 탐지 상실 — "
+                            f"최종 위치({entry['known_x']/1000:.1f}km, {entry['known_y']/1000:.1f}km)"
+                        )
+
+    def get_intelligence_report(self, side: str = "BLUFOR") -> dict:
+        """특정 진영의 적 인텔 보고서 반환 (LLM 에이전트 / UI용)."""
+        with self._lock:
+            entries = list(self._intelligence.get(side, {}).values())
+            return {
+                "side":       side,
+                "game_time":  _fmt_time(self.game_time),
+                "tick":       self.tick,
+                "enemy_intel": [
+                    {
+                        "unit_id":    e["unit_id"],
+                        "status":     e["status"],
+                        "known_x_km": round(e["known_x"] / 1000, 2),
+                        "known_y_km": round(e["known_y"] / 1000, 2),
+                        "unit_type":  e["unit_type"] or "미확인",
+                        "combat_power": e["combat_power"],
+                        "detected_by":  e["detected_by"],
+                        "last_detected_tick": e["last_detected_tick"],
+                    }
+                    for e in entries
+                ],
+            }
+
     def get_state(self) -> dict:
         """현재 시뮬레이션 상태를 딕셔너리로 반환."""
         with self._lock:
@@ -189,6 +302,7 @@ class WargameEngine:
                 units_data.append({
                     "id": u.id,
                     "side": u.side,
+                    "unit_type": u.unit_type,
                     "x": round(u.x, 1),
                     "y": round(u.y, 1),
                     "elevation": round(terrain.elevation(u.x, u.y), 1),
@@ -198,6 +312,22 @@ class WargameEngine:
                     "waypoints": u.waypoints,
                     "color": u.color,
                 })
+            # 인텔 데이터 (전장 안개)
+            intel_data = {}
+            for side, entries in self._intelligence.items():
+                intel_data[side] = [
+                    {
+                        "unit_id":    e["unit_id"],
+                        "status":     e["status"],
+                        "known_x":    round(e["known_x"], 1),
+                        "known_y":    round(e["known_y"], 1),
+                        "unit_type":  e["unit_type"],
+                        "combat_power": e["combat_power"],
+                        "detected_by":  e["detected_by"],
+                    }
+                    for e in entries.values()
+                ]
+
             return {
                 "tick": self.tick,
                 "game_time": self.game_time,
@@ -206,6 +336,7 @@ class WargameEngine:
                 "running": self.running,
                 "winner": self._check_winner(),
                 "opfor_ai_fire_count": self.opfor_ai_fire_count,
+                "intelligence": intel_data,
             "air_supports": [
                 {
                     "call_sign": a.call_sign,
@@ -236,6 +367,7 @@ class WargameEngine:
     def _tick(self):
         dt = self.tick_interval * self.time_scale  # 게임 시간(초)
         self._move_units(dt)
+        self._update_intelligence()   # 이동 후 최신 인텔 반영 → 교전에 즉시 적용
         self._resolve_combat(dt)
         self._resolve_air_support(dt)
         self._update_opfor_ai(dt)
@@ -324,6 +456,26 @@ class WargameEngine:
         )
         cover = terrain.cover_factor(defender.x, defender.y)
 
+        # ── 전장 안개 교전 수정자 ─────────────────────────────────
+        # 1. 정확도: 공격자가 방어자의 위치를 얼마나 정확히 아는가
+        #    detected=1.0(정밀조준) / approximate=0.6(개략사격) / lost=0.3(맹목사격)
+        atk_intel_status = self._intelligence[attacker.side].get(
+            defender.id, {}
+        ).get("status", "approximate")
+        accuracy_mult = {"detected": 1.0, "approximate": 0.6, "lost": 0.3}.get(
+            atk_intel_status, 0.6
+        )
+
+        # 2. 기습 배율: 방어자가 공격자의 위치를 모를수록 방어 준비 부족
+        #    detected=1.0(방어 준비됨) / approximate=1.3(부분 기습) / lost=1.6(완전 기습)
+        def_intel_status = self._intelligence[defender.side].get(
+            attacker.id, {}
+        ).get("status", "approximate")
+        surprise_mult = {"detected": 1.0, "approximate": 1.3, "lost": 1.6}.get(
+            def_intel_status, 1.0
+        )
+        # ─────────────────────────────────────────────────────────
+
         atk_fp = attacker.effective_firepower()
         damage = (
             atk_fp / 100.0          # 정규화
@@ -331,20 +483,35 @@ class WargameEngine:
             * ef                    # 거리 교전 계수
             * elev_adv              # 고도 우위
             * (1 - cover)           # 엄폐 감소
+            * accuracy_mult         # 탐지 정확도 (공격자→방어자)
+            * surprise_mult         # 기습 효과 (방어자→공격자 미탐지)
             * dt_h                  # 시간 적용
         )
 
         # 난수 변동 ±30%
-        import random
         damage *= random.uniform(0.7, 1.3)
         defender.combat_power = max(0.0, defender.combat_power - damage)
 
-        # 교전 로그 (5% 이상 피해 시만)
-        if damage >= 5.0:
+        # 기습 공격 전용 이벤트 로그
+        if surprise_mult >= 1.6 and damage >= 3.0:
+            self.db.log_event(
+                self.tick, self.game_time, "SURPRISE",
+                f"[기습] {attacker.id} → {defender.id} "
+                f"기습 공격 성공! (×{surprise_mult:.1f}) -{damage:.1f}% CP "
+                f"(거리{dist/1000:.1f}km)"
+            )
+
+        # 일반 교전 로그 (5% 이상 피해 시만)
+        elif damage >= 5.0:
+            fow_tag = ""
+            if surprise_mult > 1.0:
+                fow_tag = f" [부분기습×{surprise_mult:.1f}]"
+            if atk_intel_status != "detected":
+                fow_tag += f" [개략사격]" if atk_intel_status == "approximate" else f" [맹목사격]"
             self.db.log_event(
                 self.tick, self.game_time, "COMBAT",
                 f"{attacker.id}→{defender.id}: -{damage:.1f}% CP "
-                f"(거리{dist/1000:.1f}km, 고도우위{elev_adv:.2f})"
+                f"(거리{dist/1000:.1f}km, 고도우위{elev_adv:.2f}){fow_tag}"
             )
 
     # ── 공중지원 ─────────────────────────────────────────────────
@@ -440,11 +607,17 @@ class WargameEngine:
             nearest = min(enemies, key=lambda e: u.distance_to(e))
             dist = u.distance_to(nearest)
 
-            # BLUFOR가 LLM 임무계획 수행 중이면 교전 상황에서만 룰 기반 AI 개입
-            if side == "BLUFOR" and u.id in self._blufor_llm_units:
-                in_combat = u.combat_power < 30 or dist < 3_000.0
-                if not in_combat:
-                    continue  # LLM 웨이포인트 유지
+            # BLUFOR 룰 기반 AI 개입 제한
+            if side == "BLUFOR":
+                if u.id not in self._blufor_llm_units:
+                    # 임무계획 미수령 부대: 전투력 위기 시 후퇴만 허용, 나머지 대기
+                    if u.combat_power >= 30:
+                        continue
+                else:
+                    # 임무계획 수령 부대: 교전 상황에서만 룰 기반 개입
+                    in_combat = u.combat_power < 30 or dist < 3_000.0
+                    if not in_combat:
+                        continue  # LLM 웨이포인트 유지
 
             if u.combat_power < 30:
                 self._ai_withdraw(u, side, log_type)
