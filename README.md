@@ -7,29 +7,14 @@ EXAONE4 기반 C2(지휘통제) AI 시스템입니다.
 
 ## 시스템 아키텍처
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    C2 군사 전략 AI 시스템                        │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              EXAONE4 에이전트 (BattlefieldAgent)         │   │
-│  │                                                         │   │
-│  │  assess_recon_need()      → 정찰 필요 여부 판단          │   │
-│  │  recommend_recon_routes() → 교전 회피 정찰 경로 생성     │   │
-│  │  get_optimal_attack_positions() → 최적 공격 위치 추천    │   │
-│  │  strategy_advisor_tool()  → EXAONE Deep 전술 권고        │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                          │                                      │
-│          ┌───────────────┴────────────────┐                     │
-│          ▼                                ▼                     │
-│  ┌───────────────┐              ┌─────────────────┐            │
-│  │ 워게임 엔진   │              │  Gradio Web UI  │            │
-│  │ (Python)      │              │  전장 지도 시각화│            │
-│  │ FOW / 교전    │              │  정찰/공격 버튼  │            │
-│  │ 지형 시뮬     │              │  채팅 인터페이스 │            │
-│  └───────────────┘              └─────────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-```
+![Agent System Architecture](docs/agent_architecture.png)
+
+> **레이어 설명**
+> - **UI Layer** (파랑): Gradio 웹 인터페이스 — AI 에이전트 채팅, 워게임 시뮬레이터, 전장 지도 탭
+> - **Agent / Planner** (초록): `BattlefieldAgent` (smolagents CodeAgent, EXAONE4) + `MissionPlanner`
+> - **Tools** (주황/청록): 에이전트가 코드로 호출하는 도구 레이어 — 비디오/PDF/전략/워게임/ARMA3
+> - **Core Systems** (보라/청록): 실제 연산 엔진 — VideoAnalysisSystem(YOLO), EXAONE Deep, WargameEngine, ARMA3DBManager
+> - **External / Data** (빨강): 외부 데이터 — 영상 파일, 군사 교리 PDF, ARMA3 게임, 시나리오 설정
 
 ### 듀얼 모델 아키텍처
 
@@ -213,7 +198,7 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 ### 도구 그룹 요약
 
 | 그룹 | 파일 | 도구 수 | 주요 용도 |
-|------|------|---------|----------|
+|------|------|---------|-----------|
 | 영상 DB 조회 | `videodb_query_tool.py` | 7 | SAM3 분석 영상 세그먼트 검색 |
 | PDF RAG | `pdf_rag_tool.py` | 2 | 군사 교범 문서 검색 |
 | 워게임 조회 | `wargame_query_tool.py` | 4 | 시뮬레이터 실시간 전장 상황 |
