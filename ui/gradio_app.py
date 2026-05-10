@@ -358,7 +358,7 @@ def _build_map_figure(state: dict):
             symbol = _MARKER_SYMBOL.get(cat, "circle")
             size   = _MARKER_SIZE.get(cat, 5)
             hover  = [
-                f"그룹: {u.get('grp','')}\<br>"
+                f"그룹: {u.get('grp','')}<br>"
                 f"종류: {cat}<br>"
                 f"HP: {u.get('hp', 0)}%<br>"
                 f"위치: ({u.get('x',0):.0f}, {u.get('y',0):.0f})"
@@ -949,9 +949,12 @@ def wargame_request_recon_plan(history: List = None):
     """
     정찰 임무계획 버튼 핸들러.
 
+    LLM 에이전트를 통해 정찰 임무계획을 수립합니다.
+    unit_type이 '정찰'인 부대만 임무에 포함되며, 공격부대는 현위치 대기합니다.
+
     1. 탐지 현황 평가 (assess_recon_need)
-    2. 정찰 경로 생성 (recommend_recon_routes) — 교전 회피 우회 경로
-    3. 정찰부대에만 임무계획 적용 (공격부대 제외)
+    2. LLM 에이전트를 통한 정찰 임무계획 수립
+    3. 정찰부대(unit_type='정찰')에만 임무계획 적용 (공격부대 제외 보장)
     """
     global _wg_last_plan
     history = list(history or [])
@@ -988,28 +991,75 @@ def wargame_request_recon_plan(history: List = None):
         fig, status, log_text = wargame_refresh()
         return history, "", fig, status, log_text
 
-    # ── 2. 정찰 경로 생성 ────────────────────────────────────────
+    # ── 2. LLM 에이전트를 통한 정찰 임무계획 수립 ───────────────
+    agent = _get_agent()
+    agent_label = "BattlefieldAgent" if agent else "규칙 기반"
+    state = eng.get_state()
+
+    # 정찰부대 목록 (unit_type="정찰"만)
+    recon_units_info = "\n".join(
+        f"  - {u['id']} ({u['unit_type']}): "
+        f"위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%"
+        for u in state["units"]
+        if u["side"] == "BLUFOR"
+        and u.get("unit_type") == "정찰"
+        and u["status"] == "active"
+    ) or "  없음"
+
+    undetected_info = "\n".join(
+        f"  - {t['unit_id']}: {t['status']} "
+        f"추정위치=({t['known_x_km']}km, {t['known_y_km']}km)"
+        for t in assessment.get("undetected_targets", [])
+    ) or "  없음"
+
+    recon_query = (
+        f"[정찰 임무계획 수립]\n\n"
+        f"현재 상황: {assessment.get('reason', '')}\n\n"
+        f"미탐지 OPFOR 목표:\n{undetected_info}\n\n"
+        f"사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n"
+        f"수행 절차:\n"
+        f"1. assess_recon_need()를 호출하여 정찰 필요 현황을 확인하세요.\n"
+        f"2. recommend_recon_routes()를 호출하여 교전 회피 정찰 경로를 생성하세요.\n"
+        f"3. recommend_recon_routes()의 apply_json을 apply_wargame_mission_plan()에 "
+        f"전달하여 정찰부대 임무를 적용하세요.\n\n"
+        f"[CRITICAL] unit_type이 '정찰'인 부대(Delta 등)에만 임무를 부여하세요. "
+        f"공격부대(Alpha, Bravo, Charlie, Echo)는 현위치 대기입니다. 절대 포함하지 마세요."
+    )
+
+    history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
+
+    agent_response_text = ""
+    if agent is not None:
+        try:
+            agent_response_text = str(agent.run(recon_query, reset=False))
+        except Exception as e:
+            logger.error(f"Recon agent error: {e}", exc_info=True)
+            agent_response_text = f"에이전트 오류: {e}"
+    else:
+        agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
+
+    # ── 3. 정찰부대(unit_type='정찰')만 임무계획 적용 ───────────
+    # recommend_recon_routes()는 unit_type='정찰' 부대만 선택하므로 정확성이 보장됨
     recon_result = recommend_recon_routes()
 
-    if recon_result["status"] == "no_recon_units":
+    if recon_result.get("status") == "no_recon_units":
         msg = (
-            "**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n"
+            "**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n"
             f"{assessment.get('reason', '')}\n\n"
             "정찰부대(Delta) 없이 공격부대로 직접 진출해야 합니다.\n"
             "→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
         )
-        history.append(("🔍 정찰 임무계획 요청", msg))
+        history[-1] = (history[-1][0], msg)
         fig, status, log_text = wargame_refresh()
         return history, "", fig, status, log_text
 
-    if recon_result["status"] != "success":
-        history.append(("🔍 정찰 임무계획 요청",
-                        f"정찰 경로 생성 실패: {recon_result.get('message', '')}"))
+    if recon_result.get("status") != "success":
+        history[-1] = (history[-1][0],
+                       f"정찰 경로 생성 실패: {recon_result.get('message', '')}")
         fig, status, log_text = wargame_refresh()
         return history, "", fig, status, log_text
 
-    # ── 3. 임무계획 적용 (정찰부대만) ───────────────────────────
-    apply_result = apply_wargame_mission_plan(recon_result["apply_json"])
+    apply_wargame_mission_plan(recon_result["apply_json"])
     _wg_last_plan = {"mission_plans": recon_result["mission_plans"]}
 
     import json
@@ -1021,23 +1071,24 @@ def wargame_request_recon_plan(history: List = None):
     )
 
     unit_lines = "\n".join(
-        f"  - **{p['company_id']}** → {p['objective']} ({len(p['waypoints'])}개 경유지)"
+        f"  - **{p['company_id']}** (정찰) → {p['objective']} ({len(p['waypoints'])}개 경유지)"
         for p in plans
     )
-    msg = (
-        "**🔍 정찰 임무계획 생성 완료**\n\n"
-        f"**판단:** {assessment.get('reason', '')}\n\n"
+    llm_summary = f"**LLM 판단:**\n{agent_response_text[:500]}\n\n" if agent_response_text else ""
+    result_msg = (
+        f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n"
+        f"{llm_summary}"
         f"**OPFOR 탐지 현황:**\n"
         f"  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n"
         f"  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n"
         f"  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n"
-        f"**파견 정찰부대:** {len(plans)}개\n"
+        f"**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n"
         f"{unit_lines}\n\n"
-        "⚠️ **공격부대는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 "
-        "**⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n"
+        "⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** "
+        "정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n"
         f"```json\n{plan_text}\n```"
     )
-    history.append(("🔍 정찰 임무계획 요청", msg))
+    history[-1] = (history[-1][0], result_msg)
 
     fig, status, log_text = wargame_refresh()
     return history, plan_text, fig, status, log_text
