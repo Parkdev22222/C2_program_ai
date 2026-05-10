@@ -1,4 +1,4 @@
-""" 
+"""
 C2 군사 AI - Gradio 웹 인터페이스
 
 핵심 기능:
@@ -968,14 +968,15 @@ def wargame_request_recon_plan(history: List = None):
         f"현재 상황: {assessment.get('reason', '')}\n\n"
         f"미탐지 OPFOR 목표:\n{undetected_info}\n\n"
         f"사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n"
-        f"반드시 다음 5단계 순서대로 수행하세요:\n"
+        f"반드시 다음 6단계 순서대로 수행하세요:\n"
         f"1. assess_recon_need() 호출 → OPFOR 탐지 현황 재확인\n"
         f"2. recommend_recon_routes() 호출 → 교전 회피 정찰 경로 계산 (apply_json, summary 저장)\n"
         f"3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n"
-        f"   → EXAONE Deep이 경로를 전술 검토하고 수정 의견 + 최종 JSON 반환\n"
-        f"   → 반환값을 json.loads()하여 'final_json' 키 추출\n"
-        f"4. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력\n"
-        f"5. apply_wargame_mission_plan(final_json) 호출 → 워게임에 임무 적용\n\n"
+        f"   → EXAONE Deep이 경로를 전술 검토하고 텍스트 조언 반환 (JSON 아님)\n"
+        f"4. 초기 경로(apply_json)와 EXAONE Deep 텍스트 조언을 종합하여\n"
+        f"   EXAONE4가 최종 정찰 임무계획 JSON을 직접 생성\n"
+        f"5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력\n"
+        f"6. apply_wargame_mission_plan(final_json) 호출 → 워게임에 임무 적용\n\n"
         f"[CRITICAL] unit_type이 '정찰'인 부대(Delta 등)에만 임무를 부여하세요. "
         f"공격부대(Alpha, Bravo, Charlie, Echo)는 현위치 대기입니다. 절대 포함하지 마세요."
     )
