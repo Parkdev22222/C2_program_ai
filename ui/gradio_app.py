@@ -358,7 +358,7 @@ def _build_map_figure(state: dict):
             symbol = _MARKER_SYMBOL.get(cat, "circle")
             size   = _MARKER_SIZE.get(cat, 5)
             hover  = [
-                f"그룹: {u.get('grp','')}<br>"
+                f"그룹: {u.get('grp','')}\<br>"
                 f"종류: {cat}<br>"
                 f"HP: {u.get('hp', 0)}%<br>"
                 f"위치: ({u.get('x',0):.0f}, {u.get('y',0):.0f})"
@@ -896,55 +896,6 @@ def wargame_set_timescale(scale: float):
     return wargame_refresh()
 
 
-def wargame_request_llm_plan(history: List = None):
-    global _wg_last_plan
-    history = history or []
-    eng = _wg_ensure_engine()
-    if eng is None:
-        return history, "워게임 초기화 실패", None, "", ""
-    if _wg_planner is None:
-        return history, "Planner 없음", None, "", ""
-
-    state = eng.get_state()
-    agent = _get_agent()
-    agent_label = "BattlefieldAgent" if agent else "규칙 기반"
-
-    import json
-    from wargame.llm_planner import build_mission_query
-    query_text = build_mission_query(state)
-
-    # 채팅에 쿼리 추가
-    history = list(history)
-    history.append((f"🧠 **LLM 임무계획 생성 요청** ({agent_label})\n\n"
-                    f"<details><summary>전송된 쿼리 보기</summary>\n\n"
-                    f"```\n{query_text[:800]}{'...(생략)' if len(query_text)>800 else ''}\n```\n</details>",
-                    "처리 중..."))
-
-    plan = _wg_planner.plan(state, agent=agent)
-    _wg_last_plan = plan
-    eng.apply_mission_plan(plan)
-    if plan.get("air_support_plans"):
-        eng.apply_air_support_plan(plan)
-
-    plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
-
-    # 임무계획 요약 채팅에 표시
-    reasoning = plan.get("reasoning", "")
-    n_plans = len(plan.get("mission_plans", []))
-    n_air = len(plan.get("air_support_plans", []))
-    plan_summary = f"**📋 임무계획 생성 완료** ({agent_label})\n\n"
-    if reasoning:
-        plan_summary += f"**판단 근거:** {reasoning}\n\n"
-    plan_summary += f"**지상 임무:** {n_plans}개 중대\n"
-    if n_air:
-        plan_summary += f"**공중지원:** {n_air}건\n"
-    plan_summary += f"\n```json\n{plan_text}\n```"
-    history[-1] = (history[-1][0], plan_summary)
-
-    fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
-
-
 def wargame_request_recon_plan(history: List = None):
     """
     정찰 임무계획 버튼 핸들러.
@@ -1197,7 +1148,7 @@ def wargame_request_attack_plan(history: List = None):
 
 
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
-    """워게임 채팅창에서 직접 에이전트 쿼리."""
+    """워게임 채팅창에서 사용자가 직접 입력한 쿼리를 에이전트에 전달합니다."""
     if not message.strip():
         return history, ""
     history = list(history)
@@ -1205,7 +1156,7 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     agent = _get_agent()
     eng = _wg_ensure_engine()
 
-    # 워게임 상태를 컨텍스트로 첨부
+    # 워게임 현재 상태를 컨텍스트로 첨부
     context = ""
     if eng is not None:
         state = eng.get_state()
@@ -1219,6 +1170,7 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
             + "\n\n"
         )
 
+    # 챗봇에 사용자 메시지 먼저 표시
     history.append((message, "처리 중..."))
 
     if agent is None:
@@ -1252,7 +1204,6 @@ def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
             chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
 
     return fig, status, log_text, chatbot_history
-
 
 
 def clear_chat_history() -> Tuple[List, str]:
@@ -1579,19 +1530,19 @@ def create_app(agent=None) -> gr.Blocks:
                 inputs=[wg_timescale],
                 outputs=_WG_OUTPUTS,
             )
-            # 정찰 임무계획 버튼
+            # 정찰 임무계획 버튼 — LLM 에이전트를 통해 unit_type='정찰' 부대만 사용
             wg_recon_btn.click(
                 fn=wargame_request_recon_plan,
                 inputs=[wg_chatbot],
                 outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log],
             )
-            # 공격 임무계획 버튼
+            # 공격 임무계획 버튼 — 탐지된 OPFOR 목표 기준
             wg_attack_btn.click(
                 fn=wargame_request_attack_plan,
                 inputs=[wg_chatbot],
                 outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log],
             )
-            # 직접 채팅 전송
+            # 전술 AI 채팅 전송 — 사용자가 직접 입력한 쿼리를 에이전트에 전달
             wg_chat_send_btn.click(
                 fn=wg_chat_send,
                 inputs=[wg_chat_input, wg_chatbot],
