@@ -282,3 +282,165 @@ def create_strategy_advisor_tool(strategy_model=None) -> StrategyAdvisorTool:
     if strategy_model is not None:
         set_strategy_model(strategy_model)
     return StrategyAdvisorTool()
+
+
+# ─────────────────────────────────────────────
+# 정찰 임무계획 어드바이저 (EXAONE Deep 검토)
+# ─────────────────────────────────────────────
+
+RECON_ADVISOR_SYSTEM_PROMPT = """당신은 EXAONE Deep 기반 군사 정찰 전술 전문가 AI입니다.
+제안된 정찰 임무계획(경로, 부대 배치)을 검토하고, 전술적 의견을 제시한 뒤
+최종 확정된 정찰 임무계획 JSON을 반드시 출력합니다.
+
+검토 기준:
+1. 교전 회피 가능성 — 경로가 적 교전권(4km) 바깥을 유지하는가
+2. 탐지 효율성 — 관측 포인트가 목표를 효과적으로 커버하는가
+3. 부대 생존성 — 퇴로 확보 및 복귀 경로의 안전성
+4. 임무 우선순위 — 위협도 높은 목표를 우선 정찰하는가
+
+출력 형식(반드시 준수):
+### 정찰 임무계획 검토 의견
+[전술적 검토 내용]
+
+### 수정 사항
+[없으면 "원안 유지" 명시, 있으면 구체적 변경 내용]
+
+### 최종 정찰 임무계획 JSON
+```json
+{
+  "mission_plans": [...]
+}
+```"""
+
+RECON_ADVISOR_USER_TEMPLATE = """## 제안된 정찰 임무계획
+
+### 경로 요약
+{recon_summary}
+
+### 상세 임무계획 JSON
+```json
+{recon_routes_json}
+```
+
+---
+
+## 현재 전장 상황
+{situation_analysis}
+
+---
+
+위 정찰 임무계획을 검토하고, 전술적 의견을 제시한 뒤 최종 확정 JSON을 출력하세요.
+JSON은 apply_wargame_mission_plan()에 직접 전달되므로 반드시 올바른 형식으로 출력해야 합니다."""
+
+
+class ReconAdvisorTool(Tool):
+    """
+    정찰 임무계획 EXAONE Deep 검토 도구
+
+    recommend_recon_routes()가 생성한 정찰 경로를 EXAONE Deep에 넘겨
+    전술적 검토 의견 + 최종 확정 JSON을 반환합니다.
+    EXAONE4는 반환된 최종 JSON으로 apply_wargame_mission_plan()을 호출합니다.
+    """
+
+    name = "recon_advisor_tool"
+    description = (
+        "recommend_recon_routes()가 생성한 정찰 경로를 EXAONE Deep에게 전술 검토받고 "
+        "최종 확정된 정찰 임무계획 JSON을 반환합니다. "
+        "정찰 임무계획 수립 시 recommend_recon_routes() 호출 직후 이 툴을 사용하세요. "
+        "반환값의 'final_json' 키를 apply_wargame_mission_plan()에 전달하세요."
+    )
+    inputs = {
+        "recon_routes_json": {
+            "type": "string",
+            "description": "recommend_recon_routes()가 반환한 apply_json 문자열 (JSON 형식)",
+        },
+        "recon_summary": {
+            "type": "string",
+            "description": "recommend_recon_routes()가 반환한 summary 문자열 (선택)",
+            "nullable": True,
+        },
+    }
+    output_type = "string"
+
+    def forward(self, recon_routes_json: str, recon_summary: str = None) -> str:
+        import json as _json
+
+        logger.info("ReconAdvisorTool called — forwarding recon routes to EXAONE Deep")
+
+        # 현재 전장 상황 메모리 가져오기
+        memory = get_situation_memory()
+        situation_text = memory.get("situation_analysis") or "사전 상황 분석 없음."
+
+        user_content = RECON_ADVISOR_USER_TEMPLATE.format(
+            recon_summary=recon_summary or "(요약 없음)",
+            recon_routes_json=recon_routes_json,
+            situation_analysis=situation_text,
+        )
+
+        messages = [
+            {"role": "system", "content": RECON_ADVISOR_SYSTEM_PROMPT},
+            {"role": "user",   "content": user_content},
+        ]
+
+        try:
+            strategy_model = get_strategy_model()
+            gen_kwargs = getattr(strategy_model, "_strategy_generation_kwargs", {})
+            response = strategy_model(
+                messages,
+                temperature=gen_kwargs.get("temperature", 0.15),
+                max_tokens=gen_kwargs.get("max_tokens", 4096),
+            )
+            review_text = self._extract_text(response)
+            logger.info("EXAONE Deep recon review received")
+        except Exception as e:
+            logger.error(f"EXAONE Deep call failed in ReconAdvisorTool: {e}")
+            # 모델 실패 시 원안 그대로 반환
+            review_text = f"[EXAONE Deep 호출 실패: {e}]\n원안 유지."
+            return _json.dumps({
+                "review": review_text,
+                "final_json": recon_routes_json,
+            }, ensure_ascii=False)
+
+        # EXAONE Deep 응답에서 최종 JSON 블록 추출
+        final_json = self._extract_final_json(review_text, recon_routes_json)
+
+        return _json.dumps({
+            "review": review_text,
+            "final_json": final_json,
+        }, ensure_ascii=False)
+
+    def _extract_final_json(self, review_text: str, fallback_json: str) -> str:
+        """EXAONE Deep 응답에서 ```json ... ``` 블록을 추출합니다."""
+        import re, json as _json
+
+        # 마지막 ```json 블록 추출 (최종 JSON이 맨 뒤에 위치)
+        blocks = re.findall(r"```json\s*(.*?)\s*```", review_text, re.DOTALL)
+        if blocks:
+            candidate = blocks[-1].strip()
+            try:
+                parsed = _json.loads(candidate)
+                # mission_plans 키 검증
+                if "mission_plans" in parsed:
+                    logger.info("Final recon JSON extracted from EXAONE Deep response")
+                    return candidate
+            except _json.JSONDecodeError:
+                pass
+
+        logger.warning("Could not extract valid JSON from EXAONE Deep response; using original routes")
+        return fallback_json
+
+    def _extract_text(self, response) -> str:
+        if isinstance(response, str):
+            return response
+        if hasattr(response, "content"):
+            content = response.content
+            if isinstance(content, list):
+                return "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
+            return str(content)
+        return str(response)
+
+
+def create_recon_advisor_tool(strategy_model=None) -> ReconAdvisorTool:
+    if strategy_model is not None:
+        set_strategy_model(strategy_model)
+    return ReconAdvisorTool()

@@ -33,6 +33,7 @@ print(result)
 - **wargame_query_tool**: 전술 지도의 아군/적 부대 위치 및 상태 조회
 - **assess_recon_need**: 정찰 필요 여부 판단 — OPFOR 탐지 현황(detected/approximate/lost) 반환
 - **recommend_recon_routes**: 교전 회피 정찰 경로 생성 — 정찰부대 임무계획 JSON 반환
+- **recon_advisor_tool**: recommend_recon_routes() 결과를 EXAONE Deep에게 전술 검토받아 최종 JSON 반환
 - **get_optimal_attack_positions**: 탐지된 OPFOR 위치 기준 최적 공격 위치·수단 추천
 - **strategy_advisor_tool**: EXAONE Deep 모델에게 전략/전술 추천 요청 (핵심 도구)
 
@@ -50,14 +51,56 @@ print(result)
 
 #### 케이스 A: 미탐지 OPFOR 존재 (approximate 또는 lost 상태)
 ```
-→ 정찰 우선 실시
-2단계: recommend_recon_routes() 호출 → 정찰 경로 JSON 생성
-3단계: apply_wargame_mission_plan(recon_result["apply_json"]) 호출
+→ 정찰 우선 실시 (반드시 아래 5단계 순서 준수)
+
+1단계: assess_recon_need() 호출 → 탐지 현황 확인 (approximate/lost 부대 파악)
+2단계: recommend_recon_routes() 호출 → 교전 회피 정찰 경로 계산
+       ↳ 반환값에서 apply_json(경로 JSON)과 summary(경로 요약) 저장
+3단계: recon_advisor_tool(recon_routes_json=..., recon_summary=...) 호출
+       ↳ EXAONE Deep이 경로를 전술적으로 검토하고 수정 의견 + 최종 JSON 반환
+       ↳ 반환값(JSON 문자열)을 파싱하여 "final_json" 키 추출
+4단계: 최종 응답에 정찰 임무계획을 아래 형식의 JSON으로 출력 (필수)
+5단계: apply_wargame_mission_plan(final_json) 호출 → 워게임에 정찰 임무 적용
        ↳ 정찰부대(Delta 등)에만 임무 부여
        ↳ 공격부대(Alpha/Bravo/Charlie/Echo 등)는 현위치 대기
-4단계: 응답에 명시 — "공격부대는 정찰 완료 후 별도 공격 임무계획을 수립합니다."
 ```
+
+**[CRITICAL] 3단계 recon_advisor_tool 호출 코드 예시:**
+```py
+import json
+recon_result = recommend_recon_routes()
+advisor_result_str = recon_advisor_tool(
+    recon_routes_json=recon_result["apply_json"],
+    recon_summary=recon_result.get("summary", "")
+)
+advisor_result = json.loads(advisor_result_str)
+final_json = advisor_result["final_json"]
+print(advisor_result["review"])   # EXAONE Deep 검토 의견 출력
+print(final_json)                 # 최종 확정 JSON 출력
+```
+
+**[CRITICAL] 4단계 최종 응답 JSON 형식 (반드시 이 블록을 응답에 포함):**
+```json
+{
+  "mission_plans": [
+    {
+      "company_id": "Delta",
+      "mission_type": "recon",
+      "waypoints": [[x1, y1], [x2, y2], ...],
+      "objective": "Red3 위치 정밀확인 (개략위치)"
+    }
+  ]
+}
+```
+
+**5단계 apply 코드 예시:**
+```py
+result = apply_wargame_mission_plan(final_json)
+print(result)
+```
+
 **이 경우 공격부대와 정찰부대를 함께 기동시키는 통합 임무계획을 절대 만들지 마라.**
+**공격부대는 정찰 완료 후 별도 공격 임무계획을 수립한다고 명시할 것.**
 
 #### 케이스 B: 모든 OPFOR 탐지됨 (detected)
 ```
@@ -101,6 +144,31 @@ print(result)
 [주요 발견 사항]
 ```
 
+### 정찰 임무계획 응답 (케이스 A)
+```
+## 정찰 임무계획 보고서
+
+### OPFOR 탐지 현황
+[assess_recon_need() 결과 요약]
+
+### 정찰 경로 계획
+[recommend_recon_routes() 요약]
+
+### EXAONE Deep 검토 의견
+[recon_advisor_tool()의 review 내용]
+
+### 최종 확정 정찰 임무계획 (JSON)
+```json
+{ "mission_plans": [...] }
+```
+
+### 임무 적용 결과
+[apply_wargame_mission_plan() 결과]
+
+### 다음 단계
+공격부대(Alpha/Bravo/Charlie/Echo)는 정찰 완료 후 별도 공격 임무계획을 수립합니다.
+```
+
 ### 전략/전술 추천 응답
 ```
 ## 통합 전략/전술 권고 보고서
@@ -124,10 +192,13 @@ print(result)
 
 1. **정찰 우선 원칙**: 임무계획 수립 전 반드시 `assess_recon_need()`로 탐지 현황을 확인하라.
    미탐지 OPFOR가 있으면 정찰부대 임무만 생성하고, 공격부대는 대기시켜라.
-2. **임무 분리 원칙**: 정찰 임무계획과 공격 임무계획을 절대 동시에 생성하지 마라.
+2. **EXAONE Deep 정찰 검토 의무**: 케이스 A에서 반드시 `recon_advisor_tool()`을 호출하여
+   EXAONE Deep의 검토를 거친 후 `final_json`으로 apply_wargame_mission_plan()을 실행하라.
+3. **JSON 출력 의무**: 정찰 임무계획 응답에는 반드시 JSON 블록을 포함하라.
+4. **임무 분리 원칙**: 정찰 임무계획과 공격 임무계획을 절대 동시에 생성하지 마라.
    정찰이 필요한 상황에서 공격부대를 함께 기동시키는 통합 계획은 금지된다.
-3. **context 우선**: 항상 먼저 `get_selected_contexts()`를 호출하여 활성화된 영상/PDF를 확인하세요.
-4. **전략 쿼리 의무**: 전략/전술 관련 쿼리에는 반드시 `strategy_advisor_tool`을 사용하세요.
-5. **상황 연속성**: 이전 영상 분석 결과가 있을 경우, 전략 추천 시 이를 반드시 활용하세요.
-6. **근거 기반**: 모든 분석은 실제 탐지된 데이터에 근거해야 합니다.
-7. **출처 명시**: 각 발견 사항의 출처(영상 ID, 타임스탬프, 세그먼트)를 명시하세요.
+5. **context 우선**: 항상 먼저 `get_selected_contexts()`를 호출하여 활성화된 영상/PDF를 확인하세요.
+6. **전략 쿼리 의무**: 전략/전술 관련 쿼리에는 반드시 `strategy_advisor_tool`을 사용하세요.
+7. **상황 연속성**: 이전 영상 분석 결과가 있을 경우, 전략 추천 시 이를 반드시 활용하세요.
+8. **근거 기반**: 모든 분석은 실제 탐지된 데이터에 근거해야 합니다.
+9. **출처 명시**: 각 발견 사항의 출처(영상 ID, 타임스탬프, 세그먼트)를 명시하세요.
