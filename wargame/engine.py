@@ -607,11 +607,17 @@ class WargameEngine:
             nearest = min(enemies, key=lambda e: u.distance_to(e))
             dist = u.distance_to(nearest)
 
-            # BLUFOR가 LLM 임무계획 수행 중이면 교전 상황에서만 룰 기반 AI 개입
-            if side == "BLUFOR" and u.id in self._blufor_llm_units:
-                in_combat = u.combat_power < 30 or dist < 3_000.0
-                if not in_combat:
-                    continue  # LLM 웨이포인트 유지
+            # BLUFOR 룰 기반 AI 개입 제한
+            if side == "BLUFOR":
+                if u.id not in self._blufor_llm_units:
+                    # 임무계획 미수령 부대: 전투력 위기 시 후퇴만 허용, 나머지 대기
+                    if u.combat_power >= 30:
+                        continue
+                else:
+                    # 임무계획 수령 부대: 교전 상황에서만 룰 기반 개입
+                    in_combat = u.combat_power < 30 or dist < 3_000.0
+                    if not in_combat:
+                        continue  # LLM 웨이포인트 유지
 
             if u.combat_power < 30:
                 self._ai_withdraw(u, side, log_type)
