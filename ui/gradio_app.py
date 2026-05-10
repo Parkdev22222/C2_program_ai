@@ -1,4 +1,4 @@
-"""
+""" 
 C2 군사 AI - Gradio 웹 인터페이스
 
 핵심 기능:
@@ -968,67 +968,110 @@ def wargame_request_recon_plan(history: List = None):
         f"현재 상황: {assessment.get('reason', '')}\n\n"
         f"미탐지 OPFOR 목표:\n{undetected_info}\n\n"
         f"사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n"
-        f"수행 절차:\n"
-        f"1. assess_recon_need()를 호출하여 정찰 필요 현황을 확인하세요.\n"
-        f"2. recommend_recon_routes()를 호출하여 교전 회피 정찰 경로를 생성하세요.\n"
-        f"3. recommend_recon_routes()의 apply_json을 apply_wargame_mission_plan()에 "
-        f"전달하여 정찰부대 임무를 적용하세요.\n\n"
+        f"반드시 다음 5단계 순서대로 수행하세요:\n"
+        f"1. assess_recon_need() 호출 → OPFOR 탐지 현황 재확인\n"
+        f"2. recommend_recon_routes() 호출 → 교전 회피 정찰 경로 계산 (apply_json, summary 저장)\n"
+        f"3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n"
+        f"   → EXAONE Deep이 경로를 전술 검토하고 수정 의견 + 최종 JSON 반환\n"
+        f"   → 반환값을 json.loads()하여 'final_json' 키 추출\n"
+        f"4. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력\n"
+        f"5. apply_wargame_mission_plan(final_json) 호출 → 워게임에 임무 적용\n\n"
         f"[CRITICAL] unit_type이 '정찰'인 부대(Delta 등)에만 임무를 부여하세요. "
         f"공격부대(Alpha, Bravo, Charlie, Echo)는 현위치 대기입니다. 절대 포함하지 마세요."
     )
 
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
 
+    import json as _json, re as _re
+
     agent_response_text = ""
+    applied_plan = None
+
     if agent is not None:
+        # ── 에이전트가 전체 흐름 처리
+        # assess → recommend → recon_advisor(EXAONE Deep) → apply_wargame_mission_plan
         try:
             agent_response_text = str(agent.run(recon_query, reset=False))
         except Exception as e:
             logger.error(f"Recon agent error: {e}", exc_info=True)
             agent_response_text = f"에이전트 오류: {e}"
+
+        # 에이전트 응답에서 최종 JSON 블록 추출 (에이전트가 이미 apply까지 수행)
+        json_blocks = _re.findall(r"```json\s*(.*?)\s*```", agent_response_text, _re.DOTALL)
+        for block in reversed(json_blocks):
+            try:
+                parsed = _json.loads(block)
+                if "mission_plans" in parsed:
+                    applied_plan = parsed
+                    break
+            except _json.JSONDecodeError:
+                pass
+
+        # 에이전트가 JSON을 출력하지 않은 경우 규칙 기반 fallback (apply 포함)
+        if applied_plan is None:
+            logger.warning("Agent response has no parseable mission plan JSON; applying via fallback")
+            recon_result = recommend_recon_routes()
+            if recon_result.get("status") == "success":
+                apply_wargame_mission_plan(recon_result["apply_json"])
+                applied_plan = {
+                    "mission_plans": [
+                        {k: v for k, v in p.items() if k != "target_unit_id"}
+                        for p in recon_result["mission_plans"]
+                    ]
+                }
+            elif recon_result.get("status") == "no_recon_units":
+                msg = (
+                    "**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n"
+                    f"{assessment.get('reason', '')}\n\n"
+                    "→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
+                )
+                history[-1] = (history[-1][0], msg)
+                fig, status, log_text = wargame_refresh()
+                return history, "", fig, status, log_text
     else:
+        # ── 에이전트 없음: 규칙 기반 fallback
         agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
+        recon_result = recommend_recon_routes()
+        if recon_result.get("status") == "no_recon_units":
+            msg = (
+                "**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n"
+                f"{assessment.get('reason', '')}\n\n"
+                "→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
+            )
+            history[-1] = (history[-1][0], msg)
+            fig, status, log_text = wargame_refresh()
+            return history, "", fig, status, log_text
+        if recon_result.get("status") == "success":
+            apply_wargame_mission_plan(recon_result["apply_json"])
+            applied_plan = {
+                "mission_plans": [
+                    {k: v for k, v in p.items() if k != "target_unit_id"}
+                    for p in recon_result["mission_plans"]
+                ]
+            }
 
-    # ── 3. 정찰부대(unit_type='정찰')만 임무계획 적용 ───────────
-    # recommend_recon_routes()는 unit_type='정찰' 부대만 선택하므로 정확성이 보장됨
-    recon_result = recommend_recon_routes()
-
-    if recon_result.get("status") == "no_recon_units":
-        msg = (
-            "**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n"
-            f"{assessment.get('reason', '')}\n\n"
-            "정찰부대(Delta) 없이 공격부대로 직접 진출해야 합니다.\n"
-            "→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-        )
-        history[-1] = (history[-1][0], msg)
+    if applied_plan is None:
+        history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
         fig, status, log_text = wargame_refresh()
         return history, "", fig, status, log_text
 
-    if recon_result.get("status") != "success":
-        history[-1] = (history[-1][0],
-                       f"정찰 경로 생성 실패: {recon_result.get('message', '')}")
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
-
-    apply_wargame_mission_plan(recon_result["apply_json"])
-    _wg_last_plan = {"mission_plans": recon_result["mission_plans"]}
-
-    import json
-    plans = recon_result["mission_plans"]
-    plan_text = json.dumps(
-        {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"}
-                           for p in plans]},
-        ensure_ascii=False, indent=2
-    )
+    _wg_last_plan = applied_plan
+    plans = applied_plan.get("mission_plans", [])
+    plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
 
     unit_lines = "\n".join(
-        f"  - **{p['company_id']}** (정찰) → {p['objective']} ({len(p['waypoints'])}개 경유지)"
+        f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)"
         for p in plans
     )
-    llm_summary = f"**LLM 판단:**\n{agent_response_text[:500]}\n\n" if agent_response_text else ""
+    # EXAONE Deep 검토 의견 추출 (### 정찰 임무계획 검토 의견 섹션)
+    deep_review = ""
+    review_match = _re.search(r"### 정찰 임무계획 검토 의견\s*(.*?)(?=###|\Z)", agent_response_text, _re.DOTALL)
+    if review_match:
+        deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
+
     result_msg = (
         f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n"
-        f"{llm_summary}"
+        f"{deep_review}"
         f"**OPFOR 탐지 현황:**\n"
         f"  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n"
         f"  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n"
