@@ -83,7 +83,7 @@ python main.py ui
 
 ## 에이전트 도구 목록
 
-총 **28개** 도구가 등록되어 있으며 역할별로 6개 그룹으로 분류됩니다.
+총 **22개** 도구가 등록되어 있으며 역할별로 6개 그룹으로 분류됩니다.
 
 ---
 
@@ -148,7 +148,7 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
 | `assess_recon_need()` | — | OPFOR 탐지 현황 평가 — 정찰 필요 여부 및 미탐지 목표 목록 반환 |
-| `recommend_recon_routes()` | — | 교전 회피 정찰 경로 자동 생성 (측방 우회 + 관측 포인트 + 복귀점) |
+| `recommend_recon_routes()` | — | 교전 회피 정찰 경로 자동 생성 (측방 우회 + 관측 포인트 + 복귀점), `apply_json` 포함 반환 |
 
 **정찰 경로 설계 원칙:**
 - 직선 접근 금지 → 60° 측방 우회 경유지 삽입
@@ -182,16 +182,25 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 
 ---
 
-### 6. 전략 어드바이저 도구 (`strategy_advisor_tool.py`)
+### 6. EXAONE Deep 어드바이저 도구 (`strategy_advisor_tool.py`)
 
 EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
-| `strategy_advisor_tool(query)` | query: 전략/전술 질문 | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전술 권고 생성 |
+| `strategy_advisor_tool(query, additional_context)` | query: 전략/전술 질문, additional_context: 보완 정보(선택) | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전략·전술 권고 생성 |
+| `recon_advisor_tool(recon_routes_json, recon_summary)` | recon_routes_json: `recommend_recon_routes()`의 apply_json, recon_summary: 경로 요약(선택) | 제안된 정찰 경로를 EXAONE Deep에 전술 검토 요청 → 수정 의견 + 최종 확정 JSON 반환 |
 
-> 전략/전술 쿼리가 감지되면 에이전트가 자동으로 이 도구를 사용합니다.  
-> `agent_config.yaml`의 `strategy_keywords`를 기준으로 판별합니다.
+**정찰 임무계획 흐름 (케이스 A — 미탐지 OPFOR 존재):**
+```
+assess_recon_need()
+  → recommend_recon_routes()
+    → recon_advisor_tool()   ← EXAONE Deep 전술 검토
+      → apply_wargame_mission_plan(final_json)
+```
+
+> `strategy_advisor_tool`은 전략/전술 키워드 쿼리 시 자동 호출됩니다 (`agent_config.yaml`의 `strategy_keywords` 기준).  
+> `recon_advisor_tool`은 정찰 임무계획 흐름에서 `recommend_recon_routes()` 직후 호출됩니다.
 
 ---
 
@@ -204,7 +213,7 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 | 워게임 조회 | `wargame_query_tool.py` | 4 | 시뮬레이터 실시간 전장 상황 |
 | 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 적용 |
 | 전술 분석 | `wargame_recon_tool.py` + `wargame_strategy_tool.py` + `wargame_attack_advisor_tool.py` | 4 | 정찰·전술 권고·최적 공격 위치 |
-| 전략 어드바이저 | `strategy_advisor_tool.py` | 1 | EXAONE Deep 전략·전술 권고 |
+| EXAONE Deep 어드바이저 | `strategy_advisor_tool.py` | 2 | 전략·전술 권고 / 정찰 경로 전술 검토 |
 
 ---
 
@@ -228,7 +237,7 @@ C2_program_ai/
 │   ├── wargame_recon_tool.py      # 정찰 임무 (2개 도구)
 │   ├── wargame_strategy_tool.py   # 전술 권고 (1개 도구)
 │   ├── wargame_attack_advisor_tool.py  # 최적 공격 위치 (1개 도구)
-│   └── strategy_advisor_tool.py   # EXAONE Deep 전략 어드바이저 (1개 도구)
+│   └── strategy_advisor_tool.py   # EXAONE Deep 어드바이저 (2개 도구: strategy + recon)
 ├── core_src/
 │   ├── video_analysis_system.py   # SAM3 영상 분석
 │   ├── object_detection.py        # SAM3 객체 탐지·추적
