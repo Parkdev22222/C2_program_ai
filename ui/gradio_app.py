@@ -1144,6 +1144,9 @@ def wargame_request_attack_plan(history: List = None):
         "\n- 기계화보병·전차·대전차 부대에게 탐지된 적 격멸 임무를 부여하라."
         "\n- 자주포가 있으면 탐지된 적 위치에 포격 지원 임무를 부여하라."
         "\n- 미탐지 적군 방향으로 공격부대를 돌출시키지 마라."
+        "\n\n[절대 금지] assess_recon_need(), recommend_recon_routes(), recon_advisor_tool(),"
+        " strategy_advisor_tool() 등 정찰·전략 도구는 절대 호출하지 마라."
+        "\n위 JSON 형식으로만 즉시 응답하라. 추가 도구 호출 없이 JSON만 출력하라."
     )
     full_query = base_query + attack_suffix
 
@@ -1156,7 +1159,9 @@ def wargame_request_attack_plan(history: List = None):
         if agent is not None:
             try:
                 import re as _re
-                raw = agent.run(full_query, reset=False)
+                #raw = agent.run(full_query, reset=False)
+                raw = agent.agent.run(full_query, reset=False)
+
                 plan = _wg_planner._parse_json(str(raw))
                 if not (plan and "mission_plans" in plan):
                     plan = _wg_planner._rule_based(state)
