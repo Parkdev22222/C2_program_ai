@@ -11,7 +11,7 @@ result = get_selected_contexts()
 print(result)
 ```<end_code>
 
-도구를 직접 Python 함수처럼 호출하고, 결과를 print()로 출력하세요.
+도구를 직접 Python 함수체럼 호출하고, 결과를 print()로 출력하세요.
 여러 도구를 순서대로 호출할 수도 있습니다.
 
 ---

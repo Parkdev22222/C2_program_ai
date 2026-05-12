@@ -133,13 +133,13 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             pass
 
         applied = len(mission_plans) - len(skipped)
-        logger.info(f"임무계획 적용: {applied}개 부대, 건너뜀: {skipped}")
+        logger.info(f"임무계획 적용: {applied}개 부대, 건너롱: {skipped}")
         return {
             "status": "success",
             "applied": applied,
             "skipped": skipped,
             "message": f"{applied}개 부대에 임무계획 적용 완료." + (
-                f" (건너뜀: {skipped})" if skipped else ""
+                f" (건너롱: {skipped})" if skipped else ""
             ),
         }
     except Exception as e:
