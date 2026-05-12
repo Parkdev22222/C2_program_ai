@@ -447,7 +447,7 @@ def wargame_reset_sim():
         _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
     fig, status, log_text = wargame_refresh()
-    return "▶ 시뮬레이션 시작", fig, status, log_text
+    return "▶ 시뮬레이션 시작", fig, status, log_text, ""
 
 
 def wargame_set_timescale(scale: float):
@@ -464,24 +464,24 @@ def wargame_request_recon_plan(history: List = None):
     if eng is None:
         history.append(("🔍 정찰 임무계획 요청", "워게임 초기화 실패"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     try:
         from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
     except ImportError as e:
         history.append(("🔍 정찰 임무계획 요청", f"정찰 도구 로드 실패: {e}"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     assessment = assess_recon_need()
     opfor_sum = assessment.get("opfor_summary", {})
     if assessment.get("recommendation") == "공격 즉시 가능":
         msg = (f"**✅ 모든 OPFOR 위치가 이미 탐지되어 정찰이 불필요합니다.**\n\n탐지된 적군: {opfor_sum.get('detected', 0)}개\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하여 공격을 시작하세요.")
         history.append(("🔍 정찰 임무계획 요청", msg))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     if assessment.get("recommendation") == "적 없음":
         history.append(("🔍 정찰 임무계획 요청", "탐지된 적군이 없습니다."))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     agent = _get_agent()
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
     state = eng.get_state()
@@ -523,7 +523,7 @@ def wargame_request_recon_plan(history: List = None):
                 msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
                 history[-1] = (history[-1][0], msg)
                 fig, status, log_text = wargame_refresh()
-                return history, "", fig, status, log_text
+                return history, "", fig, status, log_text, ""
     else:
         agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
         recon_result = recommend_recon_routes()
@@ -531,7 +531,7 @@ def wargame_request_recon_plan(history: List = None):
             msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
             history[-1] = (history[-1][0], msg)
             fig, status, log_text = wargame_refresh()
-            return history, "", fig, status, log_text
+            return history, "", fig, status, log_text, ""
         if recon_result.get("status") == "success":
             plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
             eng.apply_mission_plan(plan_dict)
@@ -539,7 +539,7 @@ def wargame_request_recon_plan(history: List = None):
     if applied_plan is None:
         history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     _wg_last_plan = applied_plan
     plans = applied_plan.get("mission_plans", [])
     plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
@@ -550,8 +550,19 @@ def wargame_request_recon_plan(history: List = None):
         deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
     result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
     history[-1] = (history[-1][0], result_msg)
+    unit_summary = "\n".join(f"• **{p['company_id']}** → {p.get('objective', '')}" for p in plans)
+    alert_md = (
+        f"---\n"
+        f"### 🔔 승인 요구 알람 — 정찰 임무계획 적용됨\n\n"
+        f"| 항목 | 내용 |\n|---|---|\n"
+        f"| 계획 ID | `{applied_plan.get('plan_id', 'N/A')}` |\n"
+        f"| 파견 부대 수 | {len(plans)}개 |\n"
+        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
+        f"**파견 부대:**\n{unit_summary}\n\n"
+        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
+    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+    return history, plan_text, fig, status, log_text, alert_md
 
 
 def wargame_request_attack_plan(history: List = None):
@@ -561,11 +572,11 @@ def wargame_request_attack_plan(history: List = None):
     if eng is None:
         history.append(("⚔️ 공격 임무계획 요청", "워게임 초기화 실패"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     if _wg_planner is None:
         history.append(("⚔️ 공격 임무계획 요청", "Planner 없음"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     warning_msg = ""
     try:
         from tools.wargame_recon_tool import assess_recon_need
@@ -619,8 +630,27 @@ def wargame_request_attack_plan(history: List = None):
         result_msg += f"  |  **공중지원:** {n_air}건"
     result_msg += f"\n\n```json\n{plan_text}\n```"
     history[-1] = (history[-1][0], result_msg)
+    mission_summary = "\n".join(
+        f"• **{p['company_id']}** → {p.get('mission_type', '')} / {p.get('objective', '')}"
+        for p in plan.get("mission_plans", [])
+    )
+    air_summary = (
+        f"\n**공중지원 {n_air}건 등록됨**\n" +
+        "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
+        if n_air else ""
+    )
+    alert_md = (
+        f"---\n"
+        f"### 🔔 승인 요구 알람 — 공격 임무계획 적용됨\n\n"
+        f"| 항목 | 내용 |\n|---|---|\n"
+        f"| 지상 임무 | {n_plans}개 중대 |\n"
+        f"| 공중지원 | {n_air}건 |\n"
+        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
+        f"**임무 배분:**\n{mission_summary}{air_summary}\n\n"
+        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
+    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+    return history, plan_text, fig, status, log_text, alert_md
 
 
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
@@ -788,10 +818,10 @@ def create_app(agent=None) -> gr.Blocks:
         if _WARGAME_OK:
             _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
             wg_startstop_btn.click(fn=wargame_start_pause, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
-            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
+            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_alert_md])
             wg_apply_scale_btn.click(fn=wargame_set_timescale, inputs=[wg_timescale], outputs=_WG_OUTPUTS)
-            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
-            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
+            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])
