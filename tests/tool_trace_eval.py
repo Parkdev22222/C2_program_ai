@@ -98,7 +98,7 @@ def setup_engine():
     return engine
 
 
-# ── validate_mission_plan ──────────────────────────────────────
+# ── validate_mission_plan ──────────────────────────────
 
 def test_validate_valid_plan():
     from tools.mission_plan_validator import validate_mission_plan
@@ -172,7 +172,7 @@ def test_validate_empty_mission_plans():
     return f"errors={result['errors']}"
 
 
-# ── pending_plan / confirmation gate ──────────────────────────
+# ── pending_plan / confirmation gate ────────────────────
 
 def test_pending_plan_save_and_retrieve():
     from tools.mission_plan_validator import (
@@ -268,7 +268,7 @@ def test_guard_write_tool_approved_passes():
     return "guard passed after approval"
 
 
-# ── apply_wargame_mission_plan dry_run ────────────────────────
+# ── apply_wargame_mission_plan dry_run ────────────────────
 
 def test_apply_dry_run_default():
     setup_engine()
@@ -319,7 +319,7 @@ def test_apply_success_after_approval():
     return f"applied={result['applied']}"
 
 
-# ── apply_wargame_air_support ──────────────────────────────────
+# ── apply_wargame_air_support ───────────────────────────
 
 def test_air_support_dry_run():
     setup_engine()
@@ -344,7 +344,7 @@ def test_air_support_invalid_type():
     return f"valid={result['valid']}"
 
 
-# ── classify_intent ────────────────────────────────────────────
+# ── classify_intent ────────────────────────────────────
 
 def test_intent_execution_request():
     from tools.mission_plan_validator import classify_intent
@@ -389,7 +389,7 @@ def test_intent_no_confirmation_for_recon():
     return f"requires_confirmation={result['requires_confirmation']}"
 
 
-# ── COA 분석 ──────────────────────────────────────────────────
+# ── COA 분석 ────────────────────────────────────────────
 
 def test_coa_analysis_basic():
     setup_engine()
@@ -453,7 +453,7 @@ def test_coa_analysis_recon_bonus():
     return f"recon_score={r_score}, attack_score={a_score}"
 
 
-# ── get_wargame_engine_status ─────────────────────────────────
+# ── get_wargame_engine_status ───────────────────────────
 
 def test_engine_status():
     setup_engine()
