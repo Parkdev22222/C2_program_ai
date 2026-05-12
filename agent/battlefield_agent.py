@@ -1,16 +1,10 @@
 """
 C2 군사 AI 에이전트 - EXAONE4 기반 듀얼 모델 아키텍처
 
-역할:
-- EXAONE4: 메인 CodeAgent. 영상 분석, 상황 판단, 최종 응답 생성
-- EXAONE Deep: 전략/전술 전문 모델. strategy_advisor_tool을 통해 EXAONE4가 호출
-
 흐름:
-1. 영상 분석 쿼리 → EXAONE4가 직접 비디오 도구를 사용하여 상황 분석 및 응답
-   → 응답 후 situation_memory 자동 갱신
-2. 전략/전술 쿼리 → EXAONE4가 strategy_advisor_tool 호출
-   → EXAONE Deep이 [EXAONE4 상황 분석 + 사용자 쿼리]로 전략/전술 권고 생성
-   → EXAONE4가 [자신의 상황 분석 + EXAONE Deep 권고]를 종합하여 최종 응답
+1. 영상 분석 쿼리 → EXAONE4가 비디오 도구로 상황 분석
+2. 전략/전술 쿼리 → strategy_advisor_tool로 EXAONE Deep 호출
+3. 임무계획 쿼리 → classify_intent 라우터 → 단계별 권장 도구 체인 실행
 """
 import re
 import yaml
@@ -36,10 +30,6 @@ def _load_custom_instructions() -> str:
 
 
 def is_strategy_query(text: str, config: dict = None) -> bool:
-    """
-    사용자 쿼리가 군사 전략/전술 추천 쿼리인지 판별합니다.
-    agent_config.yaml의 strategy_keywords를 기준으로 판별합니다.
-    """
     if config is None:
         cfg = _load_agent_config()
     else:
@@ -53,44 +43,28 @@ def is_strategy_query(text: str, config: dict = None) -> bool:
     return False
 
 
+def classify_intent(query: str) -> dict:
+    """classify_intent를 mission_plan_validator에서 가져와 래핑합니다."""
+    try:
+        from tools.mission_plan_validator import classify_intent as _classify
+        return _classify(query)
+    except ImportError:
+        return {"intent": "general", "requires_confirmation": False, "preferred_tools": []}
+
+
 class BattlefieldAgent:
-    """
-    EXAONE4 기반 C2 군사 AI 에이전트
-
-    smolagents CodeAgent를 래핑하여 다음 기능을 제공합니다:
-    - 비디오 분석 도구 통합
-    - 전략 쿼리 감지 및 EXAONE Deep 호출 (strategy_advisor_tool)
-    - 상황 분석 메모리 자동 갱신
-    - 컨텍스트(비디오/PDF) 관리
-    """
-
-    def __init__(
-        self,
-        exaone4_model=None,
-        strategy_model=None,
-        videodb_manager=None,
-        embedding_generator=None,
-        pdf_rag_system=None,
-    ):
+    def __init__(self, exaone4_model=None, strategy_model=None, videodb_manager=None, embedding_generator=None, pdf_rag_system=None):
         self._agent_config = _load_agent_config()
         self._custom_instructions = _load_custom_instructions()
         self._videodb_manager = videodb_manager
         self._embedding_generator = embedding_generator
         self._pdf_rag_system = pdf_rag_system
-
-        # 선택된 비디오/PDF 컨텍스트
         self._selected_video_ids: List[str] = []
         self._selected_pdf_ids: List[str] = []
-
-        # 모델 로딩
         self._exaone4_model = exaone4_model or self._load_exaone4()
         self._strategy_model = strategy_model or self._load_strategy_model()
-
-        # 툴 초기화
         self._tools = self._build_tools()
-        self._prepend_instructions = False  # system_prompt 미지원 시 True로 설정됨
-
-        # smolagents CodeAgent 초기화
+        self._prepend_instructions = False
         self._agent = self._init_code_agent()
 
     def _load_exaone4(self):
@@ -106,37 +80,19 @@ class BattlefieldAgent:
             from agent.strategy_model_loader import load_strategy_model_from_config_file
             return load_strategy_model_from_config_file()
         except Exception as e:
-            logger.warning(f"Failed to load EXAONE Deep model: {e}. Strategy tool will fail if used.")
+            logger.warning(f"Failed to load EXAONE Deep model: {e}")
             return None
 
     def _build_tools(self) -> list:
         tools = []
 
-        # 비디오 쿼리 도구
         try:
-            from tools.videodb_query_tool import (
-                get_selected_contexts,
-                query_video_semantic,
-                query_video_by_object,
-                query_video_by_event,
-                get_video_summary,
-                get_segment_details,
-                set_active_videos,
-            )
-            tools.extend([
-                get_selected_contexts,
-                query_video_semantic,
-                query_video_by_object,
-                query_video_by_event,
-                get_video_summary,
-                get_segment_details,
-                set_active_videos,
-            ])
+            from tools.videodb_query_tool import (get_selected_contexts, query_video_semantic, query_video_by_object, query_video_by_event, get_video_summary, get_segment_details, set_active_videos)
+            tools.extend([get_selected_contexts, query_video_semantic, query_video_by_object, query_video_by_event, get_video_summary, get_segment_details, set_active_videos])
             logger.info("VideoDB query tools loaded")
         except Exception as e:
             logger.warning(f"Failed to load videodb tools: {e}")
 
-        # PDF RAG 도구
         try:
             from tools.pdf_rag_tool import pdf_rag_search, add_pdf_to_rag
             tools.extend([pdf_rag_search, add_pdf_to_rag])
@@ -144,27 +100,55 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load PDF RAG tools: {e}")
 
-        # 워게임 쿼리 도구
         try:
-            from tools.wargame_query_tool import (
-                get_tactical_situation,
-                get_friendly_units,
-                get_hostile_units,
-                get_unit_details,
-                get_units_by_type,
-            )
-            tools.extend([
-                get_tactical_situation,
-                get_friendly_units,
-                get_hostile_units,
-                get_unit_details,
-                get_units_by_type,
-            ])
-            logger.info("Wargame query tools loaded")
+            from tools.wargame_query_tool import (get_wargame_situation, get_wargame_unit_detail, get_wargame_battle_log, get_intelligence_report)
+            tools.extend([get_wargame_situation, get_wargame_unit_detail, get_wargame_battle_log, get_intelligence_report])
+            logger.info("Wargame simulator query tools loaded")
         except Exception as e:
-            logger.warning(f"Failed to load wargame tools: {e}")
+            logger.warning(f"Failed to load wargame simulator query tools: {e}")
 
-        # 전략 어드바이저 도구 (핵심 신규 도구)
+        try:
+            from tools.wargame_mission_tool import (apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status)
+            tools.extend([apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status])
+            logger.info("Wargame mission execution tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load wargame mission tools: {e}")
+
+        try:
+            from tools.mission_plan_validator_tool import (validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool)
+            tools.extend([validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool])
+            logger.info("Mission plan validator tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load mission plan validator tools: {e}")
+
+        try:
+            from tools.coa_analysis_tool import analyze_coa_wargame
+            tools.append(analyze_coa_wargame)
+            logger.info("COA analysis tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load COA analysis tool: {e}")
+
+        try:
+            from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
+            tools.append(get_wargame_tactical_recommendation)
+            logger.info("Wargame tactical recommendation tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load wargame strategy tool: {e}")
+
+        try:
+            from tools.wargame_attack_advisor_tool import get_optimal_attack_positions
+            tools.append(get_optimal_attack_positions)
+            logger.info("Wargame attack position advisor tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load attack advisor tool: {e}")
+
+        try:
+            from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
+            tools.extend([assess_recon_need, recommend_recon_routes])
+            logger.info("Wargame recon tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load recon tools: {e}")
+
         try:
             from tools.strategy_advisor_tool import create_strategy_advisor_tool
             strategy_tool = create_strategy_advisor_tool(self._strategy_model)
@@ -172,6 +156,14 @@ class BattlefieldAgent:
             logger.info("Strategy advisor tool (EXAONE Deep) loaded")
         except Exception as e:
             logger.warning(f"Failed to load strategy advisor tool: {e}")
+
+        try:
+            from tools.strategy_advisor_tool import create_recon_advisor_tool
+            recon_advisor = create_recon_advisor_tool(self._strategy_model)
+            tools.append(recon_advisor)
+            logger.info("Recon advisor tool (EXAONE Deep route review) loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load recon advisor tool: {e}")
 
         return tools
 
@@ -189,37 +181,22 @@ class BattlefieldAgent:
             "planning_interval": ca_cfg.get("planning_interval", 3),
             "additional_authorized_imports": ca_cfg.get("authorized_imports", []),
         }
-
-        # stream_outputs: 구버전에만 존재
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
 
-        # system_prompt: 구버전에서 직접 전달 가능하지만 기본값에 덧붙이는 방식 사용
-        # (기본 포맷 지시사항을 보존하기 위해 직접 전달하지 않음)
-
-        # CodeAgent 생성 (기본 system_prompt 포함)
         agent = CodeAgent(**kwargs)
-
-        # 커스텀 지시사항을 기존 system_prompt 뒤에 추가 (덮어쓰지 않음)
         if self._custom_instructions:
             self._append_custom_prompt(agent)
-
         return agent
 
     def _append_custom_prompt(self, agent):
-        """
-        smolagents CodeAgent의 기존 system_prompt를 유지하면서 뒤에 커스텀 지시사항을 추가합니다.
-        기존 포맷 지시사항(코드 출력 형식 등)을 보존하는 것이 핵심입니다.
-        """
         try:
             pt = agent.prompt_templates
-            # dict 타입
             if isinstance(pt, dict):
                 existing = pt.get("system_prompt", "")
                 pt["system_prompt"] = existing + "\n\n" + self._custom_instructions
                 logger.info("Custom instructions appended to prompt_templates dict")
                 return
-            # TypedDict / dataclass / object 타입
             if hasattr(pt, "system_prompt"):
                 existing = getattr(pt, "system_prompt", "") or ""
                 pt.system_prompt = existing + "\n\n" + self._custom_instructions
@@ -227,61 +204,64 @@ class BattlefieldAgent:
                 return
         except Exception as e:
             logger.debug(f"prompt_templates append failed: {e}")
-
-        # 최후 폴백: run() 쿼리에 직접 첨부
         logger.info("Falling back to per-query instruction prepend")
         self._prepend_instructions = True
 
-    # ─────────────────────────────────────────────────────────────
-    # 공개 API
-    # ─────────────────────────────────────────────────────────────
-
     def run(self, query: str, reset: bool = False) -> str:
-        """
-        쿼리를 실행합니다.
+        intent_result = classify_intent(query)
+        intent = intent_result.get("intent", "general")
+        preferred_tools = intent_result.get("preferred_tools", [])
+        requires_confirmation = intent_result.get("requires_confirmation", False)
 
-        전략/전술 쿼리인 경우 에이전트의 커스텀 지시사항에 따라
-        자동으로 strategy_advisor_tool을 사용합니다.
+        logger.info(f"Intent: {intent}, requires_confirmation: {requires_confirmation}")
 
-        Args:
-            query: 사용자 입력 쿼리
-            reset: True이면 에이전트 메모리를 초기화
+        augmented_query = self._augment_by_intent(query, intent, preferred_tools, requires_confirmation)
 
-        Returns:
-            에이전트의 최종 응답 텍스트
-        """
-        if is_strategy_query(query, self._agent_config):
-            logger.info("Strategy/tactics query detected → agent will use strategy_advisor_tool")
-            augmented_query = self._augment_strategy_query(query)
-        else:
-            augmented_query = query
-
-        # system_prompt 미지원 버전: 첫 쿼리에 커스텀 지시사항 첨부
         if self._prepend_instructions and self._custom_instructions:
-            augmented_query = (
-                f"[시스템 지시사항]\n{self._custom_instructions}\n\n"
-                f"[사용자 쿼리]\n{augmented_query}"
-            )
-            self._prepend_instructions = False  # 이후 쿼리에는 중복 첨부 방지
+            augmented_query = f"[시스템 지시사항]\n{self._custom_instructions}\n\n[사용자 쿼리]\n{augmented_query}"
+            self._prepend_instructions = False
 
         logger.info(f"Running agent with query: {query[:80]}...")
         result = self._agent.run(augmented_query, reset=reset)
         return str(result)
 
-    def _augment_strategy_query(self, query: str) -> str:
-        """
-        전략/전술 쿼리에 strategy_advisor_tool 사용 지시를 명시적으로 추가합니다.
-        에이전트가 커스텀 지시사항을 놓치지 않도록 보장합니다.
-        """
-        return (
-            f"{query}\n\n"
-            f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-            f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-            f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
-        )
+    def _augment_by_intent(self, query: str, intent: str, preferred_tools: list, requires_confirmation: bool) -> str:
+        if intent == "execution_request":
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 워게임 임무계획 실행 요청입니다.\n"
+                f"반드시 dry_run=True(기본값)으로 apply_wargame_mission_plan을 먼저 호출하여 검증하세요.\n"
+                f"검증 결과에서 plan_id를 사용자에게 안내하고, 사용자 승인(approve_plan) 후 dry_run=False로 실행하세요.\n"
+                f"사용자 승인 없이 dry_run=False를 직접 호출하는 것은 금지됩니다."
+            )
+
+        if intent in ("attack_planning", "general_strategy_advice", "planning_request"):
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
+                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
+                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+            )
+
+        if intent == "recon_planning":
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 정찰 임무 요청입니다. "
+                f"반드시 assess_recon_need() → recommend_recon_routes() → recon_advisor_tool() 순서로 호출하여 "
+                f"정찰 임무계획을 수립하세요."
+            )
+
+        if is_strategy_query(query, self._agent_config):
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
+                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
+                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+            )
+
+        return query
 
     def set_video_context(self, video_ids: List[str]):
-        """에이전트가 쿼리할 비디오 컨텍스트를 설정합니다."""
         self._selected_video_ids = video_ids
         try:
             from tools.videodb_query_tool import set_selected_video_ids
@@ -291,7 +271,6 @@ class BattlefieldAgent:
         logger.info(f"Video context set: {video_ids}")
 
     def set_pdf_context(self, pdf_ids: List[str]):
-        """에이전트가 쿼리할 PDF 컨텍스트를 설정합니다."""
         self._selected_pdf_ids = pdf_ids
         try:
             from tools.pdf_rag_tool import set_selected_pdfs
@@ -301,7 +280,6 @@ class BattlefieldAgent:
         logger.info(f"PDF context set: {pdf_ids}")
 
     def add_pdf(self, pdf_path: str) -> str:
-        """PDF를 RAG 시스템에 추가합니다."""
         try:
             from tools.pdf_rag_tool import add_pdf_to_rag
             result = add_pdf_to_rag(pdf_path)
@@ -311,7 +289,6 @@ class BattlefieldAgent:
             return f"PDF 추가 실패: {e}"
 
     def get_situation_memory(self) -> dict:
-        """현재 세션의 상황 분석 메모리를 반환합니다."""
         from tools.strategy_advisor_tool import get_situation_memory
         return get_situation_memory()
 

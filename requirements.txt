@@ -35,5 +35,11 @@ huggingface-hub>=0.20.0
 # ─── Optional: Map Visualization ──────────────────────────────
 # folium>=0.14.0
 
-# ─── Optional: SAM2 Tracking ──────────────────────────────────
-# Install from source: pip install git+https://github.com/facebookresearch/segment-anything-2.git
+# ─── SAM2/SAM3 비디오 추적 (sam3_track_video.py) ───────────────
+# Option A (권장): Meta 공식 sam2 패키지
+#   pip install git+https://github.com/facebookresearch/segment-anything-2.git
+# Option B: sam2 패키지 없이 HF 자동 다운로드
+#   transformers>=4.47.0 으로 Sam2VideoPredictor 포함 (위 패키지 불필요)
+
+# ─── 텍스트 기반 탐지 (Grounding DINO) ─────────────────────────
+# transformers>=4.47.0 으로 AutoModelForZeroShotObjectDetection 포함

@@ -1,11 +1,10 @@
 # ===== 객체 탐지 및 추적 (SAM3) =====
 object_detection:
-  # SAM3 레포 clone 경로 (sys.path에 추가됨)
-  sam3_path: "/content/drive/MyDrive/sam3"
-  # SAM3 모델 가중치 파일 경로
-  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights/sam3.pt"
+  # SAM3 가중치 경로 (로컬 디렉토리 또는 HuggingFace 모델 ID)
+  # ★ 실제 사용 중인 경로로 수정하세요 ★
+  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights"
   device: "cuda"
-  dtype: "float32"           # SAM3는 내부 텍스트 인코더가 float32 고정 → float32 필수
+  dtype: "bfloat16"
   target_classes:
     - "soldier"
     - "military soldier"
