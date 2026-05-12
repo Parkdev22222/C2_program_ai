@@ -467,7 +467,6 @@ def wargame_request_recon_plan(history: List = None):
         return history, "", fig, status, log_text
     try:
         from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
-        from tools.wargame_mission_tool import apply_wargame_mission_plan
     except ImportError as e:
         history.append(("🔍 정찰 임무계획 요청", f"정찰 도구 로드 실패: {e}"))
         fig, status, log_text = wargame_refresh()
@@ -488,7 +487,7 @@ def wargame_request_recon_plan(history: List = None):
     state = eng.get_state()
     recon_units_info = "\n".join(f"  - {u['id']} ({u['unit_type']}): 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%" for u in state["units"] if u["side"] == "BLUFOR" and u.get("unit_type") == "정찰" and u["status"] == "active") or "  없음"
     undetected_info = "\n".join(f"  - {t['unit_id']}: {t['status']} 추정위치=({t['known_x_km']}km, {t['known_y_km']}km)" for t in assessment.get("undetected_targets", [])) or "  없음"
-    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 6단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력\n6. apply_wargame_mission_plan(final_json) 호출\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.")
+    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 5단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력 (실제 적용은 UI가 자동 처리)\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.")
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
     import json as _json, re as _re
     agent_response_text = ""
@@ -499,12 +498,17 @@ def wargame_request_recon_plan(history: List = None):
         except Exception as e:
             logger.error(f"Recon agent error: {e}", exc_info=True)
             agent_response_text = f"에이전트 오류: {e}"
-        json_blocks = _re.findall(r"```json\\s*(.*?)\\s*```", agent_response_text, _re.DOTALL)
+        json_blocks = _re.findall(r"```json\s*(.*?)\s*```", agent_response_text, _re.DOTALL)
         for block in reversed(json_blocks):
             try:
                 parsed = _json.loads(block)
                 if "mission_plans" in parsed:
                     applied_plan = parsed
+                    # UI 버튼 클릭 = 사용자 승인 → 엔진에 직접 적용
+                    try:
+                        eng.apply_mission_plan(applied_plan)
+                    except Exception as _e:
+                        logger.warning(f"Failed to apply parsed recon plan to engine: {_e}")
                     break
             except _json.JSONDecodeError:
                 pass
@@ -512,7 +516,8 @@ def wargame_request_recon_plan(history: List = None):
             logger.warning("Agent response has no parseable mission plan JSON; applying via fallback")
             recon_result = recommend_recon_routes()
             if recon_result.get("status") == "success":
-                apply_wargame_mission_plan(recon_result["apply_json"])
+                plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
+                eng.apply_mission_plan(plan_dict)
                 applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
             elif recon_result.get("status") == "no_recon_units":
                 msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
@@ -528,7 +533,8 @@ def wargame_request_recon_plan(history: List = None):
             fig, status, log_text = wargame_refresh()
             return history, "", fig, status, log_text
         if recon_result.get("status") == "success":
-            apply_wargame_mission_plan(recon_result["apply_json"])
+            plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
+            eng.apply_mission_plan(plan_dict)
             applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
     if applied_plan is None:
         history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
