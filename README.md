@@ -83,7 +83,7 @@ python main.py ui
 
 ## 에이전트 도구 목록
 
-총 **28개** 도구가 등록되어 있으며 역할별로 6개 그룹으로 분류됩니다.
+총 **22개** 도구가 등록되어 있으며 역할별로 6개 그룹으로 분류됩니다.
 
 ---
 
@@ -139,6 +139,18 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | `apply_wargame_air_support(support_json)` | support_json: 공중지원 계획 JSON | CAS(근접항공지원) 임무를 워게임 엔진에 적용 |
 | `get_wargame_engine_status()` | — | 워게임 엔진 상태(실행 중 여부, 시간 배율, 현재 틱 등) 반환 |
 
+#### 임무계획 2단계 승인 게이트
+
+`apply_wargame_mission_plan`은 사용자 승인 없이 실제 적용이 차단됩니다.
+
+```
+1단계: apply_wargame_mission_plan(plan_json)          # dry_run=True (기본값)
+       → 검증 결과 + plan_id 반환 → 사용자에게 안내
+
+2단계: approve_mission_plan_tool(plan_id="plan_xxx")   # 사용자 승인
+       → apply_wargame_mission_plan(plan_json, dry_run=False)  # 실제 적용
+```
+
 ---
 
 ### 5. 워게임 전술 분석 도구
@@ -148,7 +160,7 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
 | `assess_recon_need()` | — | OPFOR 탐지 현황 평가 — 정찰 필요 여부 및 미탐지 목표 목록 반환 |
-| `recommend_recon_routes()` | — | 교전 회피 정찰 경로 자동 생성 (측방 우회 + 관측 포인트 + 복귀점) |
+| `recommend_recon_routes()` | — | 교전 회피 정찰 경로 자동 생성 (측방 우회 + 관측 포인트 + 복귀점), `apply_json` 포함 반환 |
 
 **정찰 경로 설계 원칙:**
 - 직선 접근 금지 → 60° 측방 우회 경유지 삽입
@@ -180,18 +192,58 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | 교전 효율 | 15% | 거리별 교전 효율 (1.2 km 최적) |
 | 시선 품질 | 10% | 지형 차폐 없이 적을 관측 가능한 정도 |
 
+#### 5-4. COA(행동 방책) 분석 (`coa_analysis_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `analyze_coa_wargame(coa_list, objective)` | coa_list: COA 목록(dict 배열), objective: 작전 목표(선택) | 복수의 행동 방책을 현재 워게임 상태에 대입하여 점수·위험도·권장 순위 반환 |
+
+**COA 점수 산정 (0~100):**
+
+| 항목 | 점수 변화 | 조건 |
+|------|-----------|------|
+| 기본 | 50 | — |
+| 스키마 검증 실패 | −30 | 임무계획 오류 |
+| 경고 1건당 | −5 | 검증 경고 |
+| 참여 부대 비율 | +0~+10 | 가용 BLUFOR 대비 참여율 |
+| 정찰 임무 포함 | +5 | `"recon"` in mission_types |
+| 공격 임무 포함 | +5 | `"attack"` or `"flank"` |
+| 측방 기동 포함 | +8 | `"flank"` in mission_types |
+| 미탐지 OPFOR (정찰 없음) | −15 | approximate/lost OPFOR 존재 |
+| 공격 부대 우세 (≥1.5:1) | +10 | 공격 부대 수 / OPFOR 수 |
+| 공격 부대 열세 (<0.5:1) | −10 | 위 반대 |
+
+**위험도 분류:** `low` (≥70) / `medium` (≥45) / `high` (<45)
+
+#### 5-5. 임무계획 검증·승인 도구 (`mission_plan_validator_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `validate_mission_plan_tool(plan_json)` | plan_json: JSON 문자열 | 임무계획 유효성 검증 — 오류/경고 반환, 실제 적용 없음 |
+| `approve_mission_plan_tool(plan_id)` | plan_id: 승인할 계획 ID | plan_id를 승인하여 `dry_run=False` 실행 허가 |
+| `get_pending_plan_tool()` | — | 현재 승인 대기 중인 임무계획 및 세션 상태 조회 |
+
 ---
 
-### 6. 전략 어드바이저 도구 (`strategy_advisor_tool.py`)
+### 6. EXAONE Deep 어드바이저 도구 (`strategy_advisor_tool.py`)
 
 EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
-| `strategy_advisor_tool(query)` | query: 전략/전술 질문 | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전술 권고 생성 |
+| `strategy_advisor_tool(query, additional_context)` | query: 전략/전술 질문, additional_context: 보완 정보(선택) | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전략·전술 권고 생성 |
+| `recon_advisor_tool(recon_routes_json, recon_summary)` | recon_routes_json: `recommend_recon_routes()`의 apply_json, recon_summary: 경로 요약(선택) | 제안된 정찰 경로를 EXAONE Deep에 전술 검토 요청 → 수정 의견 + 최종 확정 JSON 반환 |
 
-> 전략/전술 쿼리가 감지되면 에이전트가 자동으로 이 도구를 사용합니다.  
-> `agent_config.yaml`의 `strategy_keywords`를 기준으로 판별합니다.
+**정찰 임무계획 흐름 (케이스 A — 미탐지 OPFOR 존재):**
+```
+assess_recon_need()
+  → recommend_recon_routes()
+    → recon_advisor_tool()   ← EXAONE Deep 전술 검토
+      → apply_wargame_mission_plan(final_json)
+```
+
+> `strategy_advisor_tool`은 전략/전술 키워드 쿼리 시 자동 호출됩니다 (`agent_config.yaml`의 `strategy_keywords` 기준).  
+> `recon_advisor_tool`은 정찰 임무계획 흐름에서 `recommend_recon_routes()` 직후 호출됩니다.
 
 ---
 
@@ -204,7 +256,9 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 | 워게임 조회 | `wargame_query_tool.py` | 4 | 시뮬레이터 실시간 전장 상황 |
 | 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 적용 |
 | 전술 분석 | `wargame_recon_tool.py` + `wargame_strategy_tool.py` + `wargame_attack_advisor_tool.py` | 4 | 정찰·전술 권고·최적 공격 위치 |
-| 전략 어드바이저 | `strategy_advisor_tool.py` | 1 | EXAONE Deep 전략·전술 권고 |
+| COA 분석 | `coa_analysis_tool.py` | 1 | 행동 방책 비교 평가 |
+| 임무계획 검증·승인 | `mission_plan_validator_tool.py` | 3 | 검증·승인·pending 조회 |
+| EXAONE Deep 어드바이저 | `strategy_advisor_tool.py` | 2 | 전략·전술 권고 / 정찰 경로 전술 검토 |
 
 ---
 
@@ -228,7 +282,10 @@ C2_program_ai/
 │   ├── wargame_recon_tool.py      # 정찰 임무 (2개 도구)
 │   ├── wargame_strategy_tool.py   # 전술 권고 (1개 도구)
 │   ├── wargame_attack_advisor_tool.py  # 최적 공격 위치 (1개 도구)
-│   └── strategy_advisor_tool.py   # EXAONE Deep 전략 어드바이저 (1개 도구)
+│   ├── coa_analysis_tool.py       # COA 분석 (1개 도구)
+│   ├── mission_plan_validator.py  # 임무계획 검증 엔진 + 2단계 게이트
+│   ├── mission_plan_validator_tool.py  # 검증·승인·pending 조회 (3개 도구)
+│   └── strategy_advisor_tool.py   # EXAONE Deep 어드바이저 (2개 도구: strategy + recon)
 ├── core_src/
 │   ├── video_analysis_system.py   # SAM3 영상 분석
 │   ├── object_detection.py        # SAM3 객체 탐지·추적
@@ -240,6 +297,8 @@ C2_program_ai/
 │   ├── agent_config.yaml          # 에이전트 설정 (max_steps, strategy_keywords 등)
 │   ├── agent_custom_instructions.txt  # 에이전트 시스템 프롬프트
 │   └── models_config.yaml         # ML 모델 설정
+├── tests/
+│   └── tool_trace_eval.py         # 27-케이스 도구 추적 평가 스위트
 ├── main.py
 └── requirements.txt
 ```
