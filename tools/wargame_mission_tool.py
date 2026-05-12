@@ -1,1 +1,248 @@
-"""\n워게임 시뮬레이터 임무계획 실행 도구 (smolagents Tool)\n"""\nimport json\nimport logging\nfrom smolagents import tool\n\nlogger = logging.getLogger(__name__)\n\n_wargame_engine = None\n\n\ndef register_wargame_engine(engine):\n    global _wargame_engine\n    _wargame_engine = engine\n\n\n@tool\ndef apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:\n    """\n    JSON 형태의 BLUFOR 임무계획을 워게임 시뮬레이터에 적용합니다.\n    기본값 dry_run=True: 실제 적용 없이 검증 결과만 반환합니다.\n\n    Args:\n        plan_json: JSON 문자열.\n            {\n              "plan_id": "plan_abc123",\n              "mission_plans": [\n                {\n                  "company_id": "Alpha",\n                  "mission_type": "attack",\n                  "waypoints": [[x, y], ...],\n                  "objective": "Red1 격멸"\n                }\n              ]\n            }\n        dry_run: True이면 검증만 수행 (기본값). False이면 실제 적용.\n\n    Returns:\n        dry_run=True 시: {"status": "dry_run", "valid": bool, "plan_id": str, ...}\n        dry_run=False 시: {"status": "success"|"blocked"|"error", ...}\n    """\n    if _wargame_engine is None:\n        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}\n\n    try:\n        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json\n    except json.JSONDecodeError as e:\n        return {"status": "error", "message": f"JSON 파싱 실패: {e}"}\n\n    try:\n        from tools.mission_plan_validator import (\n            validate_mission_plan, save_pending_plan, guard_write_tool,\n        )\n        validation = validate_mission_plan(plan)\n    except ImportError:\n        validation = {"ok": True, "errors": [], "warnings": [], "summary": "validator 미로드"}\n\n    if dry_run:\n        plan_id = save_pending_plan(plan, validation)\n        mission_plans = plan.get("mission_plans", [])\n        summary_lines = [\n            f"  • {mp.get('company_id', '?')} → {mp.get('mission_type', '?')}: {mp.get('objective', '')}"\n            for mp in mission_plans\n        ]\n        return {\n            "status": "dry_run",\n            "valid": validation["ok"],\n            "validation": validation,\n            "plan_id": plan_id,\n            "would_apply": plan,\n            "plan_summary": "\n".join(summary_lines),\n            "message": (\n                f"[DRY RUN] 검증만 수행했습니다. 실제 워게임 상태는 변경되지 않았습니다.\n"\n                f"검증 결과: {validation['summary']}\n"\n                f"실제 적용하려면 사용자가 plan_id='{plan_id}'를 승인한 후 실행하세요."\n            ),\n        }\n\n    try:\n        gate = guard_write_tool("apply_wargame_mission_plan", {"plan_json": plan_json})\n    except Exception:\n        gate = {"allowed": True}\n\n    if not gate.get("allowed", True):\n        return {\n            "status": "blocked",\n            "reason": gate.get("reason"),\n            "message": gate.get("message", "실행이 차단되었습니다."),\n        }\n\n    if not validation.get("ok", False):\n        return {\n            "status": "blocked",\n            "reason": "validation_failed",\n            "validation": validation,\n            "message": f"검증 실패 — 실행 불가: {validation.get('summary')}",\n        }\n\n    try:\n        mission_plans = plan.get("mission_plans", [])\n        if not mission_plans:\n            return {"status": "error", "message": "mission_plans 필드가 없거나 비어 있습니다."}\n\n        state = _wargame_engine.get_state()\n        valid_ids = {u["id"] for u in state.get("units", []) if u["side"] == "BLUFOR"}\n        skipped = [mp["company_id"] for mp in mission_plans\n                   if mp.get("company_id", "") not in valid_ids]\n\n        _wargame_engine.apply_mission_plan(plan)\n\n        try:\n            from tools.mission_plan_validator import clear_pending_plan\n            clear_pending_plan()\n        except Exception:\n            pass\n\n        applied = len(mission_plans) - len(skipped)\n        logger.info(f"임무계획 적용: {applied}개 부대, 건너뚁: {skipped}")\n        return {\n            "status": "success",\n            "applied": applied,\n            "skipped": skipped,\n            "message": f"{applied}개 부대에 임무계획 적용 완료." + (\n                f" (건너뚁: {skipped})" if skipped else ""\n            ),\n        }\n    except Exception as e:\n        logger.error(f"apply_wargame_mission_plan error: {e}", exc_info=True)\n        return {"status": "error", "message": str(e)}\n\n\n@tool\ndef apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:\n    """\n    JSON 형태의 공중지원 계획을 워게임 시뮬레이터에 적용합니다.\n\n    Args:\n        support_json: JSON 문자열.\n            {"air_support_plans": [{"call_sign": "VIPER-1", "support_type": "cas", "target": [x, y], "radius": 1500, "delay": 60}]}\n        dry_run: True이면 검증만 (기본값). False이면 실제 적용.\n\n    Returns:\n        dry_run=True 시: {"status": "dry_run", "valid": bool, ...}\n        dry_run=False 시: {"status": "success"|"blocked"|"error", ...}\n    """\n    if _wargame_engine is None:\n        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}\n\n    try:\n        plan = json.loads(support_json) if isinstance(support_json, str) else support_json\n    except json.JSONDecodeError as e:\n        return {"status": "error", "message": f"JSON 파싱 실패: {e}"}\n\n    support_plans = plan.get("air_support_plans", [])\n    errors = []\n    warnings = []\n    valid_types = {"cas", "strike", "artillery", "helicopter"}\n    for asp in support_plans:\n        if asp.get("support_type") not in valid_types:\n            errors.append(f"허용되지 않은 support_type: {asp.get('support_type')}")\n        target = asp.get("target", [])\n        if len(target) != 2:\n            errors.append(f"target 형식 오류: {target}")\n        radius = asp.get("radius", 0)\n        if radius <= 0 or radius > 10_000:\n            warnings.append(f"radius 비정상: {radius}m")\n    validation = {\n        "ok": len(errors) == 0,\n        "errors": errors,\n        "warnings": warnings,\n        "summary": "통과" if not errors else f"오류 {len(errors)}건",\n    }\n\n    if dry_run:\n        return {\n            "status": "dry_run",\n            "valid": validation["ok"],\n            "validation": validation,\n            "would_apply": plan,\n            "message": (\n                f"[DRY RUN] 공중지원 검증만 수행했습니다.\n"\n                f"검증 결과: {validation['summary']}\n"\n                f"실제 적용하려면 사용자 승인 후 dry_run=False로 실행하세요."\n            ),\n        }\n\n    try:\n        from tools.mission_plan_validator import guard_write_tool\n        gate = guard_write_tool("apply_wargame_air_support", {"support_json": support_json})\n    except Exception:\n        gate = {"allowed": True}\n\n    if not gate.get("allowed", True):\n        return {\n            "status": "blocked",\n            "reason": gate.get("reason"),\n            "message": gate.get("message", "실행이 차단되었습니다."),\n        }\n\n    if not validation["ok"]:\n        return {\n            "status": "blocked",\n            "reason": "validation_failed",\n            "validation": validation,\n            "message": f"검증 실패 — 실행 불가: {validation['summary']}",\n        }\n\n    try:\n        if not support_plans:\n            return {"status": "error", "message": "air_support_plans 필드가 없거나 비어 있습니다."}\n        _wargame_engine.apply_air_support_plan(plan)\n        logger.info(f"공중지원 등록: {len(support_plans)}건")\n        return {\n            "status": "success",\n            "registered": len(support_plans),\n            "message": f"{len(support_plans)}건의 공중지원 요청이 등록되었습니다.",\n        }\n    except Exception as e:\n        logger.error(f"apply_wargame_air_support error: {e}", exc_info=True)\n        return {"status": "error", "message": str(e)}\n\n\n@tool\ndef get_wargame_engine_status() -> dict:\n    """\n    워게임 시뮬레이터 엔진 상태를 반환합니다.\n\n    Returns:\n        {"status": str, "running": bool, "game_time": str, "tick": int, "time_scale": int, "winner": str|null, "air_supports_active": int}\n    """\n    if _wargame_engine is None:\n        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}\n\n    try:\n        state = _wargame_engine.get_state()\n        active_air = sum(1 for a in state.get("air_supports", []) if a["status"] == "active")\n        return {\n            "status": "success",\n            "running": _wargame_engine.running,\n            "game_time": state.get("game_time_str", "00:00:00"),\n            "tick": state.get("tick", 0),\n            "time_scale": int(_wargame_engine.time_scale),\n            "winner": state.get("winner"),\n            "air_supports_active": active_air,\n        }\n    except Exception as e:\n        return {"status": "error", "message": str(e)}\n
+"""
+워게임 시뮬레이터 임무계획 실행 도구 (smolagents Tool)
+"""
+import json
+import logging
+from smolagents import tool
+
+logger = logging.getLogger(__name__)
+
+_wargame_engine = None
+
+
+def register_wargame_engine(engine):
+    global _wargame_engine
+    _wargame_engine = engine
+
+
+@tool
+def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
+    """
+    JSON 형태의 BLUFOR 임무계획을 워게임 시뮬레이터에 적용합니다.
+    기본값 dry_run=True: 실제 적용 없이 검증 결과만 반환합니다.
+
+    Args:
+        plan_json: JSON 문자열.
+            {
+              "plan_id": "plan_abc123",
+              "mission_plans": [
+                {
+                  "company_id": "Alpha",
+                  "mission_type": "attack",
+                  "waypoints": [[x, y], ...],
+                  "objective": "Red1 격멸"
+                }
+              ]
+            }
+        dry_run: True이면 검증만 수행 (기본값). False이면 실제 적용.
+
+    Returns:
+        dry_run=True 시: {"status": "dry_run", "valid": bool, "plan_id": str, ...}
+        dry_run=False 시: {"status": "success"|"blocked"|"error", ...}
+    """
+    if _wargame_engine is None:
+        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
+
+    try:
+        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    except json.JSONDecodeError as e:
+        return {"status": "error", "message": f"JSON 파싱 실패: {e}"}
+
+    try:
+        from tools.mission_plan_validator import (
+            validate_mission_plan, save_pending_plan, guard_write_tool,
+        )
+        validation = validate_mission_plan(plan)
+    except ImportError:
+        validation = {"ok": True, "errors": [], "warnings": [], "summary": "validator 미로드"}
+
+    if dry_run:
+        plan_id = save_pending_plan(plan, validation)
+        mission_plans = plan.get("mission_plans", [])
+        summary_lines = [
+            f"  • {mp.get('company_id', '?')} → {mp.get('mission_type', '?')}: {mp.get('objective', '')}"
+            for mp in mission_plans
+        ]
+        return {
+            "status": "dry_run",
+            "valid": validation["ok"],
+            "validation": validation,
+            "plan_id": plan_id,
+            "would_apply": plan,
+            "plan_summary": "\n".join(summary_lines),
+            "message": (
+                f"[DRY RUN] 검증만 수행했습니다. 실제 워게임 상태는 변경되지 않았습니다.\n"
+                f"검증 결과: {validation['summary']}\n"
+                f"실제 적용하려면 사용자가 plan_id='{plan_id}'를 승인한 후 실행하세요."
+            ),
+        }
+
+    try:
+        gate = guard_write_tool("apply_wargame_mission_plan", {"plan_json": plan_json})
+    except Exception:
+        gate = {"allowed": True}
+
+    if not gate.get("allowed", True):
+        return {
+            "status": "blocked",
+            "reason": gate.get("reason"),
+            "message": gate.get("message", "실행이 차단되었습니다."),
+        }
+
+    if not validation.get("ok", False):
+        return {
+            "status": "blocked",
+            "reason": "validation_failed",
+            "validation": validation,
+            "message": f"검증 실패 — 실행 불가: {validation.get('summary')}",
+        }
+
+    try:
+        mission_plans = plan.get("mission_plans", [])
+        if not mission_plans:
+            return {"status": "error", "message": "mission_plans 필드가 없거나 비어 있습니다."}
+
+        state = _wargame_engine.get_state()
+        valid_ids = {u["id"] for u in state.get("units", []) if u["side"] == "BLUFOR"}
+        skipped = [mp["company_id"] for mp in mission_plans
+                   if mp.get("company_id", "") not in valid_ids]
+
+        _wargame_engine.apply_mission_plan(plan)
+
+        try:
+            from tools.mission_plan_validator import clear_pending_plan
+            clear_pending_plan()
+        except Exception:
+            pass
+
+        applied = len(mission_plans) - len(skipped)
+        logger.info(f"임무계획 적용: {applied}개 부대, 건너뚁: {skipped}")
+        return {
+            "status": "success",
+            "applied": applied,
+            "skipped": skipped,
+            "message": f"{applied}개 부대에 임무계획 적용 완료." + (
+                f" (건너뚁: {skipped})" if skipped else ""
+            ),
+        }
+    except Exception as e:
+        logger.error(f"apply_wargame_mission_plan error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@tool
+def apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:
+    """
+    JSON 형태의 공중지원 계획을 워게임 시뮬레이터에 적용합니다.
+
+    Args:
+        support_json: JSON 문자열.
+            {"air_support_plans": [{"call_sign": "VIPER-1", "support_type": "cas", "target": [x, y], "radius": 1500, "delay": 60}]}
+        dry_run: True이면 검증만 (기본값). False이면 실제 적용.
+
+    Returns:
+        dry_run=True 시: {"status": "dry_run", "valid": bool, ...}
+        dry_run=False 시: {"status": "success"|"blocked"|"error", ...}
+    """
+    if _wargame_engine is None:
+        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
+
+    try:
+        plan = json.loads(support_json) if isinstance(support_json, str) else support_json
+    except json.JSONDecodeError as e:
+        return {"status": "error", "message": f"JSON 파싱 실패: {e}"}
+
+    support_plans = plan.get("air_support_plans", [])
+    errors = []
+    warnings = []
+    valid_types = {"cas", "strike", "artillery", "helicopter"}
+    for asp in support_plans:
+        if asp.get("support_type") not in valid_types:
+            errors.append(f"허용되지 않은 support_type: {asp.get('support_type')}")
+        target = asp.get("target", [])
+        if len(target) != 2:
+            errors.append(f"target 형식 오류: {target}")
+        radius = asp.get("radius", 0)
+        if radius <= 0 or radius > 10_000:
+            warnings.append(f"radius 비정상: {radius}m")
+    validation = {
+        "ok": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "summary": "통과" if not errors else f"오류 {len(errors)}건",
+    }
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "valid": validation["ok"],
+            "validation": validation,
+            "would_apply": plan,
+            "message": (
+                f"[DRY RUN] 공중지원 검증만 수행했습니다.\n"
+                f"검증 결과: {validation['summary']}\n"
+                f"실제 적용하려면 사용자 승인 후 dry_run=False로 실행하세요."
+            ),
+        }
+
+    try:
+        from tools.mission_plan_validator import guard_write_tool
+        gate = guard_write_tool("apply_wargame_air_support", {"support_json": support_json})
+    except Exception:
+        gate = {"allowed": True}
+
+    if not gate.get("allowed", True):
+        return {
+            "status": "blocked",
+            "reason": gate.get("reason"),
+            "message": gate.get("message", "실행이 차단되었습니다."),
+        }
+
+    if not validation["ok"]:
+        return {
+            "status": "blocked",
+            "reason": "validation_failed",
+            "validation": validation,
+            "message": f"검증 실패 — 실행 불가: {validation['summary']}",
+        }
+
+    try:
+        if not support_plans:
+            return {"status": "error", "message": "air_support_plans 필드가 없거나 비어 있습니다."}
+        _wargame_engine.apply_air_support_plan(plan)
+        logger.info(f"공중지원 등록: {len(support_plans)}건")
+        return {
+            "status": "success",
+            "registered": len(support_plans),
+            "message": f"{len(support_plans)}건의 공중지원 요청이 등록되었습니다.",
+        }
+    except Exception as e:
+        logger.error(f"apply_wargame_air_support error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@tool
+def get_wargame_engine_status() -> dict:
+    """
+    워게임 시뮬레이터 엔진 상태를 반환합니다.
+
+    Returns:
+        {"status": str, "running": bool, "game_time": str, "tick": int, "time_scale": int, "winner": str|null, "air_supports_active": int}
+    """
+    if _wargame_engine is None:
+        return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
+
+    try:
+        state = _wargame_engine.get_state()
+        active_air = sum(1 for a in state.get("air_supports", []) if a["status"] == "active")
+        return {
+            "status": "success",
+            "running": _wargame_engine.running,
+            "game_time": state.get("game_time_str", "00:00:00"),
+            "tick": state.get("tick", 0),
+            "time_scale": int(_wargame_engine.time_scale),
+            "winner": state.get("winner"),
+            "air_supports_active": active_air,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
