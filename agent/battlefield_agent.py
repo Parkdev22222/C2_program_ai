@@ -53,6 +53,16 @@ def is_strategy_query(text: str, config: dict = None) -> bool:
     return False
 
 
+def classify_intent(query: str) -> dict:
+    """classify_intent를 mission_plan_validator에서 가져와 래핑합니다."""
+    try:
+        from tools.mission_plan_validator import classify_intent as _classify
+        return _classify(query)
+    except ImportError:
+        # validator 미로드 시 기본값 반환
+        return {"intent": "general", "requires_confirmation": False, "preferred_tools": []}
+
+
 class BattlefieldAgent:
     """
     EXAONE4 기반 C2 군사 AI 에이전트
@@ -178,6 +188,30 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
 
+        # 임무계획 검증 + 승인 도구
+        try:
+            from tools.mission_plan_validator_tool import (
+                validate_mission_plan_tool,
+                approve_mission_plan_tool,
+                get_pending_plan_tool,
+            )
+            tools.extend([
+                validate_mission_plan_tool,
+                approve_mission_plan_tool,
+                get_pending_plan_tool,
+            ])
+            logger.info("Mission plan validator tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load mission plan validator tools: {e}")
+
+        # COA 분석 도구
+        try:
+            from tools.coa_analysis_tool import analyze_coa_wargame
+            tools.append(analyze_coa_wargame)
+            logger.info("COA analysis tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load COA analysis tool: {e}")
+
         # 워게임 전술 추천 도구 (상성 + 지형 기반 경로)
         try:
             from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
@@ -284,8 +318,8 @@ class BattlefieldAgent:
         """
         쿼리를 실행합니다.
 
-        전략/전술 쿼리인 경우 에이전트의 커스텀 지시사항에 따라
-        자동으로 strategy_advisor_tool을 사용합니다.
+        classify_intent()로 의도를 분류한 후 적절한 augmentation을 수행합니다.
+        execution_request 의도는 사용자 승인(plan_id) 없이는 실제 적용이 불가합니다.
 
         Args:
             query: 사용자 입력 쿼리
@@ -294,11 +328,14 @@ class BattlefieldAgent:
         Returns:
             에이전트의 최종 응답 텍스트
         """
-        if is_strategy_query(query, self._agent_config):
-            logger.info("Strategy/tactics query detected → agent will use strategy_advisor_tool")
-            augmented_query = self._augment_strategy_query(query)
-        else:
-            augmented_query = query
+        intent_result = classify_intent(query)
+        intent = intent_result.get("intent", "general")
+        preferred_tools = intent_result.get("preferred_tools", [])
+        requires_confirmation = intent_result.get("requires_confirmation", False)
+
+        logger.info(f"Intent: {intent}, requires_confirmation: {requires_confirmation}, preferred_tools: {preferred_tools}")
+
+        augmented_query = self._augment_by_intent(query, intent, preferred_tools, requires_confirmation)
 
         # system_prompt 미지원 버전: 첫 쿼리에 커스텀 지시사항 첨부
         if self._prepend_instructions and self._custom_instructions:
@@ -312,17 +349,51 @@ class BattlefieldAgent:
         result = self._agent.run(augmented_query, reset=reset)
         return str(result)
 
-    def _augment_strategy_query(self, query: str) -> str:
+    def _augment_by_intent(
+        self,
+        query: str,
+        intent: str,
+        preferred_tools: list,
+        requires_confirmation: bool,
+    ) -> str:
         """
-        전략/전술 쿼리에 strategy_advisor_tool 사용 지시를 명시적으로 추가합니다.
-        에이전트가 커스텀 지시사항을 놓치지 않도록 보장합니다.
+        의도에 따라 쿼리에 적절한 지시사항을 추가합니다.
         """
-        return (
-            f"{query}\n\n"
-            f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-            f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-            f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
-        )
+        if intent == "execution_request":
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 워게임 임무계획 실행 요청입니다.\n"
+                f"반드시 dry_run=True(기본값)로 apply_wargame_mission_plan을 먼저 호출하여 검증하세요.\n"
+                f"검증 결과에서 plan_id를 사용자에게 안내하고, 사용자 승인(approve_plan) 후 dry_run=False로 실행하세요.\n"
+                f"사용자 승인 없이 dry_run=False를 직접 호출하는 것은 금지됩니다."
+            )
+
+        if intent in ("attack_planning", "general_strategy_advice", "planning_request"):
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
+                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
+                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+            )
+
+        if intent == "recon_planning":
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 정찰 임무 요청입니다. "
+                f"반드시 assess_recon_need() → recommend_recon_routes() → recon_advisor_tool() 순서로 호출하여 "
+                f"정찰 임무계획을 수립하세요."
+            )
+
+        # 전략 키워드 기반 폴백 (classify_intent가 general로 분류했더라도 is_strategy_query 통과 시)
+        if is_strategy_query(query, self._agent_config):
+            return (
+                f"{query}\n\n"
+                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
+                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
+                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+            )
+
+        return query
 
     def set_video_context(self, video_ids: List[str]):
         """에이전트가 쿼리할 비디오 컨텍스트를 설정합니다."""
