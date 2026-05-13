@@ -432,7 +432,7 @@ class EpisodeRunner:
 
     def run_episode(
         self,
-        max_real_seconds: float = 90.0,
+        max_ticks: int = 1_000,
         replan_interval_ticks: int = 120,
         initial_mission: str = "auto",
     ) -> EpisodeMetrics:
@@ -440,7 +440,7 @@ class EpisodeRunner:
         한 에피소드를 실행하고 메트릭을 반환합니다.
 
         Args:
-            max_real_seconds: 에피소드 최대 실행 시간 (실제 초)
+            max_ticks: 에피소드 최대 틱 수 (기본 1000틱)
             replan_interval_ticks: 재계획 주기 (틱 단위)
             initial_mission: 초기 임무 유형 ("recon" | "attack" | "auto")
         """
@@ -473,12 +473,7 @@ class EpisodeRunner:
                 logger.warning(f"초기 임무계획 적용 실패: {e}")
 
             # 6. 메인 루프
-            start_time = time.time()
-
             while True:
-                if time.time() - start_time > max_real_seconds:
-                    logger.info(f"에피소드 시간 초과: {max_real_seconds}초")
-                    break
 
                 try:
                     state = engine.get_state()
@@ -495,6 +490,10 @@ class EpisodeRunner:
                     break
 
                 current_tick = state.get("tick", 0)
+                if current_tick >= max_ticks:
+                    logger.info(f"에피소드 최대 틱 도달: {current_tick}/{max_ticks}틱")
+                    break
+
                 if self._should_replan(engine, last_plan_tick, current_tick, replan_interval_ticks):
                     try:
                         new_plan = self._replan(engine, state, tm)
