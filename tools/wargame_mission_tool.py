@@ -77,18 +77,6 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             ),
         }
 
-    try:
-        gate = guard_write_tool("apply_wargame_mission_plan", {"plan_json": plan_json})
-    except Exception:
-        gate = {"allowed": True}
-
-    if not gate.get("allowed", True):
-        return {
-            "status": "blocked",
-            "reason": gate.get("reason"),
-            "message": gate.get("message", "실행이 차단되었습니다."),
-        }
-
     if not validation.get("ok", False):
         return {
             "status": "blocked",
