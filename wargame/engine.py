@@ -12,6 +12,7 @@
   base_rate = 20.0  → 만편성 쌍방 교전 시 시간당 20% 전투력 손실
 """
 
+import logging
 import math
 import random
 import threading
@@ -20,6 +21,8 @@ from typing import List, Optional, Callable
 
 from .models import Unit, AirSupport, AIR_SUPPORT_PRESETS, WargameDB
 from .terrain import terrain
+
+logger = logging.getLogger(__name__)
 
 # 교전 파라미터
 ENGAGEMENT_RANGE = 2_500.0       # m — 기계화 보병 직사거리
@@ -70,12 +73,14 @@ class WargameEngine:
         time_scale: float = 60.0,
         tick_interval: float = 0.5,
         on_tick: Optional[Callable] = None,
+        on_game_over=None,
     ):
         self.units: List[Unit] = units
         self.db = db or WargameDB()
         self.time_scale = time_scale        # 게임 시간 배율
         self.tick_interval = tick_interval  # 실제 tick 간격 (초)
         self.on_tick = on_tick              # tick마다 호출할 콜백
+        self.on_game_over = on_game_over    # 게임 종료 시 호출할 콜백
 
         self.tick = 0
         self.game_time = 0.0               # 게임 시간 (초)
@@ -109,6 +114,33 @@ class WargameEngine:
         self.running = False
         if self._thread:
             self._thread.join(timeout=3)
+
+    def run_until_over(self, timeout_real_seconds: float = 120.0) -> dict:
+        """
+        시뮬레이션을 실행하고 게임 종료(승자 결정) 또는 타임아웃까지 블로킹 대기합니다.
+
+        Returns:
+            최종 게임 상태 dict
+        """
+        import threading as _threading
+        done_event = _threading.Event()
+
+        _orig_callback = self.on_game_over
+
+        def _on_done(state):
+            done_event.set()
+            if _orig_callback:
+                try:
+                    _orig_callback(state)
+                except Exception:
+                    pass
+
+        self.on_game_over = _on_done
+        self.start()
+        done_event.wait(timeout=timeout_real_seconds)
+        self.stop()
+        self.on_game_over = _orig_callback
+        return self.get_state()
 
     def apply_air_support_plan(self, plan: dict):
         """
@@ -397,6 +429,11 @@ class WargameEngine:
             self.running = False
             self.db.log_event(self.tick, self.game_time, "ENDEX",
                               f"전투 종료: {winner} 승리")
+            if self.on_game_over:
+                try:
+                    self.on_game_over(self.get_state())
+                except Exception as _e:
+                    logger.warning(f"on_game_over callback error: {_e}")
 
     # ── 이동 ─────────────────────────────────────────────────────
 

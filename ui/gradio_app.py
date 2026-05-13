@@ -47,6 +47,7 @@ _wg_engine: Optional["WargameEngine"] = None
 _wg_planner: Optional["MissionPlanner"] = None
 _wg_last_plan: dict = {}
 _wg_last_opfor_ai_count: int = 0
+_harness_controller = None
 
 
 def _get_agent():
@@ -815,6 +816,144 @@ def get_situation_memory_status() -> str:
         return f"메모리 상태 조회 오류: {e}"
 
 
+def _init_harness_controller():
+    """하네스 컨트롤러를 초기화합니다."""
+    global _harness_controller
+    if not _WARGAME_OK:
+        return None
+    try:
+        from wargame.harness import HarnessController
+        from wargame import WargameEngine, setup_bn_vs_bn
+        from wargame.llm_planner import MissionPlanner
+
+        def _engine_factory():
+            units = setup_bn_vs_bn()
+            eng = WargameEngine(units)
+            _wg_register_engine(eng)
+            return eng
+
+        agent = _get_agent()
+        planner = _wg_planner
+        _harness_controller = HarnessController(
+            engine_factory=_engine_factory,
+            agent=agent,
+            planner=planner,
+        )
+        logger.info("HarnessController initialized")
+        return _harness_controller
+    except Exception as e:
+        logger.warning(f"Failed to init HarnessController: {e}")
+        return None
+
+
+def harness_start_training(n_episodes: int, replan_interval: int, history: list):
+    """하네스 학습을 시작합니다."""
+    global _harness_controller
+    history = list(history or [])
+
+    ctrl = _harness_controller or _init_harness_controller()
+    if ctrl is None:
+        history.append(("🔬 하네스 학습", "HarnessController 초기화 실패"))
+        return history, "초기화 실패", ""
+
+    if ctrl._running:
+        return history, "이미 실행 중", ""
+
+    history.append(("🔬 하네스 학습 시작", f"{n_episodes}개 에피소드 학습 시작..."))
+
+    def _progress_cb(current, total, metrics):
+        pass  # 폴링 방식으로 UI 업데이트
+
+    ctrl.start_training(
+        n_episodes=int(n_episodes),
+        replan_interval_ticks=int(replan_interval),
+        on_progress=_progress_cb,
+    )
+    return history, f"학습 시작: {n_episodes}개 에피소드", ""
+
+
+def harness_get_status():
+    """하네스 학습 진행 상황을 반환합니다."""
+    global _harness_controller
+    ctrl = _harness_controller
+    if ctrl is None:
+        return "하네스 미초기화", "", ""
+
+    progress = ctrl.get_progress()
+    stats = ctrl.get_db_stats()
+
+    current = progress.get("current", 0)
+    total = progress.get("total", 0)
+    status = progress.get("status", "idle")
+    last = progress.get("last_metrics") or {}
+
+    status_text = {
+        "idle": "대기 중",
+        "running": f"실행 중 ({current}/{total})",
+        "done": f"완료 ({total}개 에피소드)",
+        "stopped": f"중지됨 ({current}/{total})",
+    }.get(status, status)
+
+    if last:
+        last_result = (
+            f"**최근 에피소드:** {last.get('winner','?')} 승리 | "
+            f"생존율 {last.get('blufor_survival_rate',0):.0%} | "
+            f"교환비 {last.get('combat_efficiency',0):.1f}"
+        )
+    else:
+        last_result = "에피소드 없음"
+
+    stats_text = (
+        f"총 에피소드: {stats.get('total_episodes',0)} | "
+        f"승률: {stats.get('win_rate',0):.0%} | "
+        f"활성 규칙: {stats.get('active_rules',0)}개"
+    )
+
+    return status_text, last_result, stats_text
+
+
+def harness_stop_training(history: list):
+    global _harness_controller
+    history = list(history or [])
+    ctrl = _harness_controller
+    if ctrl and ctrl._running:
+        ctrl.stop_training()
+        history.append(("🔬 하네스", "학습 중지 요청"))
+    return history
+
+
+def harness_get_rules():
+    """현재 활성 규칙을 마크다운으로 반환합니다."""
+    global _harness_controller
+    ctrl = _harness_controller
+    if ctrl is None:
+        try:
+            from agent.battlefield_agent import get_instruction_section
+            learned = get_instruction_section("LEARNED_RULES")
+            recon = get_instruction_section("RECON")
+            attack = get_instruction_section("ATTACK")
+        except Exception:
+            return "하네스 미초기화"
+    else:
+        rules = ctrl.get_active_rules()
+        learned_list = rules.get("LEARNED_RULES", [])
+        recon_list = rules.get("RECON", [])
+        attack_list = rules.get("ATTACK", [])
+        learned = "\n".join(f"- {r['text']} *(신뢰도 {r['confidence']:.2f}, {r['win_count']}승/{r['loss_count']}패)*" for r in learned_list)
+        recon = "\n".join(f"- {r['text']}" for r in recon_list)
+        attack = "\n".join(f"- {r['text']}" for r in attack_list)
+
+    parts = []
+    if recon:
+        parts.append(f"**[RECON]**\n{recon}")
+    if attack:
+        parts.append(f"**[ATTACK]**\n{attack}")
+    if learned:
+        parts.append(f"**[LEARNED_RULES]**\n{learned}")
+
+    return "\n\n".join(parts) if parts else "학습된 규칙 없음"
+
+
 def create_app(agent=None) -> gr.Blocks:
     global _agent
     _agent = agent
@@ -896,6 +1035,28 @@ def create_app(agent=None) -> gr.Blocks:
                     with gr.Column(scale=2):
                         wg_event_log = gr.Textbox(label="전투 이벤트 로그", lines=8, interactive=False)
                 wg_timer = gr.Timer(value=2)
+          with gr.Tab("🔬 하네스 학습"):
+            gr.Markdown("## 자율 전술 학습\n워게임을 반복 실행하여 전술 규칙을 자동으로 학습합니다.")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("### 학습 설정")
+                    harness_n_episodes = gr.Slider(minimum=1, maximum=100, value=10, step=1, label="에피소드 수")
+                    harness_replan_interval = gr.Slider(minimum=30, maximum=300, value=120, step=10, label="재계획 간격 (틱)")
+                    with gr.Row():
+                        harness_start_btn = gr.Button("▶ 학습 시작", variant="primary")
+                        harness_stop_btn = gr.Button("⏸ 중지", variant="secondary")
+                    gr.Markdown("### 현황")
+                    harness_status_text = gr.Textbox(label="상태", interactive=False, lines=1)
+                    harness_last_episode = gr.Textbox(label="최근 에피소드", interactive=False, lines=2)
+                    harness_stats_text = gr.Textbox(label="누적 통계", interactive=False, lines=1)
+                    harness_refresh_btn = gr.Button("🔄 새로고침", size="sm")
+                with gr.Column(scale=2):
+                    gr.Markdown("### 학습 로그")
+                    harness_chatbot = gr.Chatbot(label="", height=300, show_copy_button=True)
+                    gr.Markdown("### 현재 활성 규칙")
+                    harness_rules_md = gr.Markdown("규칙 로드 중...")
+                    harness_rules_refresh_btn = gr.Button("규칙 새로고침", size="sm")
+            harness_timer = gr.Timer(value=3)
           with gr.Tab("🗺️ 전장 지도"):
             gr.Markdown("ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다. relay.py 실행 중일 때 10초마다 자동 갱신됩니다.")
             with gr.Row():
@@ -928,6 +1089,16 @@ def create_app(agent=None) -> gr.Blocks:
             wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])
             wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
             app.load(fn=wargame_refresh, outputs=_WG_OUTPUTS)
+        harness_start_btn.click(
+            fn=harness_start_training,
+            inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
+            outputs=[harness_chatbot, harness_status_text, harness_last_episode]
+        )
+        harness_stop_btn.click(fn=harness_stop_training, inputs=[harness_chatbot], outputs=[harness_chatbot])
+        harness_refresh_btn.click(fn=harness_get_status, outputs=[harness_status_text, harness_last_episode, harness_stats_text])
+        harness_rules_refresh_btn.click(fn=harness_get_rules, outputs=[harness_rules_md])
+        harness_timer.tick(fn=harness_get_status, outputs=[harness_status_text, harness_last_episode, harness_stats_text])
+        app.load(fn=harness_get_rules, outputs=[harness_rules_md])
         map_refresh_btn.click(fn=get_battlefield_map, outputs=[map_plot, map_status])
         map_timer.tick(fn=get_battlefield_map, outputs=[map_plot, map_status])
         app.load(fn=get_battlefield_map, outputs=[map_plot, map_status])

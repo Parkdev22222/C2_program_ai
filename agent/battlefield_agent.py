@@ -349,6 +349,33 @@ class BattlefieldAgent:
         from tools.strategy_advisor_tool import get_situation_memory
         return get_situation_memory()
 
+    def reload_instructions(self):
+        """agent_custom_instructions.txt를 재로드하여 에이전트 지시사항을 갱신합니다."""
+        self._custom_instructions = _load_custom_instructions()
+        # CodeAgent의 system_prompt도 갱신
+        try:
+            pt = self._agent.prompt_templates
+            if isinstance(pt, dict):
+                existing = pt.get("system_prompt", "")
+                # 기존 커스텀 지시사항 제거 후 새 것으로 교체
+                if "\n\n[시스템 지시사항]\n" in existing:
+                    base = existing.split("\n\n[시스템 지시사항]\n")[0]
+                else:
+                    base = existing
+                if self._custom_instructions:
+                    pt["system_prompt"] = base + "\n\n[시스템 지시사항]\n" + self._custom_instructions
+            elif hasattr(pt, "system_prompt"):
+                existing = getattr(pt, "system_prompt", "") or ""
+                if "\n\n[시스템 지시사항]\n" in existing:
+                    base = existing.split("\n\n[시스템 지시사항]\n")[0]
+                else:
+                    base = existing
+                if self._custom_instructions:
+                    pt.system_prompt = base + "\n\n[시스템 지시사항]\n" + self._custom_instructions
+            logger.info("Instructions reloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to update agent prompt_templates: {e}")
+
     @property
     def agent(self):
         return self._agent
