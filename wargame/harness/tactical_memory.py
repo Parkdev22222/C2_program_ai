@@ -4,6 +4,9 @@
 시뮬레이션 결과를 분석하여 위험 구역(패널티 존)과 유리 구역(보너스 존)을
 config/tactical_memory.json에 저장합니다.
 경로 추천 도구들이 이 파일을 읽어 점수 계산 시 보정을 적용합니다.
+
+각 존은 교전 당시 상황(combat_context)을 함께 저장하므로 현재 상황과
+유사할 때만 패널티/보너스를 강하게 적용합니다.
 """
 
 import math
@@ -12,13 +15,14 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 TACTICAL_MEMORY_FILE = Path(__file__).parent.parent.parent / "config" / "tactical_memory.json"
 
 _DEFAULT_DATA = {
-    "version": 1,
+    "version": 2,
     "penalty_zones": [],
     "bonus_zones": [],
     "updated_at": "",
@@ -26,12 +30,66 @@ _DEFAULT_DATA = {
 }
 
 
+# ── 교전 상황 유사도 ──────────────────────────────────────────────────
+
+def _jaccard(set_a: list, set_b: list) -> float:
+    """두 리스트의 Jaccard 유사도 (공집합이면 1.0 반환)."""
+    if not set_a and not set_b:
+        return 1.0
+    a, b = set(set_a), set(set_b)
+    if not a and not b:
+        return 1.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 1.0
+
+
+def compute_context_similarity(stored: dict, current: dict) -> float:
+    """
+    저장된 교전 상황(stored)과 현재 상황(current)의 유사도를 0~1로 반환.
+
+    저장 또는 현재 컨텍스트가 없으면 0.5(중립)를 반환.
+
+    비교 기준:
+      - 적 부대 유형 Jaccard 유사도  (가중치 0.50)
+      - 전투력 비율 유사도            (가중치 0.30)
+      - 적 수량 유사도                (가중치 0.20)
+    """
+    if not stored or not current:
+        return 0.5
+
+    # 1. 적 부대 유형 유사도
+    enemy_sim = _jaccard(
+        stored.get("enemy_unit_types", []),
+        current.get("enemy_unit_types", []),
+    )
+
+    # 2. 전투력 비율 유사도
+    stored_ratio  = stored.get("force_ratio", 1.0)
+    current_ratio = current.get("force_ratio", 1.0)
+    ratio_diff = abs(stored_ratio - current_ratio)
+    ratio_sim = max(0.0, 1.0 - ratio_diff / max(stored_ratio, current_ratio, 0.01))
+
+    # 3. 적 수량 유사도
+    stored_cnt  = stored.get("enemy_count", 1)
+    current_cnt = current.get("enemy_count", 1)
+    count_sim = 1.0 - abs(stored_cnt - current_cnt) / max(stored_cnt, current_cnt, 1)
+
+    similarity = (
+        enemy_sim  * 0.50
+        + ratio_sim  * 0.30
+        + count_sim  * 0.20
+    )
+    return float(max(0.0, min(1.0, similarity)))
+
+
+# ── 메인 클래스 ──────────────────────────────────────────────────────
+
 class TacticalMemory:
     def __init__(self):
         self._data = self._load()
 
     def _load(self) -> dict:
-        """파일에서 전술 메모리 로드. 없으면 초기값 반환."""
         try:
             if TACTICAL_MEMORY_FILE.exists():
                 with open(TACTICAL_MEMORY_FILE, "r", encoding="utf-8") as f:
@@ -43,7 +101,6 @@ class TacticalMemory:
         return dict(_DEFAULT_DATA)
 
     def _save(self):
-        """전술 메모리를 파일에 저장."""
         try:
             self._data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             TACTICAL_MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -53,31 +110,72 @@ class TacticalMemory:
             logger.error(f"전술 메모리 저장 실패: {e}")
 
     def get_penalty_zones(self) -> list:
-        """현재 활성 패널티 존 목록 반환."""
         return self._data.get("penalty_zones", [])
 
     def get_bonus_zones(self) -> list:
         return self._data.get("bonus_zones", [])
 
-    def apply_penalties(self, x: float, y: float, base_score: float) -> float:
+    def apply_penalties(
+        self,
+        x: float,
+        y: float,
+        base_score: float,
+        current_context: Optional[dict] = None,
+    ) -> float:
         """
-        (x, y) 위치에 대한 패널티/보너스를 base_score에 적용하여 반환.
+        (x, y) 위치에 패널티/보너스를 적용한 점수를 반환.
 
-        여러 존이 겹칠 경우 각 패널티를 순서대로 곱함.
+        current_context가 제공되면 저장된 교전 상황과의 유사도에 따라
+        패널티/보너스 강도를 조절합니다.
+
+        current_context 예시:
+            {
+                "enemy_unit_types": ["전차", "기계화보병"],
+                "enemy_count": 2,
+                "force_ratio": 0.8,   # BLUFOR CP / OPFOR CP
+            }
         """
         score = base_score
         for zone in self.get_penalty_zones():
             dist = math.hypot(x - zone["x"], y - zone["y"])
-            if dist <= zone["radius"]:
-                # 중심에 가까울수록 패널티 강도 증가 (선형 감쇠)
-                strength = 1.0 - (dist / zone["radius"])
-                score *= (1.0 - zone["penalty"] * strength)
+            if dist > zone["radius"]:
+                continue
+
+            # 거리 기반 강도 (중심에 가까울수록 강함)
+            distance_strength = 1.0 - (dist / zone["radius"])
+
+            # 상황 유사도 기반 강도 조절
+            if current_context is not None:
+                ctx_sim = compute_context_similarity(
+                    zone.get("combat_context", {}),
+                    current_context,
+                )
+                # 유사도 0 → 패널티 10%만 적용 / 유사도 1 → 100% 적용
+                effective_penalty = zone["penalty"] * (0.10 + 0.90 * ctx_sim)
+            else:
+                effective_penalty = zone["penalty"]
+
+            score *= (1.0 - effective_penalty * distance_strength)
+
         for zone in self.get_bonus_zones():
             dist = math.hypot(x - zone["x"], y - zone["y"])
-            if dist <= zone["radius"]:
-                strength = 1.0 - (dist / zone["radius"])
-                score *= (1.0 + zone.get("bonus", 0.3) * strength)
-        return max(0.001, score)  # 0 이하 방지
+            if dist > zone["radius"]:
+                continue
+
+            distance_strength = 1.0 - (dist / zone["radius"])
+
+            if current_context is not None:
+                ctx_sim = compute_context_similarity(
+                    zone.get("combat_context", {}),
+                    current_context,
+                )
+                effective_bonus = zone.get("bonus", 0.3) * (0.10 + 0.90 * ctx_sim)
+            else:
+                effective_bonus = zone.get("bonus", 0.3)
+
+            score *= (1.0 + effective_bonus * distance_strength)
+
+        return max(0.001, score)
 
     def add_penalty_zone(
         self,
@@ -86,18 +184,23 @@ class TacticalMemory:
         penalty: float = 0.6,
         reason: str = "",
         source_episode: str = "",
+        combat_context: Optional[dict] = None,
     ) -> str:
         """
-        패널티 존 추가. 기존 존과 50% 이상 겹치면 penalty 강화 후 반환.
-        반환값: zone_id
+        패널티 존 추가.
+
+        같은 위치 근처(radius 50% 이내)에 이미 존재하면 hit_count 증가 +
+        penalty 강화. combat_context가 제공되면 존에 함께 저장.
         """
-        # 중복 확인: 같은 위치 근처(radius 50% 이내)에 이미 존재하면 hit_count 증가 + penalty 강화
         for zone in self._data["penalty_zones"]:
             dist = math.hypot(x - zone["x"], y - zone["y"])
             if dist < zone["radius"] * 0.5:
                 zone["hit_count"] = zone.get("hit_count", 1) + 1
-                zone["penalty"] = min(0.95, zone["penalty"] + 0.1)  # 최대 0.95
+                zone["penalty"] = min(0.95, zone["penalty"] + 0.1)
                 zone["reason"] = reason or zone["reason"]
+                # 컨텍스트가 없던 존에 새 컨텍스트가 들어오면 업데이트
+                if combat_context and not zone.get("combat_context"):
+                    zone["combat_context"] = combat_context
                 self._save()
                 return zone["zone_id"]
 
@@ -113,10 +216,14 @@ class TacticalMemory:
             "hit_count": 1,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "source_episode": source_episode,
+            "combat_context": combat_context or {},
         }
         self._data["penalty_zones"].append(zone)
         self._save()
-        logger.info(f"패널티 존 추가: ({x:.0f}, {y:.0f}) r={radius:.0f}m penalty={penalty:.2f} — {reason}")
+        logger.info(
+            f"패널티 존 추가: ({x:.0f}, {y:.0f}) r={radius:.0f}m "
+            f"penalty={penalty:.2f} — {reason}"
+        )
         return zone_id
 
     def add_bonus_zone(
@@ -126,15 +233,17 @@ class TacticalMemory:
         bonus: float = 0.3,
         reason: str = "",
         source_episode: str = "",
+        combat_context: Optional[dict] = None,
     ) -> str:
         """보너스 존 추가 (유리했던 구역)."""
-        # 중복 확인: 같은 위치 근처(radius 50% 이내)에 이미 존재하면 bonus 강화 후 반환
         for zone in self._data["bonus_zones"]:
             dist = math.hypot(x - zone["x"], y - zone["y"])
             if dist < zone["radius"] * 0.5:
                 zone["hit_count"] = zone.get("hit_count", 1) + 1
                 zone["bonus"] = min(0.9, zone.get("bonus", bonus) + 0.05)
                 zone["reason"] = reason or zone["reason"]
+                if combat_context and not zone.get("combat_context"):
+                    zone["combat_context"] = combat_context
                 self._save()
                 return zone["zone_id"]
 
@@ -150,14 +259,17 @@ class TacticalMemory:
             "hit_count": 1,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "source_episode": source_episode,
+            "combat_context": combat_context or {},
         }
         self._data["bonus_zones"].append(zone)
         self._save()
-        logger.info(f"보너스 존 추가: ({x:.0f}, {y:.0f}) r={radius:.0f}m bonus={bonus:.2f} — {reason}")
+        logger.info(
+            f"보너스 존 추가: ({x:.0f}, {y:.0f}) r={radius:.0f}m "
+            f"bonus={bonus:.2f} — {reason}"
+        )
         return zone_id
 
     def prune_weak_zones(self, min_penalty: float = 0.15):
-        """패널티가 너무 낮아진 존 제거."""
         before = len(self._data["penalty_zones"])
         self._data["penalty_zones"] = [
             z for z in self._data["penalty_zones"] if z["penalty"] >= min_penalty
@@ -180,14 +292,18 @@ class TacticalMemory:
         self._save()
 
 
+# ── 공간 규칙 추출기 ─────────────────────────────────────────────────
+
 class SpatialRuleExtractor:
     """
-    에피소드의 전투 이벤트를 분석하여 공간적 패널티/보너스 존을 추출합니다.
+    에피소드 전투 이벤트를 분석하여 공간적 패널티/보너스 존을 추출합니다.
 
     분석 기준:
-    - COMBAT 이벤트에서 BLUFOR 피해가 컸던 좌표 → 패널티 존
-    - DESTROYED 이벤트에서 BLUFOR 부대 파괴 위치 → 강한 패널티 존
-    - BLUFOR가 높은 피해를 가한 위치 → 보너스 존
+      - BLUFOR 부대 파괴 위치      → 강한 패널티 존
+      - 고피해 COMBAT 교전 위치   → 중간 패널티 존
+      - OPFOR 파괴 위치 (승리 시) → 보너스 존
+
+    각 존에 교전 당시 combat_context를 함께 저장합니다.
     """
 
     def __init__(self, tactical_memory: TacticalMemory):
@@ -195,62 +311,67 @@ class SpatialRuleExtractor:
 
     def analyze_episode(self, metrics, engine=None) -> dict:
         """
-        에피소드 메트릭과 전투 이벤트를 분석하여 패널티/보너스 존을 업데이트합니다.
+        에피소드 메트릭과 전투 이벤트를 분석하여 패널티/보너스 존을 업데이트.
 
         Returns:
             {"penalty_zones_added": int, "bonus_zones_added": int}
         """
         penalty_added = 0
         bonus_added = 0
-
-        # events_summary에서 공간 정보 추출
         events = metrics.events_summary or []
 
-        # 1. DESTROYED 이벤트 — BLUFOR 부대 파괴 위치 → 강한 패널티
-        for event in events:
-            msg = event.get("message", "")
-            etype = event.get("event_type", "") or event.get("type", "")
+        # 에피소드 전체 교전 상황 요약 (기본 컨텍스트)
+        episode_context = _extract_episode_context(metrics, engine)
 
-            # 메시지에서 좌표 파싱: "x=12500, y=8300" 형식
+        for event in events:
+            msg   = event.get("message", "")
+            etype = event.get("event_type", "") or event.get("type", "")
             coords = _parse_coords_from_message(msg)
 
+            # 이벤트 레벨 컨텍스트 (이벤트별 상세 정보가 있으면 오버라이드)
+            evt_context = _extract_event_context(event, episode_context)
+
+            # 1. BLUFOR 부대 파괴 → 강한 패널티
             if etype == "DESTROYED" and "BLUFOR" in msg and coords:
                 self._memory.add_penalty_zone(
                     x=coords[0], y=coords[1],
                     radius=2500.0,
                     penalty=0.75,
-                    reason=f"BLUFOR 부대 파괴 지점: {msg[:80]}",
+                    reason=f"BLUFOR 부대 파괴: {msg[:80]}",
                     source_episode=metrics.episode_id,
+                    combat_context=evt_context,
                 )
                 penalty_added += 1
 
-            # COMBAT 이벤트에서 BLUFOR 피해 큰 위치
+            # 2. 고피해 COMBAT → 중간 패널티
             elif etype == "COMBAT" and "피해" in msg and coords:
-                # 피해량 파싱 시도
                 damage = _parse_damage_from_message(msg)
-                if damage > 30:  # 30% 이상 피해
+                if damage > 30:
                     self._memory.add_penalty_zone(
                         x=coords[0], y=coords[1],
                         radius=1500.0,
                         penalty=0.5,
-                        reason=f"고피해 교전 지점 (피해 {damage:.0f}%): {msg[:60]}",
+                        reason=f"고피해 교전 (피해 {damage:.0f}%): {msg[:60]}",
                         source_episode=metrics.episode_id,
+                        combat_context=evt_context,
                     )
                     penalty_added += 1
 
-        # 2. 승리 에피소드에서 OPFOR 파괴 위치 → 약한 보너스 (공격 유리 구역)
+        # 3. 승리 에피소드 — OPFOR 파괴 위치 → 보너스
         if metrics.winner == "BLUFOR":
             for event in events:
                 etype = event.get("event_type", "") or event.get("type", "")
-                msg = event.get("message", "")
+                msg   = event.get("message", "")
                 coords = _parse_coords_from_message(msg)
+                evt_context = _extract_event_context(event, episode_context)
                 if etype == "DESTROYED" and "OPFOR" in msg and coords:
                     self._memory.add_bonus_zone(
                         x=coords[0], y=coords[1],
                         radius=1500.0,
                         bonus=0.2,
-                        reason=f"효과적 교전 지점: {msg[:60]}",
+                        reason=f"효과적 교전: {msg[:60]}",
                         source_episode=metrics.episode_id,
+                        combat_context=evt_context,
                     )
                     bonus_added += 1
 
@@ -258,9 +379,84 @@ class SpatialRuleExtractor:
         return {"penalty_zones_added": penalty_added, "bonus_zones_added": bonus_added}
 
 
+# ── 컨텍스트 추출 헬퍼 ───────────────────────────────────────────────
+
+def _extract_episode_context(metrics, engine=None) -> dict:
+    """에피소드 메트릭에서 기본 교전 컨텍스트 추출."""
+    ctx: dict = {}
+
+    # 에피소드 메트릭에서 직접 가져올 수 있는 정보
+    try:
+        ctx["force_ratio"] = float(getattr(metrics, "blufor_survival_rate", 1.0))
+        ctx["blufor_cp_at_time"] = float(getattr(metrics, "blufor_survival_rate", 1.0)) * 100
+        ctx["opfor_cp_at_time"] = (
+            1.0 - float(getattr(metrics, "opfor_elimination_rate", 0.0))
+        ) * 100
+        ctx["game_tick"] = int(getattr(metrics, "duration_ticks", 0))
+    except Exception:
+        pass
+
+    # 엔진 상태에서 부대 유형 수집
+    if engine is not None:
+        try:
+            state = engine.get_state()
+            units = state.get("units", [])
+            ctx["enemy_unit_types"] = list({
+                u.get("unit_type", "unknown")
+                for u in units if u.get("side") == "OPFOR"
+            })
+            ctx["friendly_unit_types"] = list({
+                u.get("unit_type", "unknown")
+                for u in units if u.get("side") == "BLUFOR"
+            })
+            opfor_units = [u for u in units if u.get("side") == "OPFOR"]
+            ctx["enemy_count"] = len(opfor_units)
+        except Exception:
+            pass
+
+    # events_summary에서 부대 유형 추론 (엔진 없을 때 폴백)
+    if "enemy_unit_types" not in ctx:
+        events = getattr(metrics, "events_summary", []) or []
+        types = set()
+        for evt in events:
+            msg = evt.get("message", "")
+            for kw in ("전차", "기계화보병", "보병", "포병", "헬기", "드론", "자주포"):
+                if kw in msg and "OPFOR" in msg:
+                    types.add(kw)
+        if types:
+            ctx["enemy_unit_types"] = list(types)
+        ctx["enemy_count"] = len(types) or 1
+
+    return ctx
+
+
+def _extract_event_context(event: dict, episode_context: dict) -> dict:
+    """개별 이벤트에서 교전 컨텍스트 추출 (episode_context를 기반으로 보강)."""
+    ctx = dict(episode_context)
+
+    # 이벤트 메시지에서 추가 정보 파싱
+    msg = event.get("message", "")
+    tick = event.get("tick") or event.get("game_tick")
+    if tick is not None:
+        ctx["game_tick"] = int(tick)
+
+    # 메시지에서 부대 유형 추출
+    types_in_msg = set()
+    for kw in ("전차", "기계화보병", "보병", "포병", "헬기", "드론", "자주포"):
+        if kw in msg:
+            types_in_msg.add(kw)
+    if types_in_msg:
+        existing = set(ctx.get("enemy_unit_types", []))
+        ctx["enemy_unit_types"] = list(existing | types_in_msg)
+
+    ctx["engagement_type"] = event.get("event_type", "") or event.get("type", "")
+    return ctx
+
+
+# ── 파싱 유틸 ────────────────────────────────────────────────────────
+
 def _parse_coords_from_message(msg: str):
     """메시지에서 좌표 (x, y) 파싱. 실패 시 None 반환."""
-    # "x=12500, y=8300" 또는 "(12500, 8300)" 또는 "12500m, 8300m" 형식
     patterns = [
         r"x[=:]\s*([\d.]+)[,\s]+y[=:]\s*([\d.]+)",
         r"\(\s*([\d.]+)\s*,\s*([\d.]+)\s*\)",
@@ -276,14 +472,14 @@ def _parse_coords_from_message(msg: str):
 
 
 def _parse_damage_from_message(msg: str) -> float:
-    """메시지에서 피해량(%) 파싱."""
     m = re.search(r"([\d.]+)\s*%", msg)
     if m:
         return float(m.group(1))
     return 0.0
 
 
-# 싱글톤 인스턴스
+# ── 싱글톤 ───────────────────────────────────────────────────────────
+
 _tactical_memory: TacticalMemory = None
 
 

@@ -60,12 +60,12 @@ def _best_obs_point(
     target_y: float,
     angle: float,
     standoff: float,
+    current_context: dict = None,
 ) -> List[float]:
     """
     목표 주변 지정 각도·거리에서 고도+엄폐+전술메모리 기준 최적 관측 포인트를 반환.
     standoff±1km 범위에서 3개 후보 중 최적을 선택.
     """
-    # 전술 메모리 로드 (실패해도 기본 동작)
     try:
         from wargame.harness.tactical_memory import get_tactical_memory
         tm = get_tactical_memory()
@@ -79,13 +79,33 @@ def _best_obs_point(
         elev  = _elevation(px, py)
         cover = _cover(px, py)
         score = elev * 0.6 + cover * 200 * 0.4
-        # 전술 메모리 패널티/보너스 적용
         if tm is not None:
-            score = tm.apply_penalties(px, py, score)
+            score = tm.apply_penalties(px, py, score, current_context)
         if score > best_score:
             best_score = score
             best_pt = [px, py]
     return best_pt
+
+
+def _build_current_recon_context() -> dict:
+    """현재 엔진 상태에서 정찰 임무용 교전 컨텍스트 빌드."""
+    if _wargame_engine is None:
+        return {}
+    try:
+        state = _wargame_engine.get_state()
+        units = state.get("units", [])
+        opfor = [u for u in units if u.get("side") == "OPFOR" and u.get("status") != "destroyed"]
+        blufor = [u for u in units if u.get("side") == "BLUFOR" and u.get("status") != "destroyed"]
+        blufor_cp = sum(u.get("combat_power", 100) for u in blufor) / max(len(blufor), 1)
+        opfor_cp  = sum(u.get("combat_power", 100) for u in opfor) / max(len(opfor), 1)
+        return {
+            "enemy_unit_types": list({u.get("unit_type", "unknown") for u in opfor}),
+            "enemy_count": len(opfor),
+            "friendly_unit_types": list({u.get("unit_type", "unknown") for u in blufor}),
+            "force_ratio": blufor_cp / max(opfor_cp, 0.01),
+        }
+    except Exception:
+        return {}
 
 
 def _build_recon_waypoints(
@@ -107,15 +127,16 @@ def _build_recon_waypoints(
 
     wps = []
 
-    # ── 0. 전술 메모리 로드 ────────────────────────────────────
+    # ── 0. 전술 메모리 + 현재 상황 컨텍스트 로드 ─────────────────
     try:
         from wargame.harness.tactical_memory import get_tactical_memory
         _tm = get_tactical_memory()
     except Exception:
         _tm = None
 
+    _ctx = _build_current_recon_context()
+
     # ── 1. 측방 우회 경유지 (전술 메모리 기반 최적 측방 선택) ──────
-    # 목표 절반 거리 지점에서 60° 또는 -60° 측방 중 패널티가 낮은 방향 선택
     flank_dist = min(dist * 0.45, 5_000)
     best_flank_score = -1.0
     fx, fy = start_x, start_y
@@ -127,18 +148,17 @@ def _build_recon_waypoints(
         cover_f = _cover(_fx, _fy)
         fscore = elev_f * 0.5 + cover_f * 200 * 0.5
         if _tm is not None:
-            fscore = _tm.apply_penalties(_fx, _fy, fscore)
+            fscore = _tm.apply_penalties(_fx, _fy, fscore, _ctx)
         if fscore > best_flank_score:
             best_flank_score = fscore
             fx, fy = _fx, _fy
     wps.append([round(fx), round(fy)])
 
     # ── 2. 3개 관측 포인트 (목표 후방 → 측방 → 전방 순) ────────
-    # 시작 각도: 목표 후방(아군 방향)부터 반시계 순 배치
-    start_obs_angle = bearing + math.pi  # 목표 기준 아군 쪽
+    start_obs_angle = bearing + math.pi
     for i in range(3):
         obs_angle = start_obs_angle + i * (2 * math.pi / 3)
-        pt = _best_obs_point(target_x, target_y, obs_angle, _RECON_STANDOFF)
+        pt = _best_obs_point(target_x, target_y, obs_angle, _RECON_STANDOFF, _ctx)
         wps.append([round(pt[0]), round(pt[1])])
 
     # ── 3. 안전 복귀점 ─────────────────────────────────────────
