@@ -487,7 +487,7 @@ def wargame_request_recon_plan(history: List = None):
     state = eng.get_state()
     recon_units_info = "\n".join(f"  - {u['id']} ({u['unit_type']}): 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%" for u in state["units"] if u["side"] == "BLUFOR" and u.get("unit_type") == "정찰" and u["status"] == "active") or "  없음"
     undetected_info = "\n".join(f"  - {t['unit_id']}: {t['status']} 추정위치=({t['known_x_km']}km, {t['known_y_km']}km)" for t in assessment.get("undetected_targets", [])) or "  없음"
-    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 5단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력 (실제 적용은 UI가 자동 처리)\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.")
+    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 5단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력 (실제 적용은 UI가 자동 처리)\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.\n\n[절대 금지] apply_wargame_mission_plan, apply_wargame_air_support 툴은 절대 호출하지 마라. JSON 블록을 출력하면 UI가 자동으로 워게임에 즉시 적용한다. 승인 요청 불필요.")
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
     import json as _json, re as _re
     agent_response_text = ""
@@ -596,7 +596,7 @@ def wargame_request_attack_plan(history: List = None):
     import json
     from wargame.llm_planner import build_mission_query
     base_query = build_mission_query(state)
-    attack_suffix = ("\n\n[공격 임무계획 지시]\n- 탐지 상태가 'detected'인 OPFOR만 공격 목표로 설정하라.\n- 정찰부대(unit_type=정찰, Delta)는 측방 경계 또는 탐지 미확인 방향 감시 임무를 부여하라.\n- 기계화보병·전차·대전차 부대에게 탐지된 적 격멸 임무를 부여하라.\n- 자주포가 있으면 탐지된 적 위치에 포격 지원 임무를 부여하라.\n- 미탐지 적군 방향으로 공격부대를 돌출시키지 마라.\n\n[절대 금지] assess_recon_need(), recommend_recon_routes(), recon_advisor_tool(), strategy_advisor_tool() 등 정찰·전략 도구는 절대 호출하지 마라.\n위 JSON 형식으로만 즉시 응답하라.")
+    attack_suffix = ("\n\n[공격 임무계획 지시]\n- 탐지 상태가 'detected'인 OPFOR만 공격 목표로 설정하라.\n- 정찰부대(unit_type=정찰, Delta)는 측방 경계 또는 탐지 미확인 방향 감시 임무를 부여하라.\n- 기계화보병·전차·대전차 부대에게 탐지된 적 격멸 임무를 부여하라.\n- 자주포가 있으면 탐지된 적 위치에 포격 지원 임무를 부여하라.\n- 미탐지 적군 방향으로 공격부대를 돌출시키지 마라.\n\n[절대 금지] assess_recon_need(), recommend_recon_routes(), recon_advisor_tool(), strategy_advisor_tool(), apply_wargame_mission_plan, apply_wargame_air_support 툴은 절대 호출하지 마라. JSON 블록을 출력하면 UI가 자동으로 워게임에 즉시 적용한다. 승인 요청 불필요.\n위 JSON 형식으로만 즉시 응답하라.")
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
     history.append((header_msg, "처리 중..."))
