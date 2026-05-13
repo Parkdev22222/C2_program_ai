@@ -32,16 +32,85 @@ _DEFAULT_DATA = {
 
 # ── 교전 상황 유사도 ──────────────────────────────────────────────────
 
+# 적 위치 유사도 기준 거리: 이 거리(m) 이상 떨어지면 위치 유사도 0
+_POSITION_REF_DIST = 6_000.0
+
+# 지형 고도 기준값: 정규화에 사용 (맵 최대 고도 가정)
+_ELEV_REF = 600.0
+
+
 def _jaccard(set_a: list, set_b: list) -> float:
     """두 리스트의 Jaccard 유사도 (공집합이면 1.0 반환)."""
     if not set_a and not set_b:
         return 1.0
     a, b = set(set_a), set(set_b)
-    if not a and not b:
-        return 1.0
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 1.0
+
+
+def _positional_similarity(stored_positions: list, current_positions: list) -> float:
+    """
+    저장된 적 위치 목록과 현재 적 위치 목록의 공간적 유사도 (0~1).
+
+    각 저장 위치에서 가장 가까운 현재 위치까지의 거리를 _POSITION_REF_DIST로
+    정규화하여 평균. 어느 한쪽이 비어 있으면 0.5(중립) 반환.
+    """
+    if not stored_positions or not current_positions:
+        return 0.5
+    sims = []
+    for sp in stored_positions:
+        sx, sy = float(sp[0]), float(sp[1])
+        min_dist = min(
+            math.hypot(sx - float(cp[0]), sy - float(cp[1]))
+            for cp in current_positions
+        )
+        sims.append(max(0.0, 1.0 - min_dist / _POSITION_REF_DIST))
+    return sum(sims) / len(sims)
+
+
+def _terrain_similarity(stored_terrain: dict, current_terrain: dict) -> float:
+    """
+    두 지형 프로파일(terrain dict)의 유사도 (0~1).
+
+    비교 항목:
+      - 평균 고도 차이 (가중치 0.40)
+      - 고도 표준편차 차이 — 지형 기복 유사성 (가중치 0.30)
+      - 평균 엄폐도 차이 (가중치 0.20)
+      - 고도 샘플 RMSE — 세부 지형 형태 (가중치 0.10, 샘플 있을 때만)
+
+    어느 한쪽이 비어 있으면 0.5(중립) 반환.
+    """
+    if not stored_terrain or not current_terrain:
+        return 0.5
+
+    # 1. 평균 고도 유사도
+    elev_diff = abs(stored_terrain.get("elev_mean", 0) - current_terrain.get("elev_mean", 0))
+    elev_sim = max(0.0, 1.0 - elev_diff / _ELEV_REF)
+
+    # 2. 고도 표준편차 유사도 (지형 기복)
+    std_diff = abs(stored_terrain.get("elev_std", 0) - current_terrain.get("elev_std", 0))
+    std_sim = max(0.0, 1.0 - std_diff / (_ELEV_REF * 0.3))
+
+    # 3. 엄폐도 유사도
+    cover_diff = abs(stored_terrain.get("cover_mean", 0) - current_terrain.get("cover_mean", 0))
+    cover_sim = max(0.0, 1.0 - cover_diff / 0.65)
+
+    # 4. 고도 샘플 RMSE (3×3 그리드 9개 값)
+    s_samples = stored_terrain.get("elev_samples", [])
+    c_samples = current_terrain.get("elev_samples", [])
+    if s_samples and c_samples and len(s_samples) == len(c_samples):
+        n = len(s_samples)
+        rmse = math.sqrt(sum((a - b) ** 2 for a, b in zip(s_samples, c_samples)) / n)
+        sample_sim = max(0.0, 1.0 - rmse / _ELEV_REF)
+        return (
+            elev_sim   * 0.40
+            + std_sim  * 0.30
+            + cover_sim * 0.20
+            + sample_sim * 0.10
+        )
+
+    return elev_sim * 0.50 + std_sim * 0.35 + cover_sim * 0.15
 
 
 def compute_context_similarity(stored: dict, current: dict) -> float:
@@ -51,15 +120,17 @@ def compute_context_similarity(stored: dict, current: dict) -> float:
     저장 또는 현재 컨텍스트가 없으면 0.5(중립)를 반환.
 
     비교 기준:
-      - 적 부대 유형 Jaccard 유사도  (가중치 0.50)
-      - 전투력 비율 유사도            (가중치 0.30)
-      - 적 수량 유사도                (가중치 0.20)
+      - 적 부대 유형 Jaccard 유사도  (가중치 0.25)
+      - 전투력 비율 유사도            (가중치 0.20)
+      - 적 수량 유사도                (가중치 0.10)
+      - 적 위치 공간 유사도           (가중치 0.25)
+      - 교전 지역 지형 유사도         (가중치 0.20)
     """
     if not stored or not current:
         return 0.5
 
     # 1. 적 부대 유형 유사도
-    enemy_sim = _jaccard(
+    enemy_type_sim = _jaccard(
         stored.get("enemy_unit_types", []),
         current.get("enemy_unit_types", []),
     )
@@ -75,10 +146,24 @@ def compute_context_similarity(stored: dict, current: dict) -> float:
     current_cnt = current.get("enemy_count", 1)
     count_sim = 1.0 - abs(stored_cnt - current_cnt) / max(stored_cnt, current_cnt, 1)
 
+    # 4. 적 위치 공간 유사도
+    pos_sim = _positional_similarity(
+        stored.get("enemy_positions", []),
+        current.get("enemy_positions", []),
+    )
+
+    # 5. 교전 지역 지형 유사도
+    terrain_sim = _terrain_similarity(
+        stored.get("terrain", {}),
+        current.get("terrain", {}),
+    )
+
     similarity = (
-        enemy_sim  * 0.50
-        + ratio_sim  * 0.30
-        + count_sim  * 0.20
+        enemy_type_sim * 0.25
+        + ratio_sim    * 0.20
+        + count_sim    * 0.10
+        + pos_sim      * 0.25
+        + terrain_sim  * 0.20
     )
     return float(max(0.0, min(1.0, similarity)))
 
@@ -132,7 +217,10 @@ class TacticalMemory:
             {
                 "enemy_unit_types": ["전차", "기계화보병"],
                 "enemy_count": 2,
-                "force_ratio": 0.8,   # BLUFOR CP / OPFOR CP
+                "enemy_positions": [[12000.0, 8000.0], [14000.0, 9000.0]],
+                "force_ratio": 0.8,
+                "terrain": {"elev_mean": 250.0, "elev_std": 40.0, "cover_mean": 0.3,
+                            "elev_samples": [...]},
             }
         """
         score = base_score
@@ -379,13 +467,68 @@ class SpatialRuleExtractor:
         return {"penalty_zones_added": penalty_added, "bonus_zones_added": bonus_added}
 
 
+# ── 지형 샘플링 ──────────────────────────────────────────────────────
+
+# 3×3 그리드 오프셋 (단위: 상대 비율 × radius)
+_GRID_OFFSETS = [
+    (-1, -1), (0, -1), (1, -1),
+    (-1,  0), (0,  0), (1,  0),
+    (-1,  1), (0,  1), (1,  1),
+]
+
+
+def sample_terrain_profile(cx: float, cy: float, radius: float = 2000.0) -> dict:
+    """
+    (cx, cy) 중심으로 3×3 그리드 지형 프로파일 샘플링.
+
+    Returns:
+        {
+            "center_x": float, "center_y": float,
+            "elev_mean": float, "elev_std": float,
+            "cover_mean": float,
+            "elev_samples": [float × 9],   # 3×3 그리드 고도값
+        }
+    지형 모듈 로드 실패 시 빈 dict 반환.
+    """
+    try:
+        from wargame.terrain import terrain as _t
+    except Exception:
+        return {}
+
+    step = radius * 0.7  # 그리드 간격: radius의 70%
+    elevs = []
+    covers = []
+    for (di, dj) in _GRID_OFFSETS:
+        sx = max(0.0, min(29_999.0, cx + di * step))
+        sy = max(0.0, min(29_999.0, cy + dj * step))
+        try:
+            elevs.append(float(_t.elevation(sx, sy)))
+            covers.append(float(_t.cover_factor(sx, sy)))
+        except Exception:
+            elevs.append(0.0)
+            covers.append(0.0)
+
+    n = len(elevs)
+    elev_mean = sum(elevs) / n
+    elev_std  = math.sqrt(sum((e - elev_mean) ** 2 for e in elevs) / n)
+    cover_mean = sum(covers) / n
+
+    return {
+        "center_x":    round(cx, 1),
+        "center_y":    round(cy, 1),
+        "elev_mean":   round(elev_mean, 1),
+        "elev_std":    round(elev_std, 1),
+        "cover_mean":  round(cover_mean, 3),
+        "elev_samples": [round(e, 1) for e in elevs],
+    }
+
+
 # ── 컨텍스트 추출 헬퍼 ───────────────────────────────────────────────
 
 def _extract_episode_context(metrics, engine=None) -> dict:
     """에피소드 메트릭에서 기본 교전 컨텍스트 추출."""
     ctx: dict = {}
 
-    # 에피소드 메트릭에서 직접 가져올 수 있는 정보
     try:
         ctx["force_ratio"] = float(getattr(metrics, "blufor_survival_rate", 1.0))
         ctx["blufor_cp_at_time"] = float(getattr(metrics, "blufor_survival_rate", 1.0)) * 100
@@ -396,36 +539,49 @@ def _extract_episode_context(metrics, engine=None) -> dict:
     except Exception:
         pass
 
-    # 엔진 상태에서 부대 유형 수집
+    # 엔진 상태에서 부대 유형·위치 수집
     if engine is not None:
         try:
             state = engine.get_state()
             units = state.get("units", [])
-            ctx["enemy_unit_types"] = list({
-                u.get("unit_type", "unknown")
-                for u in units if u.get("side") == "OPFOR"
-            })
+            opfor_units = [u for u in units if u.get("side") == "OPFOR"]
+            ctx["enemy_unit_types"] = list({u.get("unit_type", "unknown") for u in opfor_units})
             ctx["friendly_unit_types"] = list({
                 u.get("unit_type", "unknown")
                 for u in units if u.get("side") == "BLUFOR"
             })
-            opfor_units = [u for u in units if u.get("side") == "OPFOR"]
             ctx["enemy_count"] = len(opfor_units)
+            # 적 부대 위치 목록 [[x, y], ...]
+            ctx["enemy_positions"] = [
+                [float(u.get("x", 0)), float(u.get("y", 0))]
+                for u in opfor_units
+            ]
+            # 에피소드 전체 교전 지역 지형: 적 위치들의 중심점 기준 샘플링
+            if ctx["enemy_positions"]:
+                cx_ep = sum(p[0] for p in ctx["enemy_positions"]) / len(ctx["enemy_positions"])
+                cy_ep = sum(p[1] for p in ctx["enemy_positions"]) / len(ctx["enemy_positions"])
+                ctx["terrain"] = sample_terrain_profile(cx_ep, cy_ep, radius=3000.0)
         except Exception:
             pass
 
-    # events_summary에서 부대 유형 추론 (엔진 없을 때 폴백)
+    # events_summary에서 폴백 (엔진 없을 때)
     if "enemy_unit_types" not in ctx:
         events = getattr(metrics, "events_summary", []) or []
         types = set()
+        positions = []
         for evt in events:
             msg = evt.get("message", "")
             for kw in ("전차", "기계화보병", "보병", "포병", "헬기", "드론", "자주포"):
                 if kw in msg and "OPFOR" in msg:
                     types.add(kw)
+            coords = _parse_coords_from_message(msg)
+            if coords and "OPFOR" in msg:
+                positions.append(list(coords))
         if types:
             ctx["enemy_unit_types"] = list(types)
         ctx["enemy_count"] = len(types) or 1
+        if positions:
+            ctx["enemy_positions"] = positions
 
     return ctx
 
@@ -434,8 +590,7 @@ def _extract_event_context(event: dict, episode_context: dict) -> dict:
     """개별 이벤트에서 교전 컨텍스트 추출 (episode_context를 기반으로 보강)."""
     ctx = dict(episode_context)
 
-    # 이벤트 메시지에서 추가 정보 파싱
-    msg = event.get("message", "")
+    msg  = event.get("message", "")
     tick = event.get("tick") or event.get("game_tick")
     if tick is not None:
         ctx["game_tick"] = int(tick)
@@ -450,6 +605,21 @@ def _extract_event_context(event: dict, episode_context: dict) -> dict:
         ctx["enemy_unit_types"] = list(existing | types_in_msg)
 
     ctx["engagement_type"] = event.get("event_type", "") or event.get("type", "")
+
+    # 이벤트 좌표가 있으면 해당 지점의 지형 샘플링 (이벤트 레벨 정밀 지형)
+    coords = _parse_coords_from_message(msg)
+    if coords:
+        # 이벤트 위치를 적 위치로 추가
+        existing_pos = list(ctx.get("enemy_positions", []))
+        if list(coords) not in existing_pos:
+            existing_pos.append(list(coords))
+        ctx["enemy_positions"] = existing_pos
+
+        # 이벤트 좌표 기준 지형 프로파일 (기존 episode terrain보다 정밀)
+        evt_terrain = sample_terrain_profile(coords[0], coords[1], radius=2000.0)
+        if evt_terrain:
+            ctx["terrain"] = evt_terrain
+
     return ctx
 
 

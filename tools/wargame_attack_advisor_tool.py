@@ -340,11 +340,26 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
         opfor_units = [u for u in all_units if u["side"] == "OPFOR" and u["status"] != "destroyed"]
         blufor_cp = sum(u.get("combat_power", 100) for u in blufor_active) / max(len(blufor_active), 1)
         opfor_cp  = sum(u.get("combat_power", 100) for u in opfor_units) / max(len(opfor_units), 1)
+        opfor_positions = [
+            [float(u.get("x", 0)), float(u.get("y", 0))] for u in opfor_units
+        ]
+        # 적 위치 중심점 기준 지형 프로파일 샘플링
+        _terrain_ctx = {}
+        if opfor_positions:
+            try:
+                from wargame.harness.tactical_memory import sample_terrain_profile
+                cx_op = sum(p[0] for p in opfor_positions) / len(opfor_positions)
+                cy_op = sum(p[1] for p in opfor_positions) / len(opfor_positions)
+                _terrain_ctx = sample_terrain_profile(cx_op, cy_op, radius=3000.0)
+            except Exception:
+                pass
         _current_context = {
             "enemy_unit_types": list({u.get("unit_type", "unknown") for u in opfor_units}),
             "enemy_count": len(opfor_units),
+            "enemy_positions": opfor_positions,
             "friendly_unit_types": list({u.get("unit_type", "unknown") for u in blufor_active}),
             "force_ratio": blufor_cp / max(opfor_cp, 0.01),
+            "terrain": _terrain_ctx,
         }
 
         # ── 후보 위치 생성: 16방향 × 4거리 ─────────────────────────

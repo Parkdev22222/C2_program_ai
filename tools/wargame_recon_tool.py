@@ -98,11 +98,26 @@ def _build_current_recon_context() -> dict:
         blufor = [u for u in units if u.get("side") == "BLUFOR" and u.get("status") != "destroyed"]
         blufor_cp = sum(u.get("combat_power", 100) for u in blufor) / max(len(blufor), 1)
         opfor_cp  = sum(u.get("combat_power", 100) for u in opfor) / max(len(opfor), 1)
+        opfor_positions = [
+            [float(u.get("x", 0)), float(u.get("y", 0))] for u in opfor
+        ]
+        # 적 위치 중심점 기준 지형 프로파일 샘플링
+        terrain_ctx = {}
+        if opfor_positions:
+            try:
+                from wargame.harness.tactical_memory import sample_terrain_profile
+                cx_op = sum(p[0] for p in opfor_positions) / len(opfor_positions)
+                cy_op = sum(p[1] for p in opfor_positions) / len(opfor_positions)
+                terrain_ctx = sample_terrain_profile(cx_op, cy_op, radius=3000.0)
+            except Exception:
+                pass
         return {
             "enemy_unit_types": list({u.get("unit_type", "unknown") for u in opfor}),
             "enemy_count": len(opfor),
+            "enemy_positions": opfor_positions,
             "friendly_unit_types": list({u.get("unit_type", "unknown") for u in blufor}),
             "force_ratio": blufor_cp / max(opfor_cp, 0.01),
+            "terrain": terrain_ctx,
         }
     except Exception:
         return {}
