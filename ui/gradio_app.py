@@ -951,6 +951,21 @@ def harness_get_rules():
     if learned:
         parts.append(f"**[LEARNED_RULES]**\n{learned}")
 
+    # 전술 메모리 패널티 존 표시
+    try:
+        from wargame.harness.tactical_memory import get_tactical_memory
+        tm = get_tactical_memory()
+        zones = tm.get_penalty_zones()
+        if zones:
+            zone_lines = [
+                f"- **({z['x']/1000:.1f}km, {z['y']/1000:.1f}km)** r={z['radius']/1000:.1f}km "
+                f"패널티={z['penalty']:.2f} 피격={z.get('hit_count',1)}회: {z['reason'][:60]}"
+                for z in zones[:10]
+            ]
+            parts.append(f"**[⚠️ 패널티 존 ({len(zones)}개)]**\n" + "\n".join(zone_lines))
+    except Exception:
+        pass
+
     return "\n\n".join(parts) if parts else "학습된 규칙 없음"
 
 

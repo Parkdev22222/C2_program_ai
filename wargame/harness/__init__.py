@@ -19,6 +19,7 @@ from .episode_runner import EpisodeRunner
 from .rule_extractor import RuleExtractor
 from .rule_manager import RuleManager
 from .controller import HarnessController
+from .tactical_memory import TacticalMemory, SpatialRuleExtractor, get_tactical_memory
 
 __all__ = [
     "EpisodeMetrics",
@@ -27,4 +28,7 @@ __all__ = [
     "RuleExtractor",
     "RuleManager",
     "HarnessController",
+    "TacticalMemory",
+    "SpatialRuleExtractor",
+    "get_tactical_memory",
 ]

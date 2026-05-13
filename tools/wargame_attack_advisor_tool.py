@@ -105,13 +105,20 @@ def _score_attack_position(
     los_score = los
 
     # 가중 합산 (가중치 합 = 1.0)
-    score = (
+    raw_score = (
         elev_score          * 0.30
         + atk_cover_score   * 0.25
         + target_exposure_score * 0.20
         + ef_score          * 0.15
         + los_score         * 0.10
     ) * 100.0  # 0~100 스케일
+
+    # 전술 메모리 패널티/보너스 적용
+    try:
+        from wargame.harness.tactical_memory import get_tactical_memory
+        score = get_tactical_memory().apply_penalties(cx, cy, raw_score)
+    except Exception:
+        score = raw_score
 
     detail = {
         "elevation_m":         round(atk_elev, 1),
@@ -120,6 +127,7 @@ def _score_attack_position(
         "elevation_advantage": round(elev_adv, 2),
         "engagement_factor":   round(ef, 2),
         "los_quality":         round(los, 2),
+        "tactical_penalty_applied": score != raw_score,
         "score_breakdown": {
             "elevation":        round(elev_score * 30, 1),
             "atk_cover":        round(atk_cover_score * 25, 1),

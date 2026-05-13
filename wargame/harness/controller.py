@@ -184,6 +184,18 @@ class HarnessController:
                 except Exception as e:
                     logger.warning(f"규칙 추출 실패: {e}")
 
+                # 4-b. 공간 패널티/보너스 존 업데이트
+                try:
+                    from wargame.harness.tactical_memory import SpatialRuleExtractor, get_tactical_memory
+                    spatial_extractor = SpatialRuleExtractor(get_tactical_memory())
+                    spatial_result = spatial_extractor.analyze_episode(metrics)
+                    p_added = spatial_result.get("penalty_zones_added", 0)
+                    b_added = spatial_result.get("bonus_zones_added", 0)
+                    if p_added + b_added > 0:
+                        logger.info(f"공간 분석: 패널티 존 {p_added}개, 보너스 존 {b_added}개 업데이트")
+                except Exception as e:
+                    logger.warning(f"공간 분석 실패: {e}")
+
                 # 5. 주기적 가지치기
                 if (i + 1) % prune_every_n == 0:
                     try:
@@ -272,6 +284,14 @@ class HarnessController:
         except Exception as e:
             logger.error(f"get_active_rules 오류: {e}")
             return {section: [] for section in SECTIONS}
+
+    def get_tactical_stats(self) -> dict:
+        """전술 메모리 통계 반환."""
+        try:
+            from wargame.harness.tactical_memory import get_tactical_memory
+            return get_tactical_memory().get_stats()
+        except Exception:
+            return {}
 
     def wait_for_completion(self, timeout: Optional[float] = None):
         """
