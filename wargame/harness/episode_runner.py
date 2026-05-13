@@ -432,7 +432,7 @@ class EpisodeRunner:
 
     def run_episode(
         self,
-        max_ticks: int = 1_000,
+        max_ticks: int = 100_000,
         replan_interval_ticks: int = 120,
         initial_mission: str = "auto",
     ) -> EpisodeMetrics:
@@ -440,7 +440,7 @@ class EpisodeRunner:
         한 에피소드를 실행하고 메트릭을 반환합니다.
 
         Args:
-            max_ticks: 에피소드 최대 틱 수 (기본 1000틱)
+            max_ticks: 에피소드 최대 틱 수 (기본 100000틱)
             replan_interval_ticks: 재계획 주기 (틱 단위)
             initial_mission: 초기 임무 유형 ("recon" | "attack" | "auto")
         """
