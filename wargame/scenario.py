@@ -24,7 +24,30 @@ BN vs BN (5 vs 5) — 학익진(鶴翼陣) 대형:
     자주포     (SPG)     : 화력130, 속도1.8 m/s
 """
 
+import math as _math
+import random as _rng
+
 from .models import Unit
+
+
+# ── 랜덤 배치 구역 정의 ────────────────────────────────────────────
+# BLUFOR: 남서부 분지 (지형상 아군 집결지)
+_BLUFOR_ZONE = dict(x_min=2_000, x_max=13_000, y_min=1_500, y_max=12_000)
+# OPFOR : 북동부 고원 (지형상 적 집결지)
+_OPFOR_ZONE  = dict(x_min=17_000, x_max=28_000, y_min=17_000, y_max=28_500)
+# 같은 진영 부대 간 최소 이격 거리
+_MIN_SEP = 1_500.0
+
+
+def _pick_pos(zone: dict, placed: list, min_sep: float = _MIN_SEP, tries: int = 60):
+    """충돌 없이 구역 내 랜덤 좌표 반환."""
+    for _ in range(tries):
+        x = _rng.uniform(zone["x_min"], zone["x_max"])
+        y = _rng.uniform(zone["y_min"], zone["y_max"])
+        if all(_math.hypot(x - px, y - py) >= min_sep for px, py in placed):
+            return x, y
+    # tries 초과 시 중앙값 반환 (이격 조건 포기)
+    return (zone["x_min"] + zone["x_max"]) / 2, (zone["y_min"] + zone["y_max"]) / 2
 
 
 def setup_bn_vs_bn() -> list:
@@ -97,6 +120,31 @@ def setup_bn_vs_bn() -> list:
              combat_power=100.0, firepower_index=130.0, max_speed=1.8,
              status="active", waypoints=[], current_action="hold", color="#FFCCBC"),
     ]
+
+
+def setup_bn_vs_bn_random() -> list:
+    """
+    BN vs BN — 매 에피소드마다 진영별 구역 내 랜덤 초기 배치.
+
+    부대 유형·전투력·색상은 고정, 좌표만 각 진영 구역 내에서 랜덤 생성.
+    같은 진영 부대 간 최소 이격 거리(_MIN_SEP)를 보장합니다.
+    """
+    base = setup_bn_vs_bn()
+
+    blufor_placed: list = []
+    opfor_placed:  list = []
+
+    for unit in base:
+        if unit.side == "BLUFOR":
+            x, y = _pick_pos(_BLUFOR_ZONE, blufor_placed)
+            blufor_placed.append((x, y))
+        else:
+            x, y = _pick_pos(_OPFOR_ZONE, opfor_placed)
+            opfor_placed.append((x, y))
+        unit.x = x
+        unit.y = y
+
+    return base
 
 
 # 부대 유형 라벨 (UI 표시용)
