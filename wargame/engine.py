@@ -189,7 +189,11 @@ class WargameEngine:
                 u = id_map[uid]
                 if not u.is_active():
                     continue
-                wps = [[float(p[0]), float(p[1])] for p in mp.get("waypoints", [])]
+                try:
+                  wps = [[float(p[0]), float(p[1])] for p in mp.get("waypoints", [])]
+                except:
+                  wps = [[float(p["x"]), float(p["y"])] for p in mp.get("waypoints", [])]
+
                 u.waypoints = wps
                 u.current_action = mp.get("mission_type", "move")
                 if u.side == "BLUFOR" and wps:
