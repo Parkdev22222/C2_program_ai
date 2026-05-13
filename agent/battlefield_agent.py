@@ -257,9 +257,8 @@ class BattlefieldAgent:
             return (
                 f"{query}\n\n"
                 f"[중요] 이 쿼리는 워게임 임무계획 실행 요청입니다.\n"
-                f"반드시 dry_run=True(기본값)로 apply_wargame_mission_plan을 먼저 호출하여 검증하세요.\n"
-                f"검증 결과에서 plan_id를 사용자에게 안내하고, 사용자 승인(approve_plan) 후 dry_run=False로 실행하세요.\n"
-                f"사용자 승인 없이 dry_run=False를 직접 호출하는 것은 금지됩니다."
+                f"apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)으로 즉시 워게임에 적용하세요.\n"
+                f"별도 승인 절차 없이 dry_run=False로 직접 호출합니다."
             )
 
         if intent in ("attack_planning", "general_strategy_advice", "planning_request"):
