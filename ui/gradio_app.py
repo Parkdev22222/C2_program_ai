@@ -487,7 +487,23 @@ def wargame_request_recon_plan(history: List = None):
     state = eng.get_state()
     recon_units_info = "\n".join(f"  - {u['id']} ({u['unit_type']}): 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%" for u in state["units"] if u["side"] == "BLUFOR" and u.get("unit_type") == "정찰" and u["status"] == "active") or "  없음"
     undetected_info = "\n".join(f"  - {t['unit_id']}: {t['status']} 추정위치=({t['known_x_km']}km, {t['known_y_km']}km)" for t in assessment.get("undetected_targets", [])) or "  없음"
-    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 6단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. apply_wargame_mission_plan(plan_json=<최종JSON문자열>, dry_run=False) 호출하여 워게임에 즉시 적용\n6. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.\n\n[절대 금지] validate_mission_plan_tool, approve_mission_plan_tool 등 승인 관련 툴은 호출하지 마라. dry_run=True로 호출하지 마라.")
+    try:
+        from agent.battlefield_agent import get_instruction_section
+        recon_rules = get_instruction_section("RECON")
+        execution_rules = get_instruction_section("EXECUTION")
+        learned_rules = get_instruction_section("LEARNED_RULES")
+    except Exception:
+        recon_rules = execution_rules = learned_rules = ""
+    learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+    recon_query = (
+        f"[정찰 임무계획 수립]\n\n"
+        f"현재 상황: {assessment.get('reason', '')}\n\n"
+        f"미탐지 OPFOR 목표:\n{undetected_info}\n\n"
+        f"사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n"
+        f"[RECON 규칙]\n{recon_rules}\n\n"
+        f"[EXECUTION 규칙]\n{execution_rules}"
+        f"{learned_suffix}"
+    )
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
     import json as _json, re as _re
     agent_response_text = ""
@@ -590,8 +606,20 @@ def wargame_request_attack_plan(history: List = None):
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
     import json
     from wargame.llm_planner import build_mission_query
+    try:
+        from agent.battlefield_agent import get_instruction_section
+        attack_rules = get_instruction_section("ATTACK")
+        execution_rules_atk = get_instruction_section("EXECUTION")
+        learned_rules_atk = get_instruction_section("LEARNED_RULES")
+    except Exception:
+        attack_rules = execution_rules_atk = learned_rules_atk = ""
+    learned_suffix_atk = f"\n\n[학습된 규칙]\n{learned_rules_atk}" if learned_rules_atk else ""
     base_query = build_mission_query(state)
-    attack_suffix = ("\n\n[공격 임무계획 지시]\n- 탐지 상태가 'detected'인 OPFOR만 공격 목표로 설정하라.\n- 정찰부대(unit_type=정찰, Delta)는 측방 경계 또는 탐지 미확인 방향 감시 임무를 부여하라.\n- 기계화보병·전차·대전차 부대에게 탐지된 적 격멸 임무를 부여하라.\n- 자주포가 있으면 탐지된 적 위치에 포격 지원 임무를 부여하라.\n- 미탐지 적군 방향으로 공격부대를 돌출시키지 마라.\n- 최종 JSON을 apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)으로 호출하여 워게임에 즉시 적용하라.\n\n[절대 금지] assess_recon_need(), recommend_recon_routes(), recon_advisor_tool(), strategy_advisor_tool() 툴은 절대 호출하지 마라. dry_run=True로 호출하지 마라. validate_mission_plan_tool, approve_mission_plan_tool 등 승인 관련 툴은 호출하지 마라.\n위 JSON 형식으로 임무계획을 생성하고 apply_wargame_mission_plan으로 적용 후 응답하라.")
+    attack_suffix = (
+        f"\n\n[ATTACK 규칙]\n{attack_rules}\n\n"
+        f"[EXECUTION 규칙]\n{execution_rules_atk}"
+        f"{learned_suffix_atk}"
+    )
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
     history.append((header_msg, "처리 중..."))
@@ -682,6 +710,69 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
+    return history, ""
+
+
+def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
+    """워게임 현재 상태를 평가하고 학습된 규칙을 agent_custom_instructions.txt에 추가합니다."""
+    history = list(history or [])
+    eng = _wg_ensure_engine()
+    agent = _get_agent()
+    if eng is None:
+        history.append(("🧠 전술 평가", "워게임 엔진 없음"))
+        return history, ""
+    state = eng.get_state()
+    try:
+        from agent.battlefield_agent import append_learned_rule
+    except ImportError:
+        history.append(("🧠 전술 평가", "battlefield_agent 로드 실패"))
+        return history, ""
+    blufor = [u for u in state["units"] if u["side"] == "BLUFOR"]
+    opfor  = [u for u in state["units"] if u["side"] == "OPFOR"]
+    bf_alive = [u for u in blufor if u["status"] == "active"]
+    op_alive = [u for u in opfor  if u["status"] == "active"]
+    winner = state.get("winner")
+    last_plan = _wg_last_plan or {}
+    summary_lines = [
+        f"[워게임 평가 요청]",
+        f"게임시간: {state['game_time_str']} | 승자: {winner or '미결'}",
+        f"BLUFOR 생존: {len(bf_alive)}/{len(blufor)} | OPFOR 생존: {len(op_alive)}/{len(opfor)}",
+        f"마지막 임무계획 부대 수: {len(last_plan.get('mission_plans', []))}",
+        "",
+        "위 워게임 결과를 분석하여 다음을 수행하세요:",
+        "1. 이번 전투에서 효과적이었던 전술 패턴 1~3가지를 간결한 규칙 문장으로 작성",
+        "2. 개선이 필요한 전술 패턴 1~2가지를 규칙 문장으로 작성",
+        "3. 각 규칙을 '- <규칙 내용>' 형식으로 줄별로 출력 (JSON 불필요)",
+        "4. 규칙은 다음 워게임에서 바로 적용 가능한 구체적 내용으로 작성",
+    ]
+    eval_query = "\n".join(summary_lines)
+    if agent is not None:
+        try:
+            response = agent.run(eval_query, reset=False)
+            response_text = str(response)
+        except Exception as e:
+            response_text = f"에이전트 평가 오류: {e}"
+    else:
+        response_text = (
+            f"[규칙 기반 평가]\n"
+            f"- BLUFOR 생존율: {len(bf_alive)/max(len(blufor),1)*100:.0f}%\n"
+            f"- OPFOR 잔존: {len(op_alive)}개 부대\n"
+            + ("- 승리: 현재 전술 패턴 유지 권장" if winner == "BLUFOR"
+               else "- 패배 또는 미결: 정찰 강화 및 공격 분산 권장")
+        )
+    learned_count = 0
+    for line in response_text.splitlines():
+        line = line.strip()
+        if line.startswith("- ") and len(line) > 5:
+            rule_text = line[2:].strip()
+            if rule_text:
+                append_learned_rule(rule_text)
+                learned_count += 1
+    result_msg = (
+        f"**🧠 전술 평가 완료** — {learned_count}개 규칙이 `agent_custom_instructions.txt`에 추가됨\n\n"
+        f"{response_text}"
+    )
+    history.append(("🧠 전술 평가 & 규칙 학습", result_msg))
     return history, ""
 
 
@@ -797,6 +888,7 @@ def create_app(agent=None) -> gr.Blocks:
                         gr.Markdown("### 임무계획")
                         wg_recon_btn = gr.Button("🔍 정찰 임무계획", variant="secondary")
                         wg_attack_btn = gr.Button("⚔️ 공격 임무계획", variant="primary")
+                        wg_eval_btn = gr.Button("🧠 전술 평가 & 규칙 학습", variant="secondary", size="sm")
                         gr.Markdown("### 부대 전력 현황")
                         wg_status = gr.Textbox(label="", lines=5, interactive=False, elem_id="wg_status")
                     with gr.Column(scale=2):
@@ -830,6 +922,7 @@ def create_app(agent=None) -> gr.Blocks:
             wg_apply_scale_btn.click(fn=wargame_set_timescale, inputs=[wg_timescale], outputs=_WG_OUTPUTS)
             wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
             wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_eval_btn.click(fn=wargame_evaluate_and_learn, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])

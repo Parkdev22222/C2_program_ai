@@ -17,11 +17,47 @@ def _load_agent_config() -> dict:
         return yaml.safe_load(f)
 
 
+INSTRUCTIONS_FILE = CONFIG_DIR / "agent_custom_instructions.txt"
+
+
 def _load_custom_instructions() -> str:
-    instr_file = CONFIG_DIR / "agent_custom_instructions.txt"
-    if instr_file.exists():
-        return instr_file.read_text(encoding="utf-8")
+    if INSTRUCTIONS_FILE.exists():
+        return INSTRUCTIONS_FILE.read_text(encoding="utf-8")
     return ""
+
+
+def get_instruction_section(section: str) -> str:
+    """[SECTION_NAME] 헤더 아래의 규칙 줄을 추출합니다."""
+    content = _load_custom_instructions()
+    lines = content.splitlines()
+    in_section = False
+    result = []
+    for line in lines:
+        if line.strip() == f"[{section}]":
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("[") and line.endswith("]"):
+                break
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                result.append(stripped)
+    return "\n".join(result)
+
+
+def append_learned_rule(rule: str) -> bool:
+    """워게임 평가 후 학습된 규칙을 [LEARNED_RULES] 섹션에 추가합니다."""
+    from datetime import datetime
+    content = _load_custom_instructions()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    new_line = f"- [{timestamp}] {rule}"
+    if "[LEARNED_RULES]" in content:
+        content = content + f"\n{new_line}"
+    else:
+        content += f"\n[LEARNED_RULES]\n{new_line}"
+    INSTRUCTIONS_FILE.write_text(content, encoding="utf-8")
+    logger.info(f"Learned rule appended: {rule[:80]}")
+    return True
 
 
 def is_strategy_query(text: str, config: dict = None) -> bool:
@@ -253,36 +289,31 @@ class BattlefieldAgent:
         return str(result)
 
     def _augment_by_intent(self, query, intent, preferred_tools, requires_confirmation):
+        execution_rules = get_instruction_section("EXECUTION")
+        recon_rules = get_instruction_section("RECON")
+        attack_rules = get_instruction_section("ATTACK")
+        strategy_rules = get_instruction_section("STRATEGY")
+        learned_rules = get_instruction_section("LEARNED_RULES")
+        learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+
         if intent == "execution_request":
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 워게임 임무계획 실행 요청입니다.\n"
-                f"apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)으로 즉시 워게임에 적용하세요.\n"
-                f"별도 승인 절차 없이 dry_run=False로 직접 호출합니다."
+                f"{query}\n\n[커스텀 지시 — EXECUTION]\n{execution_rules}{learned_suffix}"
             )
 
         if intent in ("attack_planning", "general_strategy_advice", "planning_request"):
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+                f"{query}\n\n[커스텀 지시 — STRATEGY]\n{strategy_rules}{learned_suffix}"
             )
 
         if intent == "recon_planning":
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 정찰 임무 요청입니다. "
-                f"반드시 assess_recon_need() → recommend_recon_routes() → recon_advisor_tool() 순서로 호출하여 "
-                f"정찰 임무계획을 수립하세요."
+                f"{query}\n\n[커스텀 지시 — RECON]\n{recon_rules}{learned_suffix}"
             )
 
         if is_strategy_query(query, self._agent_config):
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+                f"{query}\n\n[커스텀 지시 — STRATEGY]\n{strategy_rules}{learned_suffix}"
             )
 
         return query
