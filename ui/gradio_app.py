@@ -49,6 +49,38 @@ _wg_last_plan: dict = {}
 _wg_last_opfor_ai_count: int = 0
 _harness_controller = None
 
+# ── 채팅 기록 영속성 ────────────────────────────────────────────
+import json as _json_mod
+
+_CHAT_HISTORY_FILE = CONFIG_DIR / "chat_history.json"
+
+
+def _save_chat_history(wg_history: list, main_history: list = None) -> None:
+    """채팅 기록을 파일에 저장."""
+    try:
+        data = {
+            "wg_chat": wg_history or [],
+            "main_chat": main_history or [],
+        }
+        _CHAT_HISTORY_FILE.write_text(
+            _json_mod.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _load_chat_history() -> Tuple[list, list]:
+    """저장된 채팅 기록을 반환 (wg_chat, main_chat)."""
+    try:
+        if _CHAT_HISTORY_FILE.exists():
+            data = _json_mod.loads(_CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+            wg = [[m[0], m[1]] for m in data.get("wg_chat", []) if len(m) == 2]
+            main = [[m[0], m[1]] for m in data.get("main_chat", []) if len(m) == 2]
+            return wg, main
+    except Exception:
+        pass
+    return [], []
+
 
 def _get_agent():
     global _agent
@@ -426,10 +458,11 @@ def wargame_on_load():
     """페이지 새로고침 시 엔진 상태를 읽어 버튼 레이블·맵·상태를 복원."""
     eng = _wg_ensure_engine()
     if eng is None:
-        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", ""
+        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", "", []
     btn_label = "⏸ 일시정지" if eng.running else "▶ 시뮬레이션 시작"
     fig, status, log_text = wargame_refresh()
-    return btn_label, fig, status, log_text
+    wg_history, _ = _load_chat_history()
+    return btn_label, fig, status, log_text, wg_history
 
 
 def wargame_start_pause():
@@ -598,6 +631,7 @@ def wargame_request_recon_plan(history: List = None):
         deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
     result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
     history[-1] = (history[-1][0], result_msg)
+    _save_chat_history(history)
     fig, status, log_text = wargame_refresh()
     return history, plan_text, fig, status, log_text
 
@@ -713,6 +747,7 @@ def wargame_request_attack_plan(history: List = None):
         "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
         if n_air else ""
     )
+    _save_chat_history(history)
     fig, status, log_text = wargame_refresh()
     return history, plan_text, fig, status, log_text
 
@@ -738,6 +773,7 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
+    _save_chat_history(history)
     return history, ""
 
 
@@ -801,6 +837,7 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
         f"{response_text}"
     )
     history.append(("🧠 전술 평가 & 규칙 학습", result_msg))
+    _save_chat_history(history)
     return history, ""
 
 
@@ -816,6 +853,7 @@ def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
             _wg_last_opfor_ai_count = current_count
             alert_msg = _build_opfor_alert(state)
             chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
+            _save_chat_history(chatbot_history)
     return fig, status, log_text, chatbot_history
 
 
@@ -827,6 +865,7 @@ def clear_chat_history() -> Tuple[List, str]:
         clear_situation_memory()
     except Exception:
         pass
+    _save_chat_history([], [])
     return [], "대화 기록과 상황 분석 메모리가 초기화되었습니다."
 
 
@@ -1127,9 +1166,12 @@ def create_app(agent=None) -> gr.Blocks:
             wg_eval_btn.click(fn=wargame_evaluate_and_learn, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
-            wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])
+            wg_chat_clear_btn.click(
+                fn=lambda: (_save_chat_history([]) or [], ""),
+                outputs=[wg_chatbot, wg_chat_input]
+            )
             wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
-            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
+            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_chatbot])
         harness_start_btn.click(
             fn=harness_start_training,
             inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
