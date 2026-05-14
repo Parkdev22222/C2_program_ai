@@ -102,6 +102,15 @@ _DR_NOISE_PER_TICK   = 80.0
 # 제압 상태 회복: 교전 밖으로 이탈 후 이 게임초 경과 시 degraded로 회복
 _SUPPRESS_RECOVER_SEC = 120.0
 
+# ── OPFOR 전략 AI 파라미터 ────────────────────────────────────────────
+# 정찰 완료 임계값: BLUFOR 탐지 수가 이 이상이면 임무 결정 단계로 전환
+_OPFOR_DETECT_THRESHOLD = 2
+# 방어 진지 간 최소 이격 거리
+_OPFOR_DEFEND_MIN_SEP = 3_000.0
+# BLUFOR 초기 배치 중심 (남서부) — 정찰 방향 기준점
+_BLUFOR_APPROX_CX = 8_000.0
+_BLUFOR_APPROX_CY = 8_000.0
+
 
 # ── 모듈 레벨 헬퍼 ────────────────────────────────────────────────────
 
@@ -208,6 +217,11 @@ class WargameEngine:
         self._intelligence: dict = {"BLUFOR": {}, "OPFOR": {}}
         self._init_intelligence()
 
+        # OPFOR 전략 상태 머신
+        self._opfor_strategy: str = "recon"      # "recon" | "defend" | "attack"
+        self._opfor_strategy_decided: bool = False
+        self._opfor_defend_positions: Dict[str, Tuple[float, float]] = {}
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -290,6 +304,9 @@ class WargameEngine:
             self._suppress_recover_at = {}
             self._intelligence     = {"BLUFOR": {}, "OPFOR": {}}
             self._init_intelligence()
+            self._opfor_strategy          = "recon"
+            self._opfor_strategy_decided  = False
+            self._opfor_defend_positions  = {}
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -875,9 +892,219 @@ class WargameEngine:
         if self._opfor_ai_last < self._OPFOR_AI_INTERVAL:
             return
         self._opfor_ai_last = 0.0
-        self._run_faction_ai("OPFOR")
-        self._run_faction_ai("BLUFOR")
+        self._run_opfor_strategy_ai()    # 정찰→임무결정→방어/공격 상태 머신
+        self._run_faction_ai("BLUFOR")   # BLUFOR AI 는 그대로 유지
         self.opfor_ai_fire_count += 1
+
+    # ── OPFOR 전략 AI (상태 머신) ─────────────────────────────────────
+
+    def _run_opfor_strategy_ai(self):
+        """
+        OPFOR 전략 AI 메인 루프.
+
+        단계:
+          1. 정찰(recon)  : 정찰부대가 BLUFOR 방향으로 기동, 나머지 경계
+          2. 결정         : 탐지 BLUFOR ≥ 임계값 → 랜덤으로 방어/공격 선택
+          3. 방어(defend) : 고지대에 부대 분산 배치
+          4. 공격(attack) : 탐지된 BLUFOR 위치로 각 부대 기동·교전
+        """
+        opfor_all = [u for u in self.units if u.side == "OPFOR" and u.is_active()]
+        if not opfor_all:
+            return
+
+        opfor_intel    = self._intelligence["OPFOR"]
+        detected_blu   = [e for e in opfor_intel.values() if e["status"] == "detected"]
+
+        # ① 제압·저하 부대 우선 처리
+        for u in opfor_all:
+            if u.status == "suppressed":
+                u.waypoints      = []
+                u.current_action = "defend"
+                continue
+            if u.combat_power < SUPPRESSED_THRESHOLD:
+                self._ai_withdraw(u, "OPFOR", "OPFOR_AI")
+
+        active_opfor = [
+            u for u in opfor_all
+            if u.status not in ("suppressed", "destroyed")
+            and u.combat_power >= SUPPRESSED_THRESHOLD
+        ]
+        if not active_opfor:
+            return
+
+        # ② 정찰 단계 → 임무 결정
+        if not self._opfor_strategy_decided:
+            if len(detected_blu) >= _OPFOR_DETECT_THRESHOLD:
+                self._opfor_strategy         = random.choice(["defend", "attack"])
+                self._opfor_strategy_decided = True
+                ko = "지역 방어" if self._opfor_strategy == "defend" else "아군 공격"
+                self.db.log_event(
+                    self.tick, self.game_time, "OPFOR_AI",
+                    f"OPFOR 임무 결정: {ko} "
+                    f"(탐지된 BLUFOR {len(detected_blu)}개)"
+                )
+                self._execute_opfor_strategy(active_opfor, detected_blu)
+            else:
+                self._opfor_recon_phase(active_opfor)
+        else:
+            # ③ 이미 결정된 임무 재실행 (주기적 갱신)
+            self._execute_opfor_strategy(active_opfor, detected_blu)
+
+    def _opfor_recon_phase(self, active_opfor: list):
+        """
+        정찰 단계.
+        - 정찰부대(max_speed ≥ 4.0): BLUFOR 방향으로 전진
+        - 자주포: 간접사격 진지 유지
+        - 그 외: 현위치 경계
+        """
+        for u in active_opfor:
+            if u.unit_type == "자주포":
+                self._ai_standoff(u, _BLUFOR_APPROX_CX, _BLUFOR_APPROX_CY, "OPFOR_AI")
+                continue
+
+            if u.max_speed >= 4.0:  # 정찰부대
+                # 기존 경로 완주 여부 확인 후 새 경유지 부여
+                if u.waypoints and u.current_action == "recon":
+                    continue  # 이미 기동 중
+                angle  = math.atan2(_BLUFOR_APPROX_CY - u.y, _BLUFOR_APPROX_CX - u.x)
+                # 현재 위치에서 BLUFOR 방향으로 6~10 km 전진
+                adv    = random.uniform(6_000, 10_000)
+                rx     = max(0, min(29_999, u.x + math.cos(angle) * adv))
+                ry     = max(0, min(29_999, u.y + math.sin(angle) * adv))
+                # 측방 변화를 주어 지그재그 정찰
+                perp   = angle + random.choice([-1, 1]) * math.pi / 4
+                rx    += math.cos(perp) * random.uniform(0, 2_000)
+                ry    += math.sin(perp) * random.uniform(0, 2_000)
+                rx, ry = max(0, min(29_999, rx)), max(0, min(29_999, ry))
+                u.waypoints      = [[rx, ry]]
+                u.current_action = "recon"
+                self.db.log_event(
+                    self.tick, self.game_time, "OPFOR_AI",
+                    f"{u.id}(정찰) BLUFOR 방향 정찰 기동 → "
+                    f"({rx/1000:.1f}km, {ry/1000:.1f}km)"
+                )
+            else:
+                # 비정찰부대: 현위치 경계
+                if not u.waypoints:
+                    u.current_action = "hold"
+
+    def _execute_opfor_strategy(self, active_opfor: list, detected_blu: list):
+        """결정된 전략(방어/공격) 실행."""
+        if self._opfor_strategy == "defend":
+            self._opfor_defend_strategy(active_opfor)
+        else:
+            self._opfor_attack_strategy(active_opfor, detected_blu)
+
+    def _find_opfor_defensive_positions(self, n: int) -> List[Tuple[float, float]]:
+        """
+        OPFOR 영역(북동부, x/y ≥ 14 km)에서 고지·엄폐 우수 방어 위치 n개 선정.
+        각 위치는 _OPFOR_DEFEND_MIN_SEP 이상 이격.
+        """
+        candidates: List[Tuple[float, float, float]] = []  # (score, x, y)
+        for xi in range(14, 29, 2):
+            for yi in range(14, 29, 2):
+                x = float(xi * 1_000)
+                y = float(yi * 1_000)
+                elev  = terrain.elevation(x, y)
+                cover = terrain.cover_factor(x, y)
+                # 고도 + 엄폐 가중합으로 방어 점수 산출
+                score = elev + cover * 150.0
+                candidates.append((score, x, y))
+
+        candidates.sort(reverse=True)
+        selected: List[Tuple[float, float, float]] = []
+        for score, x, y in candidates:
+            if all(
+                math.hypot(x - sx, y - sy) >= _OPFOR_DEFEND_MIN_SEP
+                for _, sx, sy in selected
+            ):
+                selected.append((score, x, y))
+                if len(selected) >= n:
+                    break
+        return [(x, y) for _, x, y in selected]
+
+    def _opfor_defend_strategy(self, active_opfor: list):
+        """
+        지역 방어: 고지대에 부대를 분산 배치.
+        자주포는 후방 간접사격 진지, 나머지는 고지 방어.
+        최초 실행 시 위치 할당 → 이후에는 재할당 없이 목표 유지.
+        """
+        non_spg = [u for u in active_opfor if u.unit_type != "자주포"]
+        spg     = [u for u in active_opfor if u.unit_type == "자주포"]
+
+        # 자주포: 후방 간접사격 진지 유지
+        for u in spg:
+            self._ai_standoff(u, _BLUFOR_APPROX_CX, _BLUFOR_APPROX_CY, "OPFOR_AI")
+
+        # 방어 위치 최초 할당
+        if not self._opfor_defend_positions:
+            positions = self._find_opfor_defensive_positions(len(non_spg))
+            for i, u in enumerate(non_spg):
+                pos = positions[i] if i < len(positions) else (u.x, u.y)
+                self._opfor_defend_positions[u.id] = pos
+
+        for u in non_spg:
+            tx, ty = self._opfor_defend_positions.get(u.id, (u.x, u.y))
+            dist   = math.hypot(u.x - tx, u.y - ty)
+            if dist < 300:
+                u.waypoints      = []
+                u.current_action = "defend"
+            else:
+                u.waypoints      = [[tx, ty]]
+                u.current_action = "defend"
+                self.db.log_event(
+                    self.tick, self.game_time, "OPFOR_AI",
+                    f"{u.id} 방어 진지 이동 → "
+                    f"({tx/1000:.1f}km, {ty/1000:.1f}km) "
+                    f"고도 {terrain.elevation(tx, ty):.0f}m"
+                )
+
+    def _opfor_attack_strategy(self, active_opfor: list, detected_blu: list):
+        """
+        아군 공격: 탐지된 BLUFOR 위치로 각 부대 기동·교전.
+        탐지 정보가 없으면 정찰 단계로 회귀.
+        """
+        if not detected_blu:
+            self.db.log_event(
+                self.tick, self.game_time, "OPFOR_AI",
+                "공격 임무: 탐지된 BLUFOR 없음 → 정찰 재개"
+            )
+            self._opfor_recon_phase(active_opfor)
+            return
+
+        blu_cx = sum(e["known_x"] for e in detected_blu) / len(detected_blu)
+        blu_cy = sum(e["known_y"] for e in detected_blu) / len(detected_blu)
+
+        for u in active_opfor:
+            if u.unit_type == "자주포":
+                self._ai_standoff(u, blu_cx, blu_cy, "OPFOR_AI")
+                continue
+
+            # 가장 가까운 탐지 목표 선정
+            target = min(
+                detected_blu,
+                key=lambda e: math.hypot(u.x - e["known_x"], u.y - e["known_y"])
+            )
+            tx, ty   = target["known_x"], target["known_y"]
+            d_range  = _DIRECT_RANGE.get(u.unit_type, 1_500.0)
+            dist     = math.hypot(u.x - tx, u.y - ty)
+
+            if dist <= d_range * 0.6:
+                # 교전 거리 이내: 현위치 공격
+                u.waypoints      = []
+                u.current_action = "attack"
+            else:
+                # 접근 기동: 교전 유효거리 내로 진입
+                angle  = math.atan2(ty - u.y, tx - u.x)
+                wp_x   = max(0, min(29_999, tx - math.cos(angle) * d_range * 0.5))
+                wp_y   = max(0, min(29_999, ty - math.sin(angle) * d_range * 0.5))
+                u.waypoints      = [[wp_x, wp_y]]
+                u.current_action = "attack"
+                self.db.log_event(
+                    self.tick, self.game_time, "OPFOR_AI",
+                    f"{u.id}({u.unit_type}) → BLUFOR {target['unit_id']} 공격 기동 "
+                    f"({tx/1000:.1f}km, {ty/1000:.1f}km) 거리 {dist/1000:.1f}km"
+                )
 
     def _run_faction_ai(self, side: str):
         enemy_side = "OPFOR" if side == "BLUFOR" else "BLUFOR"
