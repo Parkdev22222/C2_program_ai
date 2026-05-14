@@ -46,6 +46,9 @@ _SUPPRESS_RANGE: Dict[str, float] = {
     "정찰":      1_200.0,
 }
 _INDIRECT_MAX_RANGE = 15_000.0   # 자주포 간접사격 최대 사거리
+_INDIRECT_MIN_RANGE =    800.0   # 자주포 간접사격 최소 사거리 (근거리 사각지대)
+_SPG_CLOSE_RANGE    =  1_000.0   # 이 거리 이내에서 자주포는 근거리 취약 패널티 적용
+_SPG_CLOSE_MULT     =      1.8   # 근거리 교전 시 자주포 피해 배율 (1.0 = 패널티 없음)
 
 # ── 병종 상성 계수 ────────────────────────────────────────────────────
 _MATCHUP: Dict[Tuple[str, str], float] = {
@@ -709,6 +712,12 @@ class WargameEngine:
         # 병종 상성
         matchup = _matchup_factor(attacker.unit_type, defender.unit_type)
 
+        # 자주포 근거리 취약성: _SPG_CLOSE_RANGE 이내에서 적이 접근하면 방어력 대폭 저하
+        spg_vuln = (
+            _SPG_CLOSE_MULT if defender.unit_type == "자주포" and dist < _SPG_CLOSE_RANGE
+            else 1.0
+        )
+
         atk_fp = attacker.effective_firepower()
         damage = (
             atk_fp / 100.0
@@ -721,6 +730,7 @@ class WargameEngine:
             * focus_mult
             * fp_mult
             * matchup
+            * spg_vuln
             * dt_h
         ) * random.uniform(0.7, 1.3)
 
@@ -777,6 +787,7 @@ class WargameEngine:
             fp_mult    = _status_firepower_mult(spg.status)
 
             # 탐지된 적 목표 선정 (detected or approximate)
+            # 최소 사거리(_INDIRECT_MIN_RANGE) 이내 목표는 사격 불가 (자주포 특성상 근거리 사각지대)
             targets = []
             for entry in intel.values():
                 if entry["status"] == "lost":
@@ -785,7 +796,7 @@ class WargameEngine:
                     spg.x - entry["known_x"],
                     spg.y - entry["known_y"],
                 )
-                if dist_to_target <= _INDIRECT_MAX_RANGE:
+                if _INDIRECT_MIN_RANGE <= dist_to_target <= _INDIRECT_MAX_RANGE:
                     targets.append(entry)
 
             if not targets:
@@ -862,12 +873,15 @@ class WargameEngine:
                     continue
                 proximity = 1.0 - dist / air.radius
                 cover     = terrain.cover_factor(u.x, u.y) * 0.5
-                damage    = (
+                raw_damage = (
                     air.damage_rate
                     * proximity
                     * (1.0 - cover)
                     * dt_h
                 ) * random.uniform(0.7, 1.3)
+                # 직격 시 최소 30% 피해 보장: duration 전체 동안 누적 시 proximity 비례 30% 이상
+                min_damage = 30.0 * proximity * (1.0 - cover * 0.5) * (dt / air.duration)
+                damage = max(raw_damage, min_damage)
                 u.combat_power = max(0.0, u.combat_power - damage)
                 if damage >= 3.0:
                     self.db.log_event(
