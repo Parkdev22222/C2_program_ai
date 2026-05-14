@@ -655,7 +655,8 @@ def wargame_request_attack_plan(history: List = None):
     attack_suffix = (
         f"\n\n[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
-        f"{learned_suffix_atk}"
+        f"{learned_suffix_atk}\n\n"
+        f"[필수] 임무계획 JSON 생성 후 반드시 apply_wargame_mission_plan(plan_json=..., dry_run=False)을 호출하여 워게임에 즉시 적용하라."
     )
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
@@ -667,17 +668,28 @@ def wargame_request_attack_plan(history: List = None):
                 raw = agent.agent.run(full_query, reset=False)
                 plan = _wg_planner._parse_json(str(raw))
                 if not (plan and "mission_plans" in plan):
-                    # agent가 JSON 파싱 실패 → rule-based fallback 적용
+                    # agent JSON 파싱 실패 → rule-based fallback
                     plan = _wg_planner._rule_based(state)
+                else:
+                    # agent가 JSON 생성 성공 → UI에서 엔진에 직접 적용
+                    # (agent가 apply_wargame_mission_plan tool을 호출했을 수도 있지만
+                    #  호출하지 않은 경우를 대비해 UI에서 항상 적용 보장)
+                    try:
+                        eng.apply_mission_plan(plan)
+                        if plan.get("air_support_plans"):
+                            eng.apply_air_support_plan(plan)
+                    except Exception as _ae:
+                        logger.warning(f"apply attack plan error: {_ae}")
+            except Exception:
+                plan = _wg_planner._rule_based(state)
+            # fallback plan 적용
+            if plan and not plan.get("_applied"):
+                try:
                     eng.apply_mission_plan(plan)
                     if plan.get("air_support_plans"):
                         eng.apply_air_support_plan(plan)
-                # agent가 JSON 생성 성공 → tool이 이미 엔진에 적용함
-            except Exception:
-                plan = _wg_planner._rule_based(state)
-                eng.apply_mission_plan(plan)
-                if plan.get("air_support_plans"):
-                    eng.apply_air_support_plan(plan)
+                except Exception as _ae:
+                    logger.warning(f"apply fallback plan error: {_ae}")
         else:
             plan = _wg_planner._rule_based(state)
             eng.apply_mission_plan(plan)
