@@ -2,7 +2,7 @@
 code_agent:
   executor_type: "local"
   max_steps: 30
-  planning_interval: 5
+  planning_interval: null   # 비활성화: 에러 후 전체 재계획으로 인한 워크플로 재시작 방지
   stream_outputs: false
   authorized_imports:
     - "json"
