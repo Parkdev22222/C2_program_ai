@@ -535,6 +535,26 @@ def wargame_set_timescale(scale: float):
 
 
 def wargame_request_recon_plan(history: List = None):
+    """
+    정찰 임무계획 수립 — 에이전트 툴 활용 순서
+    ─────────────────────────────────────────────
+    Step 1. assess_recon_need()
+            └─ OPFOR 탐지 현황(detected / approximate / lost) 확인
+               → 정찰 불필요 시 즉시 반환
+    Step 2. recommend_recon_routes()
+            └─ 정찰부대(unit_type=정찰) 경로 생성
+               → apply_json, summary, mission_plans 반환
+    Step 3. recon_advisor_tool(recon_routes_json=..., recon_summary=...)   [선택]
+            └─ EXAONE Deep 전술 검토 — 경로 개선 의견 수신
+    Step 4. 최종 정찰 임무계획 JSON 직접 생성
+            └─ Step 2·3 결과 종합 / unit_type=정찰 부대만 포함
+    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+            └─ 워게임 엔진에 즉시 적용 (dry_run=True 사용 금지)
+    Step 6. 응답에 최종 JSON 블록 출력
+    ─────────────────────────────────────────────
+    금지: validate/approve 툴 호출, 공격부대(Alpha/Bravo/Charlie/Echo) 임무 부여,
+          정찰+공격 임무 동시 생성
+    """
     global _wg_last_plan
     history = list(history or [])
     eng = _wg_ensure_engine()
@@ -600,8 +620,21 @@ def wargame_request_recon_plan(history: List = None):
     # └─────────────────────────────────────────────────────────────────┘
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
-        f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n"
-        f"assess_recon_need 및 recommend_recon_routes 도구를 사용하여 정찰 임무를 계획하라.\n\n"
+        f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n\n"
+        f"[툴 활용 순서 — 반드시 이 순서대로 호출]\n"
+        f"1. assess_recon_need()\n"
+        f"   → OPFOR 탐지 현황(detected/approximate/lost) 및 정찰 필요 여부 확인\n"
+        f"   → 탐지 상실(lost) 또는 개략위치(approximate) OPFOR 식별\n"
+        f"2. recommend_recon_routes()\n"
+        f"   → 정찰부대(unit_type=정찰) 기준 교전 회피 경로 자동 생성\n"
+        f"   → 반환값: apply_json(적용용 JSON), summary(경로 요약), mission_plans\n"
+        f"3. recon_advisor_tool(recon_routes_json=<apply_json>, recon_summary=<summary>)  [선택]\n"
+        f"   → EXAONE Deep에게 경로 전술 검토 요청 → 개선 의견 수신\n"
+        f"4. 최종 정찰 임무계획 JSON 생성\n"
+        f"   → Step 2 경로 + Step 3 조언 종합, unit_type=정찰 부대만 포함\n"
+        f"5. apply_wargame_mission_plan(plan_json=<최종JSON>, dry_run=False)\n"
+        f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
+        f"6. 응답에 최종 임무계획 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
@@ -670,6 +703,27 @@ def wargame_request_recon_plan(history: List = None):
 
 
 def wargame_request_attack_plan(history: List = None):
+    """
+    공격 임무계획 수립 — 에이전트 툴 활용 순서
+    ─────────────────────────────────────────────
+    Step 1. get_wargame_situation()
+            └─ 현재 전장 상황(부대 위치·전투력·행동) 조회
+    Step 2. assess_recon_need()
+            └─ OPFOR 탐지 현황 확인 → detected / approximate / lost 분류
+               → detected 목표만 공격 대상, approximate/lost는 제외
+    Step 3. get_optimal_attack_positions()                              [선택]
+            └─ 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천
+    Step 4. 임무계획 JSON 생성
+            └─ detected OPFOR만 목표 지정
+               공중지원(air_support_plans)도 detected 위치에만 할당
+               CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
+    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+            └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
+    Step 6. 응답에 최종 JSON 블록 출력
+    ─────────────────────────────────────────────
+    금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
+          정찰부대(Delta) 공격 임무 부여
+    """
     global _wg_last_plan
     history = list(history or [])
     eng = _wg_ensure_engine()
@@ -709,10 +763,23 @@ def wargame_request_attack_plan(history: List = None):
     learned_suffix_atk = f"\n\n[학습된 규칙]\n{learned_rules_atk}" if learned_rules_atk else ""
     base_query = build_mission_query(state)
     attack_suffix = (
-        f"\n\n[ATTACK 규칙]\n{attack_rules}\n\n"
+        f"\n\n[툴 활용 순서 — 반드시 이 순서대로 호출]\n"
+        f"1. get_wargame_situation()\n"
+        f"   → 현재 BLUFOR·OPFOR 부대 위치, 전투력, 행동 조회\n"
+        f"2. assess_recon_need()\n"
+        f"   → OPFOR 탐지 현황 확인 (detected / approximate / lost)\n"
+        f"   → detected 부대만 공격 목표, approximate/lost는 공격 제외\n"
+        f"3. get_optimal_attack_positions()  [선택]\n"
+        f"   → 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천\n"
+        f"4. 임무계획 JSON 생성\n"
+        f"   → detected OPFOR만 목표 / 공중지원도 detected 위치에만\n"
+        f"   → CP<30% 부대는 defend 또는 withdraw 지정\n"
+        f"5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)\n"
+        f"   → 워게임 엔진 즉시 적용 (dry_run=True 절대 금지)\n"
+        f"6. 응답에 최종 임무계획 JSON 블록 출력\n\n"
+        f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
-        f"{learned_suffix_atk}\n\n"
-        f"[필수] 임무계획 JSON 생성 후 반드시 apply_wargame_mission_plan(plan_json=..., dry_run=False)을 호출하여 워게임에 즉시 적용하라."
+        f"{learned_suffix_atk}"
     )
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
