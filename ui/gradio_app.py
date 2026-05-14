@@ -1072,7 +1072,7 @@ def create_app(agent=None) -> gr.Blocks:
                         gr.Markdown("### 부대 전력 현황")
                         wg_status = gr.Textbox(label="", lines=5, interactive=False, elem_id="wg_status")
                     with gr.Column(scale=2):
-                        wg_plan_box = gr.Code(language="json", lines=8, interactive=False, label="LLM 생성 임무계획 (JSON)")
+                        wg_plan_box = gr.Textbox(label="LLM 생성 임무계획 (JSON)", lines=8, interactive=False, value="")
                     with gr.Column(scale=2):
                         wg_event_log = gr.Textbox(label="전투 이벤트 로그", lines=8, interactive=False)
                 wg_timer = gr.Timer(value=2)
