@@ -711,15 +711,22 @@ def wargame_request_attack_plan(history: List = None):
     Step 2. assess_recon_need()
             └─ OPFOR 탐지 현황 확인 → detected / approximate / lost 분류
                → detected 목표만 공격 대상, approximate/lost는 제외
-    Step 3. get_optimal_attack_positions()                              [선택]
+    Step 3. get_optimal_attack_positions()
             └─ 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천
-    Step 4. 임무계획 JSON 생성
-            └─ detected OPFOR만 목표 지정
-               공중지원(air_support_plans)도 detected 위치에만 할당
+               → 결과를 변수에 저장 (Step 4 additional_context로 전달)
+    Step 4. strategy_advisor_tool(
+              query="공격 임무계획 전술 검토 요청",
+              additional_context=<Step 3 결과>
+            )
+            └─ EXAONE Deep이 공격 위치 결과를 검토하여 전술 조언 제공
+               → 조언을 변수에 저장 (Step 5 JSON 생성에 반영)
+    Step 5. 최종 임무계획 JSON 생성
+            └─ Step 3 공격 위치 + Step 4 EXAONE Deep 조언 종합
+               detected OPFOR만 목표 / 공중지원도 detected 위치에만
                CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
-    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+    Step 6. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
-    Step 6. 응답에 최종 JSON 블록 출력
+    Step 7. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
           정찰부대(Delta) 공격 임무 부여
@@ -769,14 +776,22 @@ def wargame_request_attack_plan(history: List = None):
         f"2. assess_recon_need()\n"
         f"   → OPFOR 탐지 현황 확인 (detected / approximate / lost)\n"
         f"   → detected 부대만 공격 목표, approximate/lost는 공격 제외\n"
-        f"3. get_optimal_attack_positions()  [선택]\n"
+        f"3. get_optimal_attack_positions()\n"
         f"   → 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천\n"
-        f"4. 임무계획 JSON 생성\n"
+        f"   → 반환값을 attack_positions_result 변수에 저장\n"
+        f"4. strategy_advisor_tool(\n"
+        f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 공중지원 배치, 우선순위를 조언해주세요.\",\n"
+        f"     additional_context=attack_positions_result\n"
+        f"   )\n"
+        f"   → EXAONE Deep이 공격 위치 결과를 검토하여 전술 조언 제공\n"
+        f"   → 반환값을 deep_advice 변수에 저장\n"
+        f"5. 최종 임무계획 JSON 생성\n"
+        f"   → attack_positions_result + deep_advice 종합하여 결정\n"
         f"   → detected OPFOR만 목표 / 공중지원도 detected 위치에만\n"
         f"   → CP<30% 부대는 defend 또는 withdraw 지정\n"
-        f"5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)\n"
+        f"6. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)\n"
         f"   → 워게임 엔진 즉시 적용 (dry_run=True 절대 금지)\n"
-        f"6. 응답에 최종 임무계획 JSON 블록 출력\n\n"
+        f"7. 응답에 최종 임무계획 JSON 블록 출력\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"

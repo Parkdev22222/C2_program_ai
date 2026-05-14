@@ -112,10 +112,12 @@ def build_mission_query(state: dict) -> str:
     에이전트 툴 활용 순서:
       1. get_wargame_situation()         → 부대 위치·전투력·행동 조회
       2. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
-      3. get_optimal_attack_positions()  → 최적 공격 위치 추천 [선택]
-      4. 임무계획 JSON 생성              → detected OPFOR만 목표, CP<30% → defend
-      5. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      6. 응답에 JSON 블록 출력
+      3. get_optimal_attack_positions()  → 최적 공격 위치·기동 방향 추천
+      4. strategy_advisor_tool(query=..., additional_context=<3번 결과>)
+                                         → EXAONE Deep이 공격 위치 결과 검토·조언
+      5. 최종 임무계획 JSON 생성         → 3번+4번 종합, detected OPFOR만 목표
+      6. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      7. 응답에 JSON 블록 출력
 
     ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """

@@ -104,11 +104,23 @@ print(result)
 ### 공격 임무 (ATTACK)
 
 ```
-1단계: 탐지된 OPFOR 기준으로 임무계획 JSON 생성
+1단계: get_wargame_situation() → 현재 부대 위치·전투력·행동 조회
+2단계: assess_recon_need() → OPFOR 탐지 현황 확인
+       - detected 목표만 공격 대상, approximate/lost 제외
+3단계: get_optimal_attack_positions() → 탐지 OPFOR 기준 최적 공격 위치 추천
+       - 반환값을 attack_positions_result 변수에 저장
+4단계: strategy_advisor_tool(
+         query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 공중지원 배치, 우선순위를 조언해주세요.",
+         additional_context=attack_positions_result
+       )
+       - EXAONE Deep이 공격 위치 결과를 검토하여 전술 조언 제공
+       - 반환값을 deep_advice 변수에 저장
+5단계: 최종 임무계획 JSON 생성
+       - attack_positions_result + deep_advice 종합하여 결정
        - det_status='detected'인 OPFOR에만 공중지원(air_support_plans) 할당
        - det_status='approximate' 또는 'lost'인 OPFOR은 공중지원 목표 제외
-2단계: apply_wargame_mission_plan(plan_json=final_json, dry_run=False) → 즉시 워게임 적용
-3단계: 응답에 임무계획 JSON 블록 출력
+6단계: apply_wargame_mission_plan(plan_json=final_json, dry_run=False) → 즉시 워게임 적용
+7단계: 응답에 임무계획 JSON 블록 출력
 ```
 
 ## 중요 규칙
