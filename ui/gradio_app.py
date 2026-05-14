@@ -776,6 +776,8 @@ def wargame_request_attack_plan(history: List = None):
         f"2. assess_recon_need()\n"
         f"   → OPFOR 탐지 현황 확인 (detected / approximate / lost)\n"
         f"   → detected 부대만 공격 목표, approximate/lost는 공격 제외\n"
+        f"   ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 절대 호출 금지\n"
+        f"   ⚠️ 이 두 툴은 정찰 임무 전용이며 공격 임무 중 호출하면 안 됨\n"
         f"3. get_optimal_attack_positions()\n"
         f"   → 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천\n"
         f"   → 반환값을 attack_positions_result 변수에 저장\n"
