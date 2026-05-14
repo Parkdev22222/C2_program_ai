@@ -485,9 +485,6 @@ def wargame_request_recon_plan(history: List = None):
         return history, "", fig, status, log_text, ""
     agent = _get_agent()
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
-    state = eng.get_state()
-    recon_units_info = "\n".join(f"  - {u['id']} ({u['unit_type']}): 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%" for u in state["units"] if u["side"] == "BLUFOR" and u.get("unit_type") == "정찰" and u["status"] == "active") or "  없음"
-    undetected_info = "\n".join(f"  - {t['unit_id']}: {t['status']} 추정위치=({t['known_x_km']}km, {t['known_y_km']}km)" for t in assessment.get("undetected_targets", [])) or "  없음"
     try:
         from agent.battlefield_agent import get_instruction_section
         recon_rules = get_instruction_section("RECON")
@@ -498,9 +495,8 @@ def wargame_request_recon_plan(history: List = None):
     learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
-        f"현재 상황: {assessment.get('reason', '')}\n\n"
-        f"미탐지 OPFOR 목표:\n{undetected_info}\n\n"
-        f"사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n"
+        f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n"
+        f"assess_recon_need 및 recommend_recon_routes 도구를 사용하여 정찰 임무를 계획하라.\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
