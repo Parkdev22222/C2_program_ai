@@ -422,6 +422,16 @@ def wargame_refresh():
     return fig, status, log_text
 
 
+def wargame_on_load():
+    """페이지 새로고침 시 엔진 상태를 읽어 버튼 레이블·맵·상태를 복원."""
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", ""
+    btn_label = "⏸ 일시정지" if eng.running else "▶ 시뮬레이션 시작"
+    fig, status, log_text = wargame_refresh()
+    return btn_label, fig, status, log_text
+
+
 def wargame_start_pause():
     eng = _wg_ensure_engine()
     if eng is None:
@@ -1129,7 +1139,7 @@ def create_app(agent=None) -> gr.Blocks:
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])
             wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
-            app.load(fn=wargame_refresh, outputs=_WG_OUTPUTS)
+            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
         harness_start_btn.click(
             fn=harness_start_training,
             inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
