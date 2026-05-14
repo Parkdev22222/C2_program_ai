@@ -8,11 +8,20 @@ from smolagents import tool
 logger = logging.getLogger(__name__)
 
 _wargame_engine = None
+# UI 버튼이 임무계획 수립을 위해 시뮬레이션을 정지한 경우 True.
+# apply_wargame_mission_plan(dry_run=False) 성공 시 자동으로 재개한다.
+_resume_on_apply: bool = False
 
 
 def register_wargame_engine(engine):
     global _wargame_engine
     _wargame_engine = engine
+
+
+def set_resume_on_apply(flag: bool) -> None:
+    """UI 버튼 핸들러가 시뮬레이션을 일시정지했을 때 True로 설정."""
+    global _resume_on_apply
+    _resume_on_apply = flag
 
 
 @tool
@@ -102,6 +111,13 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             clear_pending_plan()
         except Exception:
             pass
+
+        # 임무계획 버튼이 시뮬레이션을 정지한 경우 여기서 재개
+        global _resume_on_apply
+        if _resume_on_apply and not _wargame_engine.running:
+            _wargame_engine.start()
+            _resume_on_apply = False
+            logger.info("시뮬레이션 재개 — apply_wargame_mission_plan 적용 완료")
 
         applied = len(mission_plans) - len(skipped)
         logger.info(f"임무계획 적용: {applied}개 부대, 건너뚁: {skipped}")

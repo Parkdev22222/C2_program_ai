@@ -641,65 +641,88 @@ def wargame_request_recon_plan(history: List = None):
     )
     logger.debug("recon_query:\n%s", recon_query)
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
+
+    # ── 시뮬레이션 일시정지 ──────────────────────────────────────────
+    was_running = eng.running
+    if was_running:
+        eng.stop()
+        logger.info("시뮬레이션 일시정지 — 정찰 임무계획 수립 중")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(True)  # apply_wargame_mission_plan 호출 시 자동 재개
+        except Exception:
+            pass
+
     import json as _json, re as _re
     agent_response_text = ""
     applied_plan = None
-    if agent is not None:
-        try:
-            agent_response_text = str(agent.run(recon_query, reset=False))
-        except Exception as e:
-            logger.error(f"Recon agent error: {e}", exc_info=True)
-            agent_response_text = f"에이전트 오류: {e}"
-        json_blocks = _re.findall(r"```json\s*(.*?)\s*```", agent_response_text, _re.DOTALL)
-        for block in reversed(json_blocks):
+    try:
+        if agent is not None:
             try:
-                parsed = _json.loads(block)
-                if "mission_plans" in parsed:
-                    applied_plan = parsed  # 표시용 — 적용은 agent가 tool로 처리
-                    break
-            except _json.JSONDecodeError:
-                pass
-        if applied_plan is None:
-            logger.warning("Agent response has no parseable mission plan JSON; applying via fallback")
+                agent_response_text = str(agent.run(recon_query, reset=False))
+            except Exception as e:
+                logger.error(f"Recon agent error: {e}", exc_info=True)
+                agent_response_text = f"에이전트 오류: {e}"
+            json_blocks = _re.findall(r"```json\s*(.*?)\s*```", agent_response_text, _re.DOTALL)
+            for block in reversed(json_blocks):
+                try:
+                    parsed = _json.loads(block)
+                    if "mission_plans" in parsed:
+                        applied_plan = parsed  # 표시용 — 적용은 agent가 tool로 처리
+                        break
+                except _json.JSONDecodeError:
+                    pass
+            if applied_plan is None:
+                logger.warning("Agent response has no parseable mission plan JSON; applying via fallback")
+                recon_result = recommend_recon_routes()
+                if recon_result.get("status") == "success":
+                    plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
+                    eng.apply_mission_plan(plan_dict)
+                    applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
+                elif recon_result.get("status") == "no_recon_units":
+                    msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
+                    history[-1] = (history[-1][0], msg)
+                    fig, status, log_text = wargame_refresh()
+                    return history, "", fig, status, log_text, ""
+        else:
+            agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
             recon_result = recommend_recon_routes()
+            if recon_result.get("status") == "no_recon_units":
+                msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
+                history[-1] = (history[-1][0], msg)
+                fig, status, log_text = wargame_refresh()
+                return history, "", fig, status, log_text, ""
             if recon_result.get("status") == "success":
                 plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
                 eng.apply_mission_plan(plan_dict)
                 applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
-            elif recon_result.get("status") == "no_recon_units":
-                msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-                history[-1] = (history[-1][0], msg)
-                fig, status, log_text = wargame_refresh()
-                return history, "", fig, status, log_text, ""
-    else:
-        agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
-        recon_result = recommend_recon_routes()
-        if recon_result.get("status") == "no_recon_units":
-            msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
-            history[-1] = (history[-1][0], msg)
+        if applied_plan is None:
+            history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
             fig, status, log_text = wargame_refresh()
             return history, "", fig, status, log_text, ""
-        if recon_result.get("status") == "success":
-            plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
-            eng.apply_mission_plan(plan_dict)
-            applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
-    if applied_plan is None:
-        history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
+        _wg_last_plan = applied_plan
+        plans = applied_plan.get("mission_plans", [])
+        plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
+        unit_lines = "\n".join(f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)" for p in plans)
+        deep_review = ""
+        review_match = _re.search(r"### 정찰 임무계획 검토 의견\\s*(.*?)(?=###|\\Z)", agent_response_text, _re.DOTALL)
+        if review_match:
+            deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
+        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
+        history[-1] = (history[-1][0], result_msg)
+        _save_ui_state(wg_history=history, plan_box=plan_text)
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
-    _wg_last_plan = applied_plan
-    plans = applied_plan.get("mission_plans", [])
-    plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
-    unit_lines = "\n".join(f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)" for p in plans)
-    deep_review = ""
-    review_match = _re.search(r"### 정찰 임무계획 검토 의견\\s*(.*?)(?=###|\\Z)", agent_response_text, _re.DOTALL)
-    if review_match:
-        deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
-    result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
-    history[-1] = (history[-1][0], result_msg)
-    _save_ui_state(wg_history=history, plan_box=plan_text)
-    fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+        return history, plan_text, fig, status, log_text
+    finally:
+        # 에이전트가 apply_wargame_mission_plan을 호출하지 않은 경우 안전망
+        if was_running and not eng.running:
+            eng.start()
+            logger.info("시뮬레이션 재개 (finally 안전망) — 정찰 임무계획 함수 종료")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(False)
+        except Exception:
+            pass
 
 
 def wargame_request_attack_plan(history: List = None):
@@ -801,72 +824,86 @@ def wargame_request_attack_plan(history: List = None):
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
     history.append((header_msg, "처리 중..."))
-    plan = _wg_planner.plan(state, agent=agent) if agent is None else None
-    if plan is None:
-        if agent is not None:
-            try:
-                raw = agent.agent.run(full_query, reset=False)
-                plan = _wg_planner._parse_json(str(raw))
-                if not (plan and "mission_plans" in plan):
-                    # agent JSON 파싱 실패 → rule-based fallback
+
+    # ── 시뮬레이션 일시정지 ──────────────────────────────────────────
+    was_running = eng.running
+    if was_running:
+        eng.stop()
+        logger.info("시뮬레이션 일시정지 — 공격 임무계획 수립 중")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(True)  # apply_wargame_mission_plan 호출 시 자동 재개
+        except Exception:
+            pass
+
+    try:
+        plan = _wg_planner.plan(state, agent=agent) if agent is None else None
+        if plan is None:
+            if agent is not None:
+                try:
+                    raw = agent.agent.run(full_query, reset=False)
+                    plan = _wg_planner._parse_json(str(raw))
+                    if not (plan and "mission_plans" in plan):
+                        # agent JSON 파싱 실패 → rule-based fallback
+                        plan = _wg_planner._rule_based(state)
+                    else:
+                        # agent가 JSON 생성 성공 → UI에서 엔진에 직접 적용
+                        # (agent가 apply_wargame_mission_plan tool을 호출했을 수도 있지만
+                        #  호출하지 않은 경우를 대비해 UI에서 항상 적용 보장)
+                        try:
+                            eng.apply_mission_plan(plan)
+                            if plan.get("air_support_plans"):
+                                eng.apply_air_support_plan(plan)
+                        except Exception as _ae:
+                            logger.warning(f"apply attack plan error: {_ae}")
+                except Exception:
                     plan = _wg_planner._rule_based(state)
-                else:
-                    # agent가 JSON 생성 성공 → UI에서 엔진에 직접 적용
-                    # (agent가 apply_wargame_mission_plan tool을 호출했을 수도 있지만
-                    #  호출하지 않은 경우를 대비해 UI에서 항상 적용 보장)
+                # fallback plan 적용
+                if plan and not plan.get("_applied"):
                     try:
                         eng.apply_mission_plan(plan)
                         if plan.get("air_support_plans"):
                             eng.apply_air_support_plan(plan)
                     except Exception as _ae:
-                        logger.warning(f"apply attack plan error: {_ae}")
-            except Exception:
+                        logger.warning(f"apply fallback plan error: {_ae}")
+            else:
                 plan = _wg_planner._rule_based(state)
-            # fallback plan 적용
-            if plan and not plan.get("_applied"):
-                try:
-                    eng.apply_mission_plan(plan)
-                    if plan.get("air_support_plans"):
-                        eng.apply_air_support_plan(plan)
-                except Exception as _ae:
-                    logger.warning(f"apply fallback plan error: {_ae}")
+                eng.apply_mission_plan(plan)
+                if plan.get("air_support_plans"):
+                    eng.apply_air_support_plan(plan)
         else:
-            plan = _wg_planner._rule_based(state)
+            # agent is None 경로 — planner가 직접 계획
             eng.apply_mission_plan(plan)
             if plan.get("air_support_plans"):
                 eng.apply_air_support_plan(plan)
-    else:
-        # agent is None 경로 — planner가 직접 계획
-        eng.apply_mission_plan(plan)
-        if plan.get("air_support_plans"):
-            eng.apply_air_support_plan(plan)
-    _wg_last_plan = plan
-    plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
-    reasoning = plan.get("reasoning", "")
-    n_plans = len(plan.get("mission_plans", []))
-    n_air = len(plan.get("air_support_plans", []))
-    result_msg = f"**⚔️ 공격 임무계획 생성 완료** ({agent_label})\n\n"
-    if warning_msg:
-        result_msg += warning_msg + "\n\n"
-    if reasoning:
-        result_msg += f"**판단 근거:** {reasoning}\n\n"
-    result_msg += f"**지상 임무:** {n_plans}개 중대"
-    if n_air:
-        result_msg += f"  |  **공중지원:** {n_air}건"
-    result_msg += f"\n\n```json\n{plan_text}\n```"
-    history[-1] = (history[-1][0], result_msg)
-    mission_summary = "\n".join(
-        f"• **{p['company_id']}** → {p.get('mission_type', '')} / {p.get('objective', '')}"
-        for p in plan.get("mission_plans", [])
-    )
-    air_summary = (
-        f"\n**공중지원 {n_air}건 등록됨**\n" +
-        "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
-        if n_air else ""
-    )
-    _save_ui_state(wg_history=history, plan_box=plan_text)
-    fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+        _wg_last_plan = plan
+        plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
+        reasoning = plan.get("reasoning", "")
+        n_plans = len(plan.get("mission_plans", []))
+        n_air = len(plan.get("air_support_plans", []))
+        result_msg = f"**⚔️ 공격 임무계획 생성 완료** ({agent_label})\n\n"
+        if warning_msg:
+            result_msg += warning_msg + "\n\n"
+        if reasoning:
+            result_msg += f"**판단 근거:** {reasoning}\n\n"
+        result_msg += f"**지상 임무:** {n_plans}개 중대"
+        if n_air:
+            result_msg += f"  |  **공중지원:** {n_air}건"
+        result_msg += f"\n\n```json\n{plan_text}\n```"
+        history[-1] = (history[-1][0], result_msg)
+        _save_ui_state(wg_history=history, plan_box=plan_text)
+        fig, status, log_text = wargame_refresh()
+        return history, plan_text, fig, status, log_text
+    finally:
+        # 에이전트가 apply_wargame_mission_plan을 호출하지 않은 경우 안전망
+        if was_running and not eng.running:
+            eng.start()
+            logger.info("시뮬레이션 재개 (finally 안전망) — 공격 임무계획 함수 종료")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(False)
+        except Exception:
+            pass
 
 
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
