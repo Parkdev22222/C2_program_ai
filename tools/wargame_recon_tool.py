@@ -230,11 +230,12 @@ def assess_recon_need() -> dict:
         approx    = [e for e in intel if e["status"] == "approximate"]
         lost_list = [e for e in intel if e["status"] == "lost"]
 
+        # degraded(전투력 저하)도 정찰 임무 수행 가능 — suppressed·destroyed만 제외
         recon_units = [
             u for u in all_units
             if u["side"] == "BLUFOR"
             and u.get("unit_type") == "정찰"
-            and u["status"] == "active"
+            and u["status"] not in ("suppressed", "destroyed")
         ]
 
         recon_needed = bool(approx or lost_list)
@@ -278,6 +279,7 @@ def assess_recon_need() -> dict:
             "available_recon_units": [
                 {
                     "unit_id":          u["id"],
+                    "status":           u["status"],
                     "x_km":             round(u["x"] / 1000, 2),
                     "y_km":             round(u["y"] / 1000, 2),
                     "combat_power_pct": round(u["combat_power"], 1),
@@ -336,16 +338,17 @@ def recommend_recon_routes() -> dict:
                 "summary": "모든 OPFOR 위치가 탐지됨. 정찰 불필요.",
             }
 
+        # degraded(전투력 저하)도 정찰 임무 수행 가능 — suppressed·destroyed만 제외
         recon_units = [
             u for u in all_units
             if u["side"] == "BLUFOR"
             and u.get("unit_type") == "정찰"
-            and u["status"] == "active"
+            and u["status"] not in ("suppressed", "destroyed")
         ]
         if not recon_units:
             return {
                 "status":  "no_recon_units",
-                "message": "사용 가능한 BLUFOR 정찰부대가 없습니다.",
+                "message": "사용 가능한 BLUFOR 정찰부대가 없습니다. (전멸 또는 전원 제압 상태)",
                 "mission_plans": [],
                 "apply_json": json.dumps({"mission_plans": []}, ensure_ascii=False),
                 "summary": "사용 가능한 BLUFOR 정찰부대가 없습니다.",
@@ -397,10 +400,15 @@ def recommend_recon_routes() -> dict:
         }
         apply_json = json.dumps(apply_payload, ensure_ascii=False)
 
+        # 배정된 부대별 상태 맵
+        ru_status = {ru["id"]: ru["status"] for ru in recon_units}
+
         summary_lines = [f"정찰 임무계획: {len(assignments)}개 부대 파견"]
         for a in assignments:
+            st = ru_status.get(a["company_id"], "active")
+            st_note = " [전투력 저하]" if st == "degraded" else ""
             summary_lines.append(
-                f"  {a['company_id']} → {a['objective']} "
+                f"  {a['company_id']}{st_note} → {a['objective']} "
                 f"({len(a['waypoints'])}개 경유지)"
             )
 
