@@ -123,26 +123,55 @@ def _build_current_recon_context() -> dict:
         return {}
 
 
-def _build_recon_waypoints(
-    start_x: float, start_y: float,
+def _nn_order(start_x: float, start_y: float, targets: list) -> list:
+    """Nearest-neighbor로 목표 방문 순서 최적화."""
+    remaining = list(targets)
+    ordered = []
+    cx, cy = start_x, start_y
+    while remaining:
+        nearest = min(remaining, key=lambda t: math.hypot(t["known_x"] - cx, t["known_y"] - cy))
+        ordered.append(nearest)
+        cx, cy = nearest["known_x"], nearest["known_y"]
+        remaining.remove(nearest)
+    return ordered
+
+
+def _obs_point_for_target(
+    from_x: float, from_y: float,
     target_x: float, target_y: float,
+    ctx: dict,
+) -> List[float]:
+    """
+    직전 위치(from)→목표 방향 기준 최적 관측 포인트 1개 반환.
+    - 목표 후방(180°) 또는 측방(±60°) 중 점수 최고 지점 선택
+    """
+    bearing = math.atan2(target_y - from_y, target_x - from_x)
+    best_score, best_pt = -1.0, None
+    for angle_offset in (math.pi, math.pi * 2 / 3, -math.pi * 2 / 3):
+        obs_angle = bearing + angle_offset
+        pt = _best_obs_point(target_x, target_y, obs_angle, _RECON_STANDOFF, ctx)
+        elev  = _elevation(pt[0], pt[1])
+        cover = _cover(pt[0], pt[1])
+        score = elev * 0.6 + cover * 200 * 0.4
+        if score > best_score:
+            best_score = score
+            best_pt = pt
+    return best_pt
+
+
+def _build_combined_recon_waypoints(
+    ru_x: float, ru_y: float,
+    targets: list,
 ) -> List[List[float]]:
     """
-    교전 회피 정찰 경로 생성.
+    모든 목표를 하나의 경로로 순회하는 통합 정찰 경로 생성.
 
     전략:
-    1. 직선 접근 대신 60도 측방 우회 경유지 삽입
-    2. 목표 주변 120도 간격 3개 관측 포인트 (standoff 유지)
-    3. 관측 완료 후 출발지 방향 안전 복귀점
+    1. Nearest-neighbor로 목표 방문 순서 최적화
+    2. 첫 목표 진입 전 60도 측방 우회 경유지 1개
+    3. 각 목표마다 최적 관측 포인트 1개 (후방/측방 중 best)
+    4. 모든 목표 순회 후 출발지 방향 안전 복귀점
     """
-    dx = target_x - start_x
-    dy = target_y - start_y
-    dist = math.hypot(dx, dy) or 1.0
-    bearing = math.atan2(dy, dx)  # 진행 방향각
-
-    wps = []
-
-    # ── 0. 전술 메모리 + 현재 상황 컨텍스트 로드 ─────────────────
     try:
         from wargame.harness.tactical_memory import get_tactical_memory
         _tm = get_tactical_memory()
@@ -151,35 +180,36 @@ def _build_recon_waypoints(
 
     _ctx = _build_current_recon_context()
 
-    # ── 1. 측방 우회 경유지 (전술 메모리 기반 최적 측방 선택) ──────
-    flank_dist = min(dist * 0.45, 5_000)
-    best_flank_score = -1.0
-    fx, fy = start_x, start_y
-    for flank_offset in (math.pi / 3, -math.pi / 3):
-        fa = bearing + flank_offset
-        _fx = _clamp(start_x + math.cos(fa) * flank_dist, _BORDER, _MAP_W - _BORDER)
-        _fy = _clamp(start_y + math.sin(fa) * flank_dist, _BORDER, _MAP_H - _BORDER)
-        elev_f  = _elevation(_fx, _fy)
-        cover_f = _cover(_fx, _fy)
-        fscore = elev_f * 0.5 + cover_f * 200 * 0.5
-        if _tm is not None:
-            fscore = _tm.apply_penalties(_fx, _fy, fscore, _ctx)
-        if fscore > best_flank_score:
-            best_flank_score = fscore
+    ordered = _nn_order(ru_x, ru_y, targets)
+    wps = []
+
+    # ── 1. 첫 목표 방향 측방 우회 경유지 ─────────────────────────
+    first_tx, first_ty = ordered[0]["known_x"], ordered[0]["known_y"]
+    bearing0 = math.atan2(first_ty - ru_y, first_tx - ru_x)
+    flank_dist = min(math.hypot(first_tx - ru_x, first_ty - ru_y) * 0.4, 5_000)
+    best_flank_score, fx, fy = -1.0, ru_x, ru_y
+    for offset in (math.pi / 3, -math.pi / 3):
+        fa = bearing0 + offset
+        _fx = _clamp(ru_x + math.cos(fa) * flank_dist, _BORDER, _MAP_W - _BORDER)
+        _fy = _clamp(ru_y + math.sin(fa) * flank_dist, _BORDER, _MAP_H - _BORDER)
+        score = _elevation(_fx, _fy) * 0.5 + _cover(_fx, _fy) * 200 * 0.5
+        if _tm:
+            score = _tm.apply_penalties(_fx, _fy, score, _ctx)
+        if score > best_flank_score:
+            best_flank_score = score
             fx, fy = _fx, _fy
     wps.append([round(fx), round(fy)])
 
-    # ── 2. 3개 관측 포인트 (목표 후방 → 측방 → 전방 순) ────────
-    start_obs_angle = bearing + math.pi
-    for i in range(3):
-        obs_angle = start_obs_angle + i * (2 * math.pi / 3)
-        pt = _best_obs_point(target_x, target_y, obs_angle, _RECON_STANDOFF, _ctx)
+    # ── 2. 각 목표별 관측 포인트 1개씩 ──────────────────────────
+    prev_x, prev_y = ru_x, ru_y
+    for t in ordered:
+        pt = _obs_point_for_target(prev_x, prev_y, t["known_x"], t["known_y"], _ctx)
         wps.append([round(pt[0]), round(pt[1])])
+        prev_x, prev_y = t["known_x"], t["known_y"]
 
-    # ── 3. 안전 복귀점 ─────────────────────────────────────────
-    # 출발지와 목표 사이 20% 지점으로 후퇴
-    ret_x = _clamp(start_x + dx * 0.2, _BORDER, _MAP_W - _BORDER)
-    ret_y = _clamp(start_y + dy * 0.2, _BORDER, _MAP_H - _BORDER)
+    # ── 3. 안전 복귀점 (출발지 방향 20% 지점) ────────────────────
+    ret_x = _clamp(ru_x + (first_tx - ru_x) * 0.2, _BORDER, _MAP_W - _BORDER)
+    ret_y = _clamp(ru_y + (first_ty - ru_y) * 0.2, _BORDER, _MAP_H - _BORDER)
     wps.append([round(ret_x), round(ret_y)])
 
     return wps
@@ -354,61 +384,52 @@ def recommend_recon_routes() -> dict:
                 "summary": "사용 가능한 BLUFOR 정찰부대가 없습니다.",
             }
 
-        # ── 정찰부대-목표 매칭 (거리 최소 우선) ──────────────────
+        # ── 정찰부대별 통합 경로 생성 ─────────────────────────────
+        # 정찰부대 1개당 모든 미탐지 목표를 순회하는 경로 1개 생성.
+        # 정찰부대가 여러 개일 경우 목표를 분배 후 각각 통합 경로 생성.
         assignments = []
-        used_recon  = set()
 
-        for target in targets:
-            tx, ty = target["known_x"], target["known_y"]
+        # 정찰부대별 목표 분배 (부대 수만큼 균등 분할)
+        n_ru = len(recon_units)
+        chunks: List[list] = [[] for _ in range(n_ru)]
+        for i, t in enumerate(targets):
+            chunks[i % n_ru].append(t)
 
-            # 가장 가까운 미사용 정찰부대 선택
-            best_ru   = None
-            best_dist = float("inf")
-            for ru in recon_units:
-                if ru["id"] in used_recon:
-                    continue
-                d = math.hypot(ru["x"] - tx, ru["y"] - ty)
-                if d < best_dist:
-                    best_dist = d
-                    best_ru   = ru
-
-            # 정찰부대 부족 시 전투력 최고 부대 재사용
-            if best_ru is None:
-                best_ru = max(recon_units, key=lambda u: u["combat_power"])
-            else:
-                used_recon.add(best_ru["id"])
-
-            wps = _build_recon_waypoints(best_ru["x"], best_ru["y"], tx, ty)
-
-            status_ko = {"approximate": "개략위치", "lost": "탐지상실"}.get(
-                target["status"], target["status"]
-            )
+        for ru, chunk in zip(recon_units, chunks):
+            if not chunk:
+                continue
+            wps = _build_combined_recon_waypoints(ru["x"], ru["y"], chunk)
+            target_ids = ", ".join(t["unit_id"] for t in chunk)
             assignments.append({
-                "company_id":     best_ru["id"],
+                "company_id":     ru["id"],
                 "mission_type":   "recon",
                 "waypoints":      wps,
-                "objective":      f"{target['unit_id']} 위치 정밀확인 ({status_ko})",
-                "target_unit_id": target["unit_id"],
+                "objective":      f"OPFOR 위치 정밀확인: {target_ids}",
+                "target_unit_ids": [t["unit_id"] for t in chunk],
             })
 
-        # apply_wargame_mission_plan 호환 JSON (target_unit_id 제외)
+        # apply_wargame_mission_plan 호환 JSON (내부 메타 필드 제외)
+        _exclude = {"target_unit_id", "target_unit_ids"}
         apply_payload = {
             "mission_plans": [
-                {k: v for k, v in a.items() if k != "target_unit_id"}
+                {k: v for k, v in a.items() if k not in _exclude}
                 for a in assignments
             ]
         }
         apply_json = json.dumps(apply_payload, ensure_ascii=False)
 
-        # 배정된 부대별 상태 맵
         ru_status = {ru["id"]: ru["status"] for ru in recon_units}
 
-        summary_lines = [f"정찰 임무계획: {len(assignments)}개 부대 파견"]
+        summary_lines = [
+            f"정찰 임무계획: {len(assignments)}개 부대, "
+            f"목표 {len(targets)}개 통합 경로"
+        ]
         for a in assignments:
             st = ru_status.get(a["company_id"], "active")
             st_note = " [전투력 저하]" if st == "degraded" else ""
+            tids = ", ".join(a.get("target_unit_ids", []))
             summary_lines.append(
-                f"  {a['company_id']}{st_note} → {a['objective']} "
+                f"  {a['company_id']}{st_note} → {tids} "
                 f"({len(a['waypoints'])}개 경유지)"
             )
 
