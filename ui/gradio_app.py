@@ -493,6 +493,35 @@ def wargame_request_recon_plan(history: List = None):
     except Exception:
         recon_rules = execution_rules = learned_rules = ""
     learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+    # ── 정찰 임무 쿼리 ────────────────────────────────────────────
+    # 전장 상황(부대 위치·전투력·인텔)은 쿼리에 직접 포함하지 않는다.
+    # 에이전트가 아래 tool을 순서대로 호출하여 직접 조회한다:
+    #   1) assess_recon_need()        → OPFOR 탐지 현황 및 정찰 필요 여부
+    #   2) recommend_recon_routes()   → 교전 회피 정찰 경로 + apply_json
+    #   3) recon_advisor_tool(...)    → EXAONE Deep 전술 검토
+    #   4) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
+    #
+    # [생성 예시]
+    # ┌─────────────────────────────────────────────────────────────────┐
+    # │ [정찰 임무계획 수립]                                             │
+    # │                                                                  │
+    # │ 현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를   │
+    # │ 호출하여 조회하라.                                               │
+    # │ assess_recon_need 및 recommend_recon_routes 도구를 사용하여      │
+    # │ 정찰 임무를 계획하라.                                            │
+    # │                                                                  │
+    # │ [RECON 규칙]                                                     │
+    # │ - unit_type이 '정찰'인 부대에만 임무 부여 (Delta 부대)           │
+    # │ - 공격부대(Alpha, Bravo, Charlie, Echo)는 정찰 임무 금지         │
+    # │ - 정찰 임무계획과 공격 임무계획을 동시에 생성 금지               │
+    # │ - 금지 툴: validate_mission_plan_tool, approve_mission_plan_tool │
+    # │                                                                  │
+    # │ [EXECUTION 규칙]                                                 │
+    # │ - apply_wargame_mission_plan 호출 시 항상 dry_run=False 사용     │
+    # │ - 별도 승인 절차 없이 dry_run=False로 직접 호출                  │
+    # │                                                                  │
+    # │ (학습된 규칙 있을 경우 [학습된 규칙] 섹션 추가됨)               │
+    # └─────────────────────────────────────────────────────────────────┘
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
         f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n"
@@ -501,6 +530,7 @@ def wargame_request_recon_plan(history: List = None):
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
     )
+    logger.debug("recon_query:\n%s", recon_query)
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
     import json as _json, re as _re
     agent_response_text = ""
