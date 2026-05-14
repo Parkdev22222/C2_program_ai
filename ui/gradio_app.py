@@ -458,7 +458,7 @@ def wargame_reset_sim():
         _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
     fig, status, log_text = wargame_refresh()
-    return "▶ 시뮬레이션 시작", fig, status, log_text, ""
+    return "▶ 시뮬레이션 시작", fig, status, log_text
 
 
 def wargame_set_timescale(scale: float):
@@ -598,19 +598,8 @@ def wargame_request_recon_plan(history: List = None):
         deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
     result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
     history[-1] = (history[-1][0], result_msg)
-    unit_summary = "\n".join(f"• **{p['company_id']}** → {p.get('objective', '')}" for p in plans)
-    alert_md = (
-        f"---\n"
-        f"### 🔔 승인 요구 알람 — 정찰 임무계획 적용됨\n\n"
-        f"| 항목 | 내용 |\n|---|---|\n"
-        f"| 계획 ID | `{applied_plan.get('plan_id', 'N/A')}` |\n"
-        f"| 파견 부대 수 | {len(plans)}개 |\n"
-        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
-        f"**파견 부대:**\n{unit_summary}\n\n"
-        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
-    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text, alert_md
+    return history, plan_text, fig, status, log_text
 
 
 def wargame_request_attack_plan(history: List = None):
@@ -724,18 +713,8 @@ def wargame_request_attack_plan(history: List = None):
         "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
         if n_air else ""
     )
-    alert_md = (
-        f"---\n"
-        f"### 🔔 승인 요구 알람 — 공격 임무계획 적용됨\n\n"
-        f"| 항목 | 내용 |\n|---|---|\n"
-        f"| 지상 임무 | {n_plans}개 중대 |\n"
-        f"| 공중지원 | {n_air}건 |\n"
-        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
-        f"**임무 배분:**\n{mission_summary}{air_summary}\n\n"
-        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
-    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text, alert_md
+    return history, plan_text, fig, status, log_text
 
 
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
@@ -1073,7 +1052,6 @@ def create_app(agent=None) -> gr.Blocks:
                     with gr.Column(scale=3):
                         wg_map = gr.Plot(label="전장 지도", show_label=False)
                     with gr.Column(scale=2):
-                        wg_alert_md = gr.Markdown("", visible=True)
                         gr.Markdown("### 전술 AI 채팅")
                         wg_chatbot = gr.Chatbot(label="", height=220, show_copy_button=True, bubble_full_width=False)
                         with gr.Row():
@@ -1142,10 +1120,10 @@ def create_app(agent=None) -> gr.Blocks:
         if _WARGAME_OK:
             _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
             wg_startstop_btn.click(fn=wargame_start_pause, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
-            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
             wg_apply_scale_btn.click(fn=wargame_set_timescale, inputs=[wg_timescale], outputs=_WG_OUTPUTS)
-            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
-            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
+            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
             wg_eval_btn.click(fn=wargame_evaluate_and_learn, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
