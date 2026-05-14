@@ -47,6 +47,7 @@ _wg_engine: Optional["WargameEngine"] = None
 _wg_planner: Optional["MissionPlanner"] = None
 _wg_last_plan: dict = {}
 _wg_last_opfor_ai_count: int = 0
+_harness_controller = None
 
 
 def _get_agent():
@@ -421,6 +422,16 @@ def wargame_refresh():
     return fig, status, log_text
 
 
+def wargame_on_load():
+    """페이지 새로고침 시 엔진 상태를 읽어 버튼 레이블·맵·상태를 복원."""
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", ""
+    btn_label = "⏸ 일시정지" if eng.running else "▶ 시뮬레이션 시작"
+    fig, status, log_text = wargame_refresh()
+    return btn_label, fig, status, log_text
+
+
 def wargame_start_pause():
     eng = _wg_ensure_engine()
     if eng is None:
@@ -447,7 +458,7 @@ def wargame_reset_sim():
         _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
     fig, status, log_text = wargame_refresh()
-    return "▶ 시뮬레이션 시작", fig, status, log_text
+    return "▶ 시뮬레이션 시작", fig, status, log_text, ""
 
 
 def wargame_set_timescale(scale: float):
@@ -464,30 +475,72 @@ def wargame_request_recon_plan(history: List = None):
     if eng is None:
         history.append(("🔍 정찰 임무계획 요청", "워게임 초기화 실패"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     try:
         from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
     except ImportError as e:
         history.append(("🔍 정찰 임무계획 요청", f"정찰 도구 로드 실패: {e}"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     assessment = assess_recon_need()
     opfor_sum = assessment.get("opfor_summary", {})
     if assessment.get("recommendation") == "공격 즉시 가능":
         msg = (f"**✅ 모든 OPFOR 위치가 이미 탐지되어 정찰이 불필요합니다.**\n\n탐지된 적군: {opfor_sum.get('detected', 0)}개\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하여 공격을 시작하세요.")
         history.append(("🔍 정찰 임무계획 요청", msg))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     if assessment.get("recommendation") == "적 없음":
         history.append(("🔍 정찰 임무계획 요청", "탐지된 적군이 없습니다."))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     agent = _get_agent()
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
-    state = eng.get_state()
-    recon_units_info = "\n".join(f"  - {u['id']} ({u['unit_type']}): 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km) CP={u['combat_power']:.0f}%" for u in state["units"] if u["side"] == "BLUFOR" and u.get("unit_type") == "정찰" and u["status"] == "active") or "  없음"
-    undetected_info = "\n".join(f"  - {t['unit_id']}: {t['status']} 추정위치=({t['known_x_km']}km, {t['known_y_km']}km)" for t in assessment.get("undetected_targets", [])) or "  없음"
-    recon_query = (f"[정찰 임무계획 수립]\n\n현재 상황: {assessment.get('reason', '')}\n\n미탐지 OPFOR 목표:\n{undetected_info}\n\n사용 가능한 정찰부대 (unit_type='정찰'):\n{recon_units_info}\n\n반드시 다음 5단계 순서대로 수행하세요:\n1. assess_recon_need() 호출\n2. recommend_recon_routes() 호출\n3. recon_advisor_tool(recon_routes_json=apply_json, recon_summary=summary) 호출\n4. 초기 경로와 EXAONE Deep 콘실트를 종합하여 EXAONE4가 최종 JSON 직접 생성\n5. 응답에 최종 정찰 임무계획 JSON 블록 반드시 출력 (실제 적용은 UI가 자동 처리)\n\n[CRITICAL] unit_type이 '정찰'인 부대에만 임무를 부여하세요. 공격부대(Alpha, Bravo, Charlie, Echo)는 포함하지 마세요.")
+    try:
+        from agent.battlefield_agent import get_instruction_section
+        recon_rules = get_instruction_section("RECON")
+        execution_rules = get_instruction_section("EXECUTION")
+        learned_rules = get_instruction_section("LEARNED_RULES")
+    except Exception:
+        recon_rules = execution_rules = learned_rules = ""
+    learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+    # ── 정찰 임무 쿼리 ────────────────────────────────────────────
+    # 전장 상황(부대 위치·전투력·인텔)은 쿼리에 직접 포함하지 않는다.
+    # 에이전트가 아래 tool을 순서대로 호출하여 직접 조회한다:
+    #   1) assess_recon_need()        → OPFOR 탐지 현황 및 정찰 필요 여부
+    #   2) recommend_recon_routes()   → 교전 회피 정찰 경로 + apply_json
+    #   3) recon_advisor_tool(...)    → EXAONE Deep 전술 검토
+    #   4) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
+    #
+    # [생성 예시]
+    # ┌─────────────────────────────────────────────────────────────────┐
+    # │ [정찰 임무계획 수립]                                             │
+    # │                                                                  │
+    # │ 현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를   │
+    # │ 호출하여 조회하라.                                               │
+    # │ assess_recon_need 및 recommend_recon_routes 도구를 사용하여      │
+    # │ 정찰 임무를 계획하라.                                            │
+    # │                                                                  │
+    # │ [RECON 규칙]                                                     │
+    # │ - unit_type이 '정찰'인 부대에만 임무 부여 (Delta 부대)           │
+    # │ - 공격부대(Alpha, Bravo, Charlie, Echo)는 정찰 임무 금지         │
+    # │ - 정찰 임무계획과 공격 임무계획을 동시에 생성 금지               │
+    # │ - 금지 툴: validate_mission_plan_tool, approve_mission_plan_tool │
+    # │                                                                  │
+    # │ [EXECUTION 규칙]                                                 │
+    # │ - apply_wargame_mission_plan 호출 시 항상 dry_run=False 사용     │
+    # │ - 별도 승인 절차 없이 dry_run=False로 직접 호출                  │
+    # │                                                                  │
+    # │ (학습된 규칙 있을 경우 [학습된 규칙] 섹션 추가됨)               │
+    # └─────────────────────────────────────────────────────────────────┘
+    recon_query = (
+        f"[정찰 임무계획 수립]\n\n"
+        f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n"
+        f"assess_recon_need 및 recommend_recon_routes 도구를 사용하여 정찰 임무를 계획하라.\n\n"
+        f"[RECON 규칙]\n{recon_rules}\n\n"
+        f"[EXECUTION 규칙]\n{execution_rules}"
+        f"{learned_suffix}"
+    )
+    logger.debug("recon_query:\n%s", recon_query)
     history.append((f"🔍 **정찰 임무계획 생성 요청** ({agent_label})", "처리 중..."))
     import json as _json, re as _re
     agent_response_text = ""
@@ -503,12 +556,7 @@ def wargame_request_recon_plan(history: List = None):
             try:
                 parsed = _json.loads(block)
                 if "mission_plans" in parsed:
-                    applied_plan = parsed
-                    # UI 버튼 클릭 = 사용자 승인 → 엔진에 직접 적용
-                    try:
-                        eng.apply_mission_plan(applied_plan)
-                    except Exception as _e:
-                        logger.warning(f"Failed to apply parsed recon plan to engine: {_e}")
+                    applied_plan = parsed  # 표시용 — 적용은 agent가 tool로 처리
                     break
             except _json.JSONDecodeError:
                 pass
@@ -523,7 +571,7 @@ def wargame_request_recon_plan(history: List = None):
                 msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
                 history[-1] = (history[-1][0], msg)
                 fig, status, log_text = wargame_refresh()
-                return history, "", fig, status, log_text
+                return history, "", fig, status, log_text, ""
     else:
         agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
         recon_result = recommend_recon_routes()
@@ -531,7 +579,7 @@ def wargame_request_recon_plan(history: List = None):
             msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
             history[-1] = (history[-1][0], msg)
             fig, status, log_text = wargame_refresh()
-            return history, "", fig, status, log_text
+            return history, "", fig, status, log_text, ""
         if recon_result.get("status") == "success":
             plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
             eng.apply_mission_plan(plan_dict)
@@ -539,7 +587,7 @@ def wargame_request_recon_plan(history: List = None):
     if applied_plan is None:
         history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     _wg_last_plan = applied_plan
     plans = applied_plan.get("mission_plans", [])
     plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
@@ -550,8 +598,19 @@ def wargame_request_recon_plan(history: List = None):
         deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
     result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
     history[-1] = (history[-1][0], result_msg)
+    unit_summary = "\n".join(f"• **{p['company_id']}** → {p.get('objective', '')}" for p in plans)
+    alert_md = (
+        f"---\n"
+        f"### 🔔 승인 요구 알람 — 정찰 임무계획 적용됨\n\n"
+        f"| 항목 | 내용 |\n|---|---|\n"
+        f"| 계획 ID | `{applied_plan.get('plan_id', 'N/A')}` |\n"
+        f"| 파견 부대 수 | {len(plans)}개 |\n"
+        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
+        f"**파견 부대:**\n{unit_summary}\n\n"
+        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
+    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+    return history, plan_text, fig, status, log_text, alert_md
 
 
 def wargame_request_attack_plan(history: List = None):
@@ -561,11 +620,11 @@ def wargame_request_attack_plan(history: List = None):
     if eng is None:
         history.append(("⚔️ 공격 임무계획 요청", "워게임 초기화 실패"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     if _wg_planner is None:
         history.append(("⚔️ 공격 임무계획 요청", "Planner 없음"))
         fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text
+        return history, "", fig, status, log_text, ""
     warning_msg = ""
     try:
         from tools.wargame_recon_tool import assess_recon_need
@@ -584,8 +643,20 @@ def wargame_request_attack_plan(history: List = None):
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
     import json
     from wargame.llm_planner import build_mission_query
+    try:
+        from agent.battlefield_agent import get_instruction_section
+        attack_rules = get_instruction_section("ATTACK")
+        execution_rules_atk = get_instruction_section("EXECUTION")
+        learned_rules_atk = get_instruction_section("LEARNED_RULES")
+    except Exception:
+        attack_rules = execution_rules_atk = learned_rules_atk = ""
+    learned_suffix_atk = f"\n\n[학습된 규칙]\n{learned_rules_atk}" if learned_rules_atk else ""
     base_query = build_mission_query(state)
-    attack_suffix = ("\n\n[공격 임무계획 지시]\n- 탐지 상태가 'detected'인 OPFOR만 공격 목표로 설정하라.\n- 정찰부대(unit_type=정찰, Delta)는 측방 경계 또는 탐지 미확인 방향 감시 임무를 부여하라.\n- 기계화보병·전차·대전차 부대에게 탐지된 적 격멸 임무를 부여하라.\n- 자주포가 있으면 탐지된 적 위치에 포격 지원 임무를 부여하라.\n- 미탐지 적군 방향으로 공격부대를 돌출시키지 마라.\n\n[절대 금지] assess_recon_need(), recommend_recon_routes(), recon_advisor_tool(), strategy_advisor_tool() 등 정찰·전략 도구는 절대 호출하지 마라.\n위 JSON 형식으로만 즉시 응답하라.")
+    attack_suffix = (
+        f"\n\n[ATTACK 규칙]\n{attack_rules}\n\n"
+        f"[EXECUTION 규칙]\n{execution_rules_atk}"
+        f"{learned_suffix_atk}"
+    )
     full_query = base_query + attack_suffix
     header_msg = f"⚔️ **공격 임무계획 생성 요청** ({agent_label}){warning_msg}"
     history.append((header_msg, "처리 중..."))
@@ -596,15 +667,28 @@ def wargame_request_attack_plan(history: List = None):
                 raw = agent.agent.run(full_query, reset=False)
                 plan = _wg_planner._parse_json(str(raw))
                 if not (plan and "mission_plans" in plan):
+                    # agent가 JSON 파싱 실패 → rule-based fallback 적용
                     plan = _wg_planner._rule_based(state)
+                    eng.apply_mission_plan(plan)
+                    if plan.get("air_support_plans"):
+                        eng.apply_air_support_plan(plan)
+                # agent가 JSON 생성 성공 → tool이 이미 엔진에 적용함
             except Exception:
                 plan = _wg_planner._rule_based(state)
+                eng.apply_mission_plan(plan)
+                if plan.get("air_support_plans"):
+                    eng.apply_air_support_plan(plan)
         else:
             plan = _wg_planner._rule_based(state)
+            eng.apply_mission_plan(plan)
+            if plan.get("air_support_plans"):
+                eng.apply_air_support_plan(plan)
+    else:
+        # agent is None 경로 — planner가 직접 계획
+        eng.apply_mission_plan(plan)
+        if plan.get("air_support_plans"):
+            eng.apply_air_support_plan(plan)
     _wg_last_plan = plan
-    eng.apply_mission_plan(plan)
-    if plan.get("air_support_plans"):
-        eng.apply_air_support_plan(plan)
     plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
     reasoning = plan.get("reasoning", "")
     n_plans = len(plan.get("mission_plans", []))
@@ -619,8 +703,27 @@ def wargame_request_attack_plan(history: List = None):
         result_msg += f"  |  **공중지원:** {n_air}건"
     result_msg += f"\n\n```json\n{plan_text}\n```"
     history[-1] = (history[-1][0], result_msg)
+    mission_summary = "\n".join(
+        f"• **{p['company_id']}** → {p.get('mission_type', '')} / {p.get('objective', '')}"
+        for p in plan.get("mission_plans", [])
+    )
+    air_summary = (
+        f"\n**공중지원 {n_air}건 등록됨**\n" +
+        "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
+        if n_air else ""
+    )
+    alert_md = (
+        f"---\n"
+        f"### 🔔 승인 요구 알람 — 공격 임무계획 적용됨\n\n"
+        f"| 항목 | 내용 |\n|---|---|\n"
+        f"| 지상 임무 | {n_plans}개 중대 |\n"
+        f"| 공중지원 | {n_air}건 |\n"
+        f"| 승인 방식 | 버튼 클릭 = 사용자 승인 ✅ |\n\n"
+        f"**임무 배분:**\n{mission_summary}{air_summary}\n\n"
+        f"> ℹ️ 임무계획이 워게임 엔진에 즉시 적용되었습니다. 초기화하려면 **⏹ 초기화** 버튼을 사용하세요.\n\n---"
+    )
     fig, status, log_text = wargame_refresh()
-    return history, plan_text, fig, status, log_text
+    return history, plan_text, fig, status, log_text, alert_md
 
 
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
@@ -644,6 +747,69 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
+    return history, ""
+
+
+def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
+    """워게임 현재 상태를 평가하고 학습된 규칙을 agent_custom_instructions.txt에 추가합니다."""
+    history = list(history or [])
+    eng = _wg_ensure_engine()
+    agent = _get_agent()
+    if eng is None:
+        history.append(("🧠 전술 평가", "워게임 엔진 없음"))
+        return history, ""
+    state = eng.get_state()
+    try:
+        from agent.battlefield_agent import append_learned_rule
+    except ImportError:
+        history.append(("🧠 전술 평가", "battlefield_agent 로드 실패"))
+        return history, ""
+    blufor = [u for u in state["units"] if u["side"] == "BLUFOR"]
+    opfor  = [u for u in state["units"] if u["side"] == "OPFOR"]
+    bf_alive = [u for u in blufor if u["status"] == "active"]
+    op_alive = [u for u in opfor  if u["status"] == "active"]
+    winner = state.get("winner")
+    last_plan = _wg_last_plan or {}
+    summary_lines = [
+        f"[워게임 평가 요청]",
+        f"게임시간: {state['game_time_str']} | 승자: {winner or '미결'}",
+        f"BLUFOR 생존: {len(bf_alive)}/{len(blufor)} | OPFOR 생존: {len(op_alive)}/{len(opfor)}",
+        f"마지막 임무계획 부대 수: {len(last_plan.get('mission_plans', []))}",
+        "",
+        "위 워게임 결과를 분석하여 다음을 수행하세요:",
+        "1. 이번 전투에서 효과적이었던 전술 패턴 1~3가지를 간결한 규칙 문장으로 작성",
+        "2. 개선이 필요한 전술 패턴 1~2가지를 규칙 문장으로 작성",
+        "3. 각 규칙을 '- <규칙 내용>' 형식으로 줄별로 출력 (JSON 불필요)",
+        "4. 규칙은 다음 워게임에서 바로 적용 가능한 구체적 내용으로 작성",
+    ]
+    eval_query = "\n".join(summary_lines)
+    if agent is not None:
+        try:
+            response = agent.run(eval_query, reset=False)
+            response_text = str(response)
+        except Exception as e:
+            response_text = f"에이전트 평가 오류: {e}"
+    else:
+        response_text = (
+            f"[규칙 기반 평가]\n"
+            f"- BLUFOR 생존율: {len(bf_alive)/max(len(blufor),1)*100:.0f}%\n"
+            f"- OPFOR 잔존: {len(op_alive)}개 부대\n"
+            + ("- 승리: 현재 전술 패턴 유지 권장" if winner == "BLUFOR"
+               else "- 패배 또는 미결: 정찰 강화 및 공격 분산 권장")
+        )
+    learned_count = 0
+    for line in response_text.splitlines():
+        line = line.strip()
+        if line.startswith("- ") and len(line) > 5:
+            rule_text = line[2:].strip()
+            if rule_text:
+                append_learned_rule(rule_text)
+                learned_count += 1
+    result_msg = (
+        f"**🧠 전술 평가 완료** — {learned_count}개 규칙이 `agent_custom_instructions.txt`에 추가됨\n\n"
+        f"{response_text}"
+    )
+    history.append(("🧠 전술 평가 & 규칙 학습", result_msg))
     return history, ""
 
 
@@ -684,6 +850,159 @@ def get_situation_memory_status() -> str:
         return "상황 분석 메모리가 비어 있습니다. 먼저 영상 분석을 수행하세요."
     except Exception as e:
         return f"메모리 상태 조회 오류: {e}"
+
+
+def _init_harness_controller():
+    """하네스 컨트롤러를 초기화합니다."""
+    global _harness_controller
+    if not _WARGAME_OK:
+        return None
+    try:
+        from wargame.harness import HarnessController
+        from wargame import WargameEngine, setup_bn_vs_bn
+        from wargame.llm_planner import MissionPlanner
+
+        def _engine_factory():
+            units = setup_bn_vs_bn()
+            eng = WargameEngine(units)
+            _wg_register_engine(eng)
+            return eng
+
+        agent = _get_agent()
+        planner = _wg_planner
+        _harness_controller = HarnessController(
+            engine_factory=_engine_factory,
+            agent=agent,
+            planner=planner,
+        )
+        logger.info("HarnessController initialized")
+        return _harness_controller
+    except Exception as e:
+        logger.warning(f"Failed to init HarnessController: {e}")
+        return None
+
+
+def harness_start_training(n_episodes: int, replan_interval: int, history: list):
+    """하네스 학습을 시작합니다."""
+    global _harness_controller
+    history = list(history or [])
+
+    ctrl = _harness_controller or _init_harness_controller()
+    if ctrl is None:
+        history.append(("🔬 하네스 학습", "HarnessController 초기화 실패"))
+        return history, "초기화 실패", ""
+
+    if ctrl._running:
+        return history, "이미 실행 중", ""
+
+    history.append(("🔬 하네스 학습 시작", f"{n_episodes}개 에피소드 학습 시작..."))
+
+    def _progress_cb(current, total, metrics):
+        pass  # 폴링 방식으로 UI 업데이트
+
+    ctrl.start_training(
+        n_episodes=int(n_episodes),
+        replan_interval_ticks=int(replan_interval),
+        on_progress=_progress_cb,
+    )
+    return history, f"학습 시작: {n_episodes}개 에피소드", ""
+
+
+def harness_get_status():
+    """하네스 학습 진행 상황을 반환합니다."""
+    global _harness_controller
+    ctrl = _harness_controller
+    if ctrl is None:
+        return "하네스 미초기화", "", ""
+
+    progress = ctrl.get_progress()
+    stats = ctrl.get_db_stats()
+
+    current = progress.get("current", 0)
+    total = progress.get("total", 0)
+    status = progress.get("status", "idle")
+    last = progress.get("last_metrics") or {}
+
+    status_text = {
+        "idle": "대기 중",
+        "running": f"실행 중 ({current}/{total})",
+        "done": f"완료 ({total}개 에피소드)",
+        "stopped": f"중지됨 ({current}/{total})",
+    }.get(status, status)
+
+    if last:
+        last_result = (
+            f"**최근 에피소드:** {last.get('winner','?')} 승리 | "
+            f"생존율 {last.get('blufor_survival_rate',0):.0%} | "
+            f"교환비 {last.get('combat_efficiency',0):.1f}"
+        )
+    else:
+        last_result = "에피소드 없음"
+
+    stats_text = (
+        f"총 에피소드: {stats.get('total_episodes',0)} | "
+        f"승률: {stats.get('win_rate',0):.0%} | "
+        f"활성 규칙: {stats.get('active_rules',0)}개"
+    )
+
+    return status_text, last_result, stats_text
+
+
+def harness_stop_training(history: list):
+    global _harness_controller
+    history = list(history or [])
+    ctrl = _harness_controller
+    if ctrl and ctrl._running:
+        ctrl.stop_training()
+        history.append(("🔬 하네스", "학습 중지 요청"))
+    return history
+
+
+def harness_get_rules():
+    """현재 활성 규칙을 마크다운으로 반환합니다."""
+    global _harness_controller
+    ctrl = _harness_controller
+    if ctrl is None:
+        try:
+            from agent.battlefield_agent import get_instruction_section
+            learned = get_instruction_section("LEARNED_RULES")
+            recon = get_instruction_section("RECON")
+            attack = get_instruction_section("ATTACK")
+        except Exception:
+            return "하네스 미초기화"
+    else:
+        rules = ctrl.get_active_rules()
+        learned_list = rules.get("LEARNED_RULES", [])
+        recon_list = rules.get("RECON", [])
+        attack_list = rules.get("ATTACK", [])
+        learned = "\n".join(f"- {r['text']} *(신뢰도 {r['confidence']:.2f}, {r['win_count']}승/{r['loss_count']}패)*" for r in learned_list)
+        recon = "\n".join(f"- {r['text']}" for r in recon_list)
+        attack = "\n".join(f"- {r['text']}" for r in attack_list)
+
+    parts = []
+    if recon:
+        parts.append(f"**[RECON]**\n{recon}")
+    if attack:
+        parts.append(f"**[ATTACK]**\n{attack}")
+    if learned:
+        parts.append(f"**[LEARNED_RULES]**\n{learned}")
+
+    # 전술 메모리 패널티 존 표시
+    try:
+        from wargame.harness.tactical_memory import get_tactical_memory
+        tm = get_tactical_memory()
+        zones = tm.get_penalty_zones()
+        if zones:
+            zone_lines = [
+                f"- **({z['x']/1000:.1f}km, {z['y']/1000:.1f}km)** r={z['radius']/1000:.1f}km "
+                f"패널티={z['penalty']:.2f} 피격={z.get('hit_count',1)}회: {z['reason'][:60]}"
+                for z in zones[:10]
+            ]
+            parts.append(f"**[⚠️ 패널티 존 ({len(zones)}개)]**\n" + "\n".join(zone_lines))
+    except Exception:
+        pass
+
+    return "\n\n".join(parts) if parts else "학습된 규칙 없음"
 
 
 def create_app(agent=None) -> gr.Blocks:
@@ -759,13 +1078,36 @@ def create_app(agent=None) -> gr.Blocks:
                         gr.Markdown("### 임무계획")
                         wg_recon_btn = gr.Button("🔍 정찰 임무계획", variant="secondary")
                         wg_attack_btn = gr.Button("⚔️ 공격 임무계획", variant="primary")
+                        wg_eval_btn = gr.Button("🧠 전술 평가 & 규칙 학습", variant="secondary", size="sm")
                         gr.Markdown("### 부대 전력 현황")
                         wg_status = gr.Textbox(label="", lines=5, interactive=False, elem_id="wg_status")
                     with gr.Column(scale=2):
-                        wg_plan_box = gr.Code(language="json", lines=8, interactive=False, label="LLM 생성 임무계획 (JSON)")
+                        wg_plan_box = gr.Textbox(label="LLM 생성 임무계획 (JSON)", lines=8, interactive=False, value="")
                     with gr.Column(scale=2):
                         wg_event_log = gr.Textbox(label="전투 이벤트 로그", lines=8, interactive=False)
                 wg_timer = gr.Timer(value=2)
+          with gr.Tab("🔬 하네스 학습"):
+            gr.Markdown("## 자율 전술 학습\n워게임을 반복 실행하여 전술 규칙을 자동으로 학습합니다.")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("### 학습 설정")
+                    harness_n_episodes = gr.Slider(minimum=1, maximum=100, value=10, step=1, label="에피소드 수")
+                    harness_replan_interval = gr.Slider(minimum=30, maximum=300, value=120, step=10, label="재계획 간격 (틱)")
+                    with gr.Row():
+                        harness_start_btn = gr.Button("▶ 학습 시작", variant="primary")
+                        harness_stop_btn = gr.Button("⏸ 중지", variant="secondary")
+                    gr.Markdown("### 현황")
+                    harness_status_text = gr.Textbox(label="상태", interactive=False, lines=1)
+                    harness_last_episode = gr.Textbox(label="최근 에피소드", interactive=False, lines=2)
+                    harness_stats_text = gr.Textbox(label="누적 통계", interactive=False, lines=1)
+                    harness_refresh_btn = gr.Button("🔄 새로고침", size="sm")
+                with gr.Column(scale=2):
+                    gr.Markdown("### 학습 로그")
+                    harness_chatbot = gr.Chatbot(label="", height=300, show_copy_button=True)
+                    gr.Markdown("### 현재 활성 규칙")
+                    harness_rules_md = gr.Markdown("규칙 로드 중...")
+                    harness_rules_refresh_btn = gr.Button("규칙 새로고침", size="sm")
+            harness_timer = gr.Timer(value=3)
           with gr.Tab("🗺️ 전장 지도"):
             gr.Markdown("ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다. relay.py 실행 중일 때 10초마다 자동 갱신됩니다.")
             with gr.Row():
@@ -788,15 +1130,26 @@ def create_app(agent=None) -> gr.Blocks:
         if _WARGAME_OK:
             _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
             wg_startstop_btn.click(fn=wargame_start_pause, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
-            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
+            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_alert_md])
             wg_apply_scale_btn.click(fn=wargame_set_timescale, inputs=[wg_timescale], outputs=_WG_OUTPUTS)
-            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
-            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
+            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log, wg_alert_md])
+            wg_eval_btn.click(fn=wargame_evaluate_and_learn, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_clear_btn.click(fn=lambda: ([], ""), outputs=[wg_chatbot, wg_chat_input])
             wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
-            app.load(fn=wargame_refresh, outputs=_WG_OUTPUTS)
+            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
+        harness_start_btn.click(
+            fn=harness_start_training,
+            inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
+            outputs=[harness_chatbot, harness_status_text, harness_last_episode]
+        )
+        harness_stop_btn.click(fn=harness_stop_training, inputs=[harness_chatbot], outputs=[harness_chatbot])
+        harness_refresh_btn.click(fn=harness_get_status, outputs=[harness_status_text, harness_last_episode, harness_stats_text])
+        harness_rules_refresh_btn.click(fn=harness_get_rules, outputs=[harness_rules_md])
+        harness_timer.tick(fn=harness_get_status, outputs=[harness_status_text, harness_last_episode, harness_stats_text])
+        app.load(fn=harness_get_rules, outputs=[harness_rules_md])
         map_refresh_btn.click(fn=get_battlefield_map, outputs=[map_plot, map_status])
         map_timer.tick(fn=get_battlefield_map, outputs=[map_plot, map_status])
         app.load(fn=get_battlefield_map, outputs=[map_plot, map_status])

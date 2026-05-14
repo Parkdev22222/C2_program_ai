@@ -66,9 +66,12 @@ def _score_attack_position(
     cx: float, cy: float,
     ox: float, oy: float,
     def_cover: float,
+    current_context: dict = None,
 ) -> Tuple[float, dict]:
     """
     후보 공격 위치 (cx,cy) 에서 적 (ox,oy) 를 공격할 때의 종합 점수를 계산.
+
+    current_context가 제공되면 전술 메모리 패널티를 상황에 맞게 조절합니다.
 
     Returns:
         (score, detail_dict)
@@ -105,13 +108,20 @@ def _score_attack_position(
     los_score = los
 
     # 가중 합산 (가중치 합 = 1.0)
-    score = (
+    raw_score = (
         elev_score          * 0.30
         + atk_cover_score   * 0.25
         + target_exposure_score * 0.20
         + ef_score          * 0.15
         + los_score         * 0.10
     ) * 100.0  # 0~100 스케일
+
+    # 전술 메모리 패널티/보너스 적용 (현재 교전 상황 컨텍스트 전달)
+    try:
+        from wargame.harness.tactical_memory import get_tactical_memory
+        score = get_tactical_memory().apply_penalties(cx, cy, raw_score, current_context)
+    except Exception:
+        score = raw_score
 
     detail = {
         "elevation_m":         round(atk_elev, 1),
@@ -120,6 +130,7 @@ def _score_attack_position(
         "elevation_advantage": round(elev_adv, 2),
         "engagement_factor":   round(ef, 2),
         "los_quality":         round(los, 2),
+        "tactical_penalty_applied": score != raw_score,
         "score_breakdown": {
             "elevation":        round(elev_score * 30, 1),
             "atk_cover":        round(atk_cover_score * 25, 1),
@@ -325,6 +336,32 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
             if u["side"] == "BLUFOR" and u["status"] != "destroyed"
         ]
 
+        # 현재 교전 상황 컨텍스트 빌드 (전술 메모리 패널티 유사도 계산에 사용)
+        opfor_units = [u for u in all_units if u["side"] == "OPFOR" and u["status"] != "destroyed"]
+        blufor_cp = sum(u.get("combat_power", 100) for u in blufor_active) / max(len(blufor_active), 1)
+        opfor_cp  = sum(u.get("combat_power", 100) for u in opfor_units) / max(len(opfor_units), 1)
+        opfor_positions = [
+            [float(u.get("x", 0)), float(u.get("y", 0))] for u in opfor_units
+        ]
+        # 적 위치 중심점 기준 지형 프로파일 샘플링
+        _terrain_ctx = {}
+        if opfor_positions:
+            try:
+                from wargame.harness.tactical_memory import sample_terrain_profile
+                cx_op = sum(p[0] for p in opfor_positions) / len(opfor_positions)
+                cy_op = sum(p[1] for p in opfor_positions) / len(opfor_positions)
+                _terrain_ctx = sample_terrain_profile(cx_op, cy_op, radius=3000.0)
+            except Exception:
+                pass
+        _current_context = {
+            "enemy_unit_types": list({u.get("unit_type", "unknown") for u in opfor_units}),
+            "enemy_count": len(opfor_units),
+            "enemy_positions": opfor_positions,
+            "friendly_unit_types": list({u.get("unit_type", "unknown") for u in blufor_active}),
+            "force_ratio": blufor_cp / max(opfor_cp, 0.01),
+            "terrain": _terrain_ctx,
+        }
+
         # ── 후보 위치 생성: 16방향 × 4거리 ─────────────────────────
         # 거리: 1.2km / 2.0km / 3.0km / 4.5km (근거리~원거리 포병)
         CANDIDATE_DISTANCES = [1_200, 2_000, 3_000, 4_500]
@@ -349,7 +386,7 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
                     cx = max(0.0, min(29_999.0, cx))
                     cy = max(0.0, min(29_999.0, cy))
 
-                    score, detail = _score_attack_position(cx, cy, ox, oy, target_cover)
+                    score, detail = _score_attack_position(cx, cy, ox, oy, target_cover, _current_context)
                     if score < 0:
                         continue
 

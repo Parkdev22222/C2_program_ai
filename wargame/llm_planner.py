@@ -108,47 +108,13 @@ def _sample_elevation_map(state: dict) -> str:
 def build_mission_query(state: dict) -> str:
     """
     BattlefieldAgent.run()에 전달할 전체 쿼리 문자열 생성.
-    구성: 시스템 지시 + 전장 현황 + 고도맵 + few-shot + 출력 요청
+    구성: 시스템 지시 + 지형고도맵 + few-shot + 출력 요청
+    ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
-    # ── 부대 현황 ──
-    unit_lines = []
-    for u in state.get("units", []):
-        if u["status"] == "destroyed":
-            status_str = "전투불능(×)"
-        elif u["status"] == "suppressed":
-            status_str = f"제압({u['combat_power']:.0f}%)"
-        else:
-            status_str = f"전투가능({u['combat_power']:.0f}%)"
-        unit_lines.append(
-            f"  [{u['side']}] {u['id']:6s}: 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)  "
-            f"고도={u.get('elevation', 0):.0f}m  {status_str}"
-        )
-
-    # ── 위협 분석 ──
-    blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
-    opfor  = [u for u in state["units"] if u["side"] == "OPFOR"  and u["status"] != "destroyed"]
-    if blufor and opfor:
-        bl_cx = sum(u["x"] for u in blufor) / len(blufor)
-        bl_cy = sum(u["y"] for u in blufor) / len(blufor)
-        op_cx = sum(u["x"] for u in opfor)  / len(opfor)
-        op_cy = sum(u["y"] for u in opfor)  / len(opfor)
-        dist  = ((bl_cx - op_cx)**2 + (bl_cy - op_cy)**2)**0.5
-        threat_line = (
-            f"BLUFOR 중심: ({bl_cx/1000:.1f}km, {bl_cy/1000:.1f}km)  "
-            f"OPFOR 중심: ({op_cx/1000:.1f}km, {op_cy/1000:.1f}km)  "
-            f"거리: {dist/1000:.1f}km"
-        )
-    else:
-        threat_line = "전투 종료 또는 전멸"
-
     elev_section = _sample_elevation_map(state)
-    winner = state.get("winner")
 
     query = f"""대대급 C2 AI: BLUFOR 임무계획을 JSON으로 출력하라.
-
-[전장상황] 게임시간:{state.get('game_time_str','00:00:00')} {"종료:"+winner+"승" if winner else ""}
-{chr(10).join(unit_lines)}
-위협:{threat_line}
+현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.
 
 [지형고도] 좌표(m),x=동쪽,y=북쪽,범위0~30000,고도우위±40%
 {elev_section}
