@@ -49,37 +49,62 @@ _wg_last_plan: dict = {}
 _wg_last_opfor_ai_count: int = 0
 _harness_controller = None
 
-# ── 채팅 기록 영속성 ────────────────────────────────────────────
+# ── UI 상태 영속성 ────────────────────────────────────────────
 import json as _json_mod
 
-_CHAT_HISTORY_FILE = CONFIG_DIR / "chat_history.json"
+_UI_STATE_FILE = CONFIG_DIR / "ui_state.json"
 
 
-def _save_chat_history(wg_history: list, main_history: list = None) -> None:
-    """채팅 기록을 파일에 저장."""
+def _save_ui_state(
+    wg_history: list = None,
+    main_history: list = None,
+    harness_history: list = None,
+    plan_box: str = None,
+    timescale: float = None,
+) -> None:
+    """UI 상태를 파일에 저장. None인 항목은 기존 값 유지."""
     try:
-        data = {
-            "wg_chat": wg_history or [],
-            "main_chat": main_history or [],
-        }
-        _CHAT_HISTORY_FILE.write_text(
+        data: dict = {}
+        if _UI_STATE_FILE.exists():
+            data = _json_mod.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
+        if wg_history is not None:
+            data["wg_chat"] = wg_history
+        if main_history is not None:
+            data["main_chat"] = main_history
+        if harness_history is not None:
+            data["harness_chat"] = harness_history
+        if plan_box is not None:
+            data["plan_box"] = plan_box
+        if timescale is not None:
+            data["timescale"] = timescale
+        _UI_STATE_FILE.write_text(
             _json_mod.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except Exception:
         pass
 
 
-def _load_chat_history() -> Tuple[list, list]:
-    """저장된 채팅 기록을 반환 (wg_chat, main_chat)."""
+def _load_ui_state() -> dict:
+    """저장된 UI 상태 반환."""
     try:
-        if _CHAT_HISTORY_FILE.exists():
-            data = _json_mod.loads(_CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
-            wg = [[m[0], m[1]] for m in data.get("wg_chat", []) if len(m) == 2]
-            main = [[m[0], m[1]] for m in data.get("main_chat", []) if len(m) == 2]
-            return wg, main
+        if _UI_STATE_FILE.exists():
+            return _json_mod.loads(_UI_STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
         pass
-    return [], []
+    return {}
+
+
+def _save_chat_history(wg_history: list, main_history: list = None) -> None:
+    """하위 호환용 래퍼."""
+    _save_ui_state(wg_history=wg_history, main_history=main_history)
+
+
+def _load_chat_history() -> Tuple[list, list]:
+    """하위 호환용 래퍼."""
+    d = _load_ui_state()
+    wg   = [[m[0], m[1]] for m in d.get("wg_chat", [])   if len(m) == 2]
+    main = [[m[0], m[1]] for m in d.get("main_chat", []) if len(m) == 2]
+    return wg, main
 
 
 def _get_agent():
@@ -220,6 +245,7 @@ def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[
     except Exception as e:
         logger.error(f"Agent run error: {e}", exc_info=True)
         history[-1] = (message, f"처리 중 오류가 발생했습니다: {e}")
+    _save_ui_state(main_history=history)
     return "", history
 
 
@@ -455,14 +481,20 @@ def wargame_refresh():
 
 
 def wargame_on_load():
-    """페이지 새로고침 시 엔진 상태를 읽어 버튼 레이블·맵·상태를 복원."""
+    """페이지 새로고침 시 엔진 상태를 읽어 전체 UI를 복원."""
     eng = _wg_ensure_engine()
+    state = _load_ui_state()
+    wg_history   = [[m[0], m[1]] for m in state.get("wg_chat", [])   if len(m) == 2]
+    plan_box     = state.get("plan_box", "")
+    saved_scale  = state.get("timescale", 60.0)
+
     if eng is None:
-        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", "", []
+        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", "", wg_history, plan_box, saved_scale
+    # 저장된 time_scale을 엔진에도 반영
+    eng.time_scale = float(saved_scale)
     btn_label = "⏸ 일시정지" if eng.running else "▶ 시뮬레이션 시작"
     fig, status, log_text = wargame_refresh()
-    wg_history, _ = _load_chat_history()
-    return btn_label, fig, status, log_text, wg_history
+    return btn_label, fig, status, log_text, wg_history, plan_box, saved_scale
 
 
 def wargame_start_pause():
@@ -498,6 +530,7 @@ def wargame_set_timescale(scale: float):
     eng = _wg_ensure_engine()
     if eng:
         eng.time_scale = float(scale)
+        _save_ui_state(timescale=float(scale))
     return wargame_refresh()
 
 
@@ -631,7 +664,7 @@ def wargame_request_recon_plan(history: List = None):
         deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
     result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
     history[-1] = (history[-1][0], result_msg)
-    _save_chat_history(history)
+    _save_ui_state(wg_history=history, plan_box=plan_text)
     fig, status, log_text = wargame_refresh()
     return history, plan_text, fig, status, log_text
 
@@ -747,7 +780,7 @@ def wargame_request_attack_plan(history: List = None):
         "\n".join(f"• {a.get('call_sign', '?')} ({a.get('support_type', '?')})" for a in plan.get("air_support_plans", []))
         if n_air else ""
     )
-    _save_chat_history(history)
+    _save_ui_state(wg_history=history, plan_box=plan_text)
     fig, status, log_text = wargame_refresh()
     return history, plan_text, fig, status, log_text
 
@@ -935,6 +968,7 @@ def harness_start_training(n_episodes: int, replan_interval: int, history: list)
         replan_interval_ticks=int(replan_interval),
         on_progress=_progress_cb,
     )
+    _save_ui_state(harness_history=history)
     return history, f"학습 시작: {n_episodes}개 에피소드", ""
 
 
@@ -985,6 +1019,7 @@ def harness_stop_training(history: list):
     if ctrl and ctrl._running:
         ctrl.stop_training()
         history.append(("🔬 하네스", "학습 중지 요청"))
+    _save_ui_state(harness_history=history)
     return history
 
 
@@ -1171,7 +1206,7 @@ def create_app(agent=None) -> gr.Blocks:
                 outputs=[wg_chatbot, wg_chat_input]
             )
             wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
-            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_chatbot])
+            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_chatbot, wg_plan_box, wg_timescale])
         harness_start_btn.click(
             fn=harness_start_training,
             inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
@@ -1182,9 +1217,17 @@ def create_app(agent=None) -> gr.Blocks:
         harness_rules_refresh_btn.click(fn=harness_get_rules, outputs=[harness_rules_md])
         harness_timer.tick(fn=harness_get_status, outputs=[harness_status_text, harness_last_episode, harness_stats_text])
         app.load(fn=harness_get_rules, outputs=[harness_rules_md])
+        app.load(
+            fn=lambda: [[m[0], m[1]] for m in _load_ui_state().get("harness_chat", []) if len(m) == 2],
+            outputs=[harness_chatbot],
+        )
         map_refresh_btn.click(fn=get_battlefield_map, outputs=[map_plot, map_status])
         map_timer.tick(fn=get_battlefield_map, outputs=[map_plot, map_status])
         app.load(fn=get_battlefield_map, outputs=[map_plot, map_status])
+        app.load(
+            fn=lambda: [[m[0], m[1]] for m in _load_ui_state().get("main_chat", []) if len(m) == 2],
+            outputs=[chatbot],
+        )
     return app
 
 
