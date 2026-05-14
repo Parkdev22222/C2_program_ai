@@ -1,8 +1,8 @@
 # ===== CodeAgent 설정 =====
 code_agent:
   executor_type: "local"
-  max_steps: 20
-  planning_interval: 3
+  max_steps: 30
+  planning_interval: 5
   stream_outputs: false
   authorized_imports:
     - "json"

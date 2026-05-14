@@ -168,12 +168,12 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
 
+        # validate/approve tool은 에이전트에서 제외 — [EXECUTION] 규칙상 dry_run=False 직접 적용
+        # (등록 시 에이전트가 불필요하게 호출하여 step을 낭비하는 문제 방지)
         try:
-            from tools.mission_plan_validator_tool import (
-                validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool,
-            )
-            tools.extend([validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool])
-            logger.info("Mission plan validator tools loaded")
+            from tools.mission_plan_validator_tool import get_pending_plan_tool
+            tools.append(get_pending_plan_tool)
+            logger.info("Mission plan validator tools loaded (validate/approve excluded)")
         except Exception as e:
             logger.warning(f"Failed to load mission plan validator tools: {e}")
 
@@ -289,6 +289,15 @@ class BattlefieldAgent:
         return str(result)
 
     def _augment_by_intent(self, query, intent, preferred_tools, requires_confirmation):
+        # gradio_app.py가 이미 규칙을 삽입한 쿼리는 재삽입하지 않는다.
+        _already_has_rules = (
+            "[RECON 규칙]" in query
+            or "[ATTACK 규칙]" in query
+            or "[EXECUTION 규칙]" in query
+        )
+        if _already_has_rules:
+            return query
+
         execution_rules = get_instruction_section("EXECUTION")
         recon_rules = get_instruction_section("RECON")
         attack_rules = get_instruction_section("ATTACK")

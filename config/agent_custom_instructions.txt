@@ -112,7 +112,7 @@ print(result)
 2. **즉시 적용 원칙**: apply_wargame_mission_plan은 항상 dry_run=False로 즉시 적용
 3. **JSON 출력 의무**: 임무계획 응답에는 반드시 JSON 블록 포함
 4. **임무 분리 원칙**: 정찰 임무계획과 공격 임무계획 동시 생성 금지
-5. **context 우선**: 항상 먼저 get_selected_contexts()로 활성화된 영상/PDF 확인
+5. **context 우선**: 영상/PDF 분석 쿼리에만 먼저 get_selected_contexts() 확인. 워게임 임무계획(정찰·공격) 쿼리에서는 호출 불필요.
 6. **전략 쿼리 의무**: 전략/전술 관련 쿼리에는 반드시 strategy_advisor_tool 사용
 7. **근거 기반**: 모든 분석은 실제 탐지된 데이터에 근거
 8. **상황 연속성**: 이전 영상 분석 결과가 있을 경우 전략 추천 시 활용
