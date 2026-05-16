@@ -767,6 +767,21 @@ class WargameEngine:
 
         defender.combat_power = max(0.0, defender.combat_power - damage)
 
+        # 교전 발생 시 공격자 측 인텔리전스에 피탐지 즉시 반영
+        # (실제로 교전 중인 적은 위치가 노출된 것이므로)
+        intel_entry = self._intelligence[attacker.side].get(defender.id)
+        if intel_entry is not None and intel_entry["status"] != "detected":
+            intel_entry.update({
+                "status":             "detected",
+                "known_x":            defender.x,
+                "known_y":            defender.y,
+                "unit_type":          defender.unit_type,
+                "combat_power":       round(defender.combat_power, 1),
+                "last_detected_tick": self.tick,
+                "detected_by":        attacker.id,
+                "ticks_since_lost":   0,
+            })
+
         if surprise_mult >= 1.6 and damage >= 3.0:
             self.db.log_event(
                 self.tick, self.game_time, "SURPRISE",
@@ -865,6 +880,14 @@ class WargameEngine:
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
                 enemy.combat_power = max(0.0, enemy.combat_power - damage)
+                # 간접사격 피탄 시 공격자 측 인텔리전스에 위치 노출 반영
+                ie = self._intelligence[spg.side].get(enemy.id)
+                if ie is not None and ie["status"] != "detected":
+                    ie.update({
+                        "status": "detected", "known_x": enemy.x, "known_y": enemy.y,
+                        "unit_type": enemy.unit_type, "combat_power": round(enemy.combat_power, 1),
+                        "last_detected_tick": self.tick, "detected_by": spg.id, "ticks_since_lost": 0,
+                    })
                 if damage >= 3.0:
                     hit_any = True
                     self.db.log_event(
