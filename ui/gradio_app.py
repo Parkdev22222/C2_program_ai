@@ -418,7 +418,7 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
 
         if agent is not None:
             try:
-                raw = agent.agent.run(full_query, reset=False)
+                raw = agent.agent.run(full_query, reset=True)
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
                     try:
@@ -982,7 +982,7 @@ def wargame_request_attack_plan(history: List = None):
         if plan is None:
             if agent is not None:
                 try:
-                    raw = agent.agent.run(full_query, reset=False)
+                    raw = agent.agent.run(full_query, reset=True)
                     plan = _wg_planner._parse_json(str(raw))
                     if not (plan and "mission_plans" in plan):
                         # agent JSON 파싱 실패 → rule-based fallback
