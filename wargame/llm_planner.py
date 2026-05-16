@@ -162,6 +162,11 @@ def build_mission_query(state: dict) -> str:
 {_FEW_SHOT_EXAMPLES}
 
 [공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
+⚠️ [공중지원·포격 목표 좌표 강제 규칙]
+   air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서
+   조회한 탐지된(detected) OPFOR 부대의 x_m, y_m 값을 그대로 사용해야 합니다.
+   임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
+   예: Red1 위치가 (12500, 8300) 이면 → "target": [12500, 8300]
 [규칙] 좌표는 반드시 미터(m) 정수 (9000이지 9가 아님), WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
 최종 JSON 출력(설명금지):
 ```json
