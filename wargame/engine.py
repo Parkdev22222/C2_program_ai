@@ -340,7 +340,7 @@ class WargameEngine:
                 u.current_action  = mp.get("mission_type", "move")
                 if u.side == "BLUFOR" and wps:
                     self._blufor_llm_units.add(uid)
-                    u.mission_locked = True   # 신규 임무 발령 → AI 개입 차단
+                    u.mission_lock_ticks = 30  # 신규 임무 발령 → 30틱간 AI 개입 차단
                 self.db.update_unit(u)
                 self.db.log_event(
                     self.tick, self.game_time, "ORDER",
@@ -578,6 +578,10 @@ class WargameEngine:
 
     def _tick(self):
         dt = self.tick_interval * self.time_scale
+        # 임무 잠금 카운트다운 (매 틱 차감)
+        for u in self.units:
+            if u.mission_lock_ticks > 0:
+                u.mission_lock_ticks -= 1
         self._move_units(dt)
         self._update_velocity_tracking(dt)
         self._update_intelligence()
@@ -630,8 +634,8 @@ class WargameEngine:
             if dist < 50.0:
                 u.waypoints.pop(0)
                 if not u.waypoints:
-                    u.current_action = "hold"
-                    u.mission_locked = False  # 임무 완료 → AI 제어권 반환
+                    u.current_action     = "hold"
+                    u.mission_lock_ticks = 0   # 임무 완료 → 잔여 잠금 클리어
                     self._blufor_llm_units.discard(u.id)
                     self.db.log_event(
                         self.tick, self.game_time, "WAYPOINT",
@@ -1153,11 +1157,11 @@ class WargameEngine:
             if u.side != side or not u.is_active():
                 continue
 
-            # 제압 상태: 이동 금지, 방어 전환 (임무 잠금 해제)
+            # 제압 상태: 이동 금지, 방어 전환 (임무 잠금 즉시 해제)
             if u.status == "suppressed":
-                u.waypoints      = []
-                u.current_action = "defend"
-                u.mission_locked = False
+                u.waypoints          = []
+                u.current_action     = "defend"
+                u.mission_lock_ticks = 0
                 if side == "BLUFOR":
                     self._blufor_llm_units.discard(u.id)
                 continue
@@ -1167,8 +1171,8 @@ class WargameEngine:
 
             # BLUFOR AI 개입 제한 (LLM 임무계획 우선)
             if side == "BLUFOR":
-                # 신규 임무 발령된 부대: 웨이포인트 소진 전까지 AI 개입 전면 차단
-                if u.mission_locked:
+                # 신규 임무 발령 후 30틱 이내: AI 개입 차단
+                if u.mission_lock_ticks > 0:
                     continue
                 # LLM 미지정 부대 + CP 충분 → 자율 행동 유지, AI 불필요
                 if u.id not in self._blufor_llm_units and u.combat_power >= 30:

@@ -77,7 +77,7 @@ class Unit:
     current_action: str = "hold"       # "move" | "attack" | "defend" | "hold"
     color: str = "blue"                # UI 색상
     unit_type: str = ""                # "기계화보병" | "전차" | "정찰" | "대전차" | "자주포"
-    mission_locked: bool = False       # True: 신규 임무계획 발령됨 → 룰 기반 AI 개입 차단
+    mission_lock_ticks: int = 0        # 신규 임무 발령 후 룰 기반 AI 차단 잔여 틱 수 (0=해제)
 
     # ── 파생 속성 ──────────────────────────────────────────────────
 
