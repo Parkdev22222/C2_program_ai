@@ -1164,13 +1164,12 @@ class WargameEngine:
 
             # BLUFOR AI 개입 제한 (LLM 임무계획 우선)
             if side == "BLUFOR":
-                if u.id not in self._blufor_llm_units:
-                    if u.combat_power >= 30:
-                        continue
-                else:
-                    in_combat = u.status == "degraded" or dist < 3_000.0
-                    if not in_combat:
-                        continue
+                # 임무 웨이포인트가 남아있으면 교전 중이어도 AI 개입 전면 금지
+                if u.id in self._blufor_llm_units and u.waypoints:
+                    continue
+                # LLM 미지정 부대 + CP 충분 → 자율 행동 유지, AI 불필요
+                if u.id not in self._blufor_llm_units and u.combat_power >= 30:
+                    continue
 
             if u.combat_power < SUPPRESSED_THRESHOLD:
                 self._ai_withdraw(u, side, log_type)
