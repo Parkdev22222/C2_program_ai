@@ -225,6 +225,11 @@ class WargameEngine:
         self._opfor_strategy_decided: bool = False
         self._opfor_defend_positions: Dict[str, Tuple[float, float]] = {}
 
+        # 신규 탐지 자동 임무계획 훅
+        # BLUFOR가 OPFOR를 최초 탐지 시 호출: callback(enemy_id, unit_type, x, y)
+        self.on_new_opfor_detection: Optional[Callable] = None
+        self._auto_plan_triggered_ids: set = set()  # 이미 자동 임무계획 발동된 OPFOR ID
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -310,6 +315,7 @@ class WargameEngine:
             self._opfor_strategy          = "recon"
             self._opfor_strategy_decided  = False
             self._opfor_defend_positions  = {}
+            self._auto_plan_triggered_ids = set()
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -447,6 +453,17 @@ class WargameEngine:
                             f"적 {enemy.id}({enemy.unit_type}) 탐지 — "
                             f"위치({enemy.x/1000:.1f}km, {enemy.y/1000:.1f}km)",
                         )
+                        # BLUFOR가 OPFOR를 최초 탐지 → 자동 임무계획 콜백
+                        if (observer == "BLUFOR"
+                                and enemy.id not in self._auto_plan_triggered_ids
+                                and self.on_new_opfor_detection is not None):
+                            self._auto_plan_triggered_ids.add(enemy.id)
+                            try:
+                                self.on_new_opfor_detection(
+                                    enemy.id, enemy.unit_type, enemy.x, enemy.y
+                                )
+                            except Exception as _cb_err:
+                                logger.error(f"on_new_opfor_detection 콜백 오류: {_cb_err}")
                 else:
                     if entry["status"] == "detected":
                         entry["status"] = "lost"

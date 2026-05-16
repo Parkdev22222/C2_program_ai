@@ -4,6 +4,8 @@ C2 군사 AI - Gradio 웹 인터페이스
 import re
 import time
 import logging
+import queue as _queue
+import threading
 import gradio as gr
 import yaml
 from pathlib import Path
@@ -48,6 +50,11 @@ _wg_planner: Optional["MissionPlanner"] = None
 _wg_last_plan: dict = {}
 _wg_last_opfor_ai_count: int = 0
 _harness_controller = None
+
+# ── 자동 탐지 → 임무계획 수립 ────────────────────────────────────
+# 엔진 탐지 콜백이 이 큐에 이벤트를 넣고, 백그라운드 워커가 처리한다
+_detection_queue: _queue.Queue = _queue.Queue()
+_auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
 
 # ── UI 상태 영속성 ────────────────────────────────────────────
 import json as _json_mod
@@ -330,7 +337,140 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_engine = WargameEngine(units)
         _wg_planner = MissionPlanner()
         _wg_register_engine(_wg_engine)
+        # 자동 탐지 임무계획 콜백 등록
+        _wg_engine.on_new_opfor_detection = _detection_enqueue
     return _wg_engine
+
+
+# ── 자동 탐지 → 공격임무계획 수립 ────────────────────────────────
+
+def _detection_enqueue(enemy_id: str, unit_type: str, x: float, y: float):
+    """엔진 틱 스레드에서 호출 — 큐에만 넣고 즉시 반환."""
+    _detection_queue.put_nowait((enemy_id, unit_type, x, y))
+
+
+def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float):
+    """
+    신규 OPFOR 탐지 시 자동으로 공격임무계획 수립 → 적용 → 시뮬레이션 재개.
+    별도 백그라운드 스레드에서 실행됨.
+    """
+    eng = _wg_engine
+    agent = _get_agent()
+    if eng is None or _wg_planner is None:
+        return
+
+    logger.info(f"[자동임무계획] 신규 탐지: {enemy_id}({unit_type}) @ "
+                f"({x/1000:.1f}km, {y/1000:.1f}km) → 공격임무계획 수립 시작")
+
+    # 시뮬레이션 일시정지
+    was_running = eng.running
+    if was_running:
+        eng.stop()
+        logger.info("[자동임무계획] 시뮬레이션 일시정지")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(True)
+        except Exception:
+            pass
+
+    try:
+        state = eng.get_state()
+        import json as _j
+        from wargame.llm_planner import build_mission_query
+
+        try:
+            from agent.battlefield_agent import get_instruction_section
+            attack_rules      = get_instruction_section("ATTACK")
+            execution_rules   = get_instruction_section("EXECUTION")
+            learned_rules     = get_instruction_section("LEARNED_RULES")
+        except Exception:
+            attack_rules = execution_rules = learned_rules = ""
+
+        learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+        base_query = build_mission_query(state)
+        full_query = (
+            base_query
+            + f"\n\n[자동 탐지 트리거] {enemy_id}({unit_type})가 새로 탐지됨 "
+            f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
+            f"즉시 공격임무계획을 수립하고 워게임에 적용하라.\n\n"
+            f"[툴 활용 순서 — 반드시 이 순서대로 호출]\n"
+            f"1. get_wargame_situation()\n"
+            f"   → 현재 BLUFOR·OPFOR 부대 위치, 전투력, 행동 조회\n"
+            f"2. assess_recon_need()\n"
+            f"   → OPFOR 탐지 현황 확인 (detected / approximate / lost)\n"
+            f"   → detected 부대만 공격 목표, approximate/lost는 공격 제외\n"
+            f"   ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 절대 호출 금지\n"
+            f"3. get_optimal_attack_positions()\n"
+            f"   → 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천\n"
+            f"   → 반환값을 attack_positions_result 변수에 저장\n"
+            f"4. strategy_advisor_tool(\n"
+            f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다.\",\n"
+            f"     additional_context=attack_positions_result\n"
+            f"   )\n"
+            f"5. 최종 임무계획 JSON 생성 → apply_wargame_mission_plan(dry_run=False)\n\n"
+            f"[ATTACK 규칙]\n{attack_rules}\n\n"
+            f"[EXECUTION 규칙]\n{execution_rules}"
+            f"{learned_suffix}"
+        )
+
+        if agent is not None:
+            try:
+                raw = agent.agent.run(full_query, reset=False)
+                plan = _wg_planner._parse_json(str(raw))
+                if plan and "mission_plans" in plan:
+                    try:
+                        eng.apply_mission_plan(plan)
+                        if plan.get("air_support_plans"):
+                            eng.apply_air_support_plan(plan)
+                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
+                                    f"— {len(plan['mission_plans'])}개 중대")
+                    except Exception as _ae:
+                        logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
+                else:
+                    logger.warning("[자동임무계획] JSON 파싱 실패 → 규칙 기반 폴백")
+                    plan = _wg_planner._rule_based(state)
+                    eng.apply_mission_plan(plan)
+            except Exception as _e:
+                logger.warning(f"[자동임무계획] 에이전트 실행 실패: {_e} → 규칙 기반 폴백")
+                plan = _wg_planner._rule_based(state)
+                eng.apply_mission_plan(plan)
+        else:
+            plan = _wg_planner._rule_based(state)
+            eng.apply_mission_plan(plan)
+            logger.info("[자동임무계획] 규칙 기반 계획 적용")
+
+    except Exception as _ex:
+        logger.error(f"[자동임무계획] 오류: {_ex}", exc_info=True)
+    finally:
+        if was_running and not eng.running:
+            eng.start()
+            logger.info("[자동임무계획] 시뮬레이션 재개")
+        try:
+            from tools.wargame_mission_tool import set_resume_on_apply
+            set_resume_on_apply(False)
+        except Exception:
+            pass
+
+
+def _detection_worker():
+    """백그라운드 데몬 스레드 — 탐지 큐를 소비하여 자동 임무계획 수립."""
+    while True:
+        try:
+            event = _detection_queue.get(timeout=2.0)
+        except _queue.Empty:
+            continue
+        # 동시 계획 방지: 이미 계획 중이면 이벤트 무시 (큐에 쌓인 중복 탐지 무시)
+        if not _auto_plan_lock.acquire(blocking=False):
+            logger.info(f"[자동임무계획] 계획 수립 중 — {event[0]} 이벤트 건너뜀")
+            continue
+        try:
+            _execute_auto_attack_plan(*event)
+        finally:
+            _auto_plan_lock.release()
+
+
+# 백그라운드 워커 스레드 시작 (앱 로드 시 1회)
+threading.Thread(target=_detection_worker, daemon=True, name="DetectionWorker").start()
 
 
 def _build_wargame_map(state: dict) -> Optional[go.Figure]:
