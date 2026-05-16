@@ -197,9 +197,9 @@ def get_wargame_tactical_recommendation() -> dict:
                     "target_cp":             round(best_target["combat_power"], 1),
                     "advantage":             adv,
                     "firepower_multiplier":  mult,
-                    "distance_km":           round(math.hypot(
+                    "distance_m":            int(math.hypot(
                         bu["x"] - best_target["x"], bu["y"] - best_target["y"]
-                    ) / 1000, 2),
+                    )),
                     "reason": reason,
                 })
 

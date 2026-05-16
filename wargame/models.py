@@ -13,27 +13,29 @@ from pathlib import Path
 from typing import List, Optional
 
 # 공중지원 유형별 기본 파라미터
+# damage_rate (%/hour): 반경 중심에서 duration 동안 누적 시 직격 최소 ~33% 피해가 되도록 설정
+# 공식: total_damage ≈ damage_rate * (duration / 3600)
 AIR_SUPPORT_PRESETS = {
-    "cas": {           # 근접항공지원 (A-10 류)
-        "damage_rate": 60.0,   # %/hour (반경 중심)
+    "cas": {           # 근접항공지원 (A-10 류) — 지속 제압, ~40% 직격
+        "damage_rate": 480.0,  # 480 * (300/3600) = 40%
         "radius": 1_500.0,     # m
         "duration": 300.0,     # 게임 초
         "delay": 120.0,        # 게임 초 (투입 전 대기)
     },
-    "strike": {        # 정밀타격 (F-35 류)
-        "damage_rate": 200.0,
+    "strike": {        # 정밀타격 (F-35 류) — 순간 고위력, ~33% 직격
+        "damage_rate": 2_000.0,  # 2000 * (60/3600) = 33.3%
         "radius": 400.0,
         "duration": 60.0,
         "delay": 180.0,
     },
-    "artillery": {     # 장거리 포병지원
-        "damage_rate": 30.0,
+    "artillery": {     # 장거리 포병지원 — 광역 지속, ~33% 직격
+        "damage_rate": 200.0,  # 200 * (600/3600) = 33.3%
         "radius": 2_500.0,
         "duration": 600.0,
         "delay": 30.0,
     },
-    "helicopter": {    # 공격헬기 지원
-        "damage_rate": 45.0,
+    "helicopter": {    # 공격헬기 지원 — ~30% 직격
+        "damage_rate": 450.0,  # 450 * (240/3600) = 30%
         "radius": 1_000.0,
         "duration": 240.0,
         "delay": 60.0,
@@ -75,6 +77,7 @@ class Unit:
     current_action: str = "hold"       # "move" | "attack" | "defend" | "hold"
     color: str = "blue"                # UI 색상
     unit_type: str = ""                # "기계화보병" | "전차" | "정찰" | "대전차" | "자주포"
+    mission_lock_ticks: int = 0        # 신규 임무 발령 후 룰 기반 AI 차단 잔여 틱 수 (0=해제)
 
     # ── 파생 속성 ──────────────────────────────────────────────────
 

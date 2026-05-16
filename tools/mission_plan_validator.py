@@ -13,18 +13,18 @@ from typing import Optional, List, Any
 
 logger = logging.getLogger(__name__)
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # 맵 상수
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 MAP_MAX = 30_000.0
 VALID_COMPANY_IDS = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"}
 VALID_MISSION_TYPES = {"recon", "attack", "defend", "flank", "withdraw", "hold"}
 VALID_SUPPORT_TYPES = {"cas", "strike", "artillery", "helicopter"}
 WRITE_TOOLS = {"apply_wargame_mission_plan", "apply_wargame_air_support"}
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # Pydantic 기반 typed schema (v1/v2 호환)
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 try:
     from pydantic import BaseModel, Field, validator
 
@@ -96,9 +96,9 @@ except ImportError:
     logger.warning("pydantic 미설치 — typed schema 검증 비활성화, 기본 dict 검증만 수행합니다.")
 
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # Pending Plan 세션 상태
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 _session_state: dict = {
     "pending_plan": None,
     "approved_plan_id": None,
@@ -159,9 +159,9 @@ def get_session_state() -> dict:
     return dict(_session_state)
 
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # validate_mission_plan
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def validate_mission_plan(plan: Any) -> dict:
     """
@@ -272,9 +272,9 @@ def validate_mission_plan(plan: Any) -> dict:
     return {"ok": ok, "errors": errors, "warnings": warnings, "summary": summary}
 
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # guard_write_tool — apply 실행 전 gate
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def guard_write_tool(tool_name: str, args: dict) -> dict:
     """
@@ -321,9 +321,9 @@ def guard_write_tool(tool_name: str, args: dict) -> dict:
     return {"allowed": True}
 
 
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # classify_intent — intent router
-# ───────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def classify_intent(query: str) -> dict:
     """

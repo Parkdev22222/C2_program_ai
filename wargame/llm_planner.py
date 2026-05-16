@@ -17,35 +17,37 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ── Few-Shot 예시 (간결 버전) ─────────────────────────────────────
+# ── Few-Shot 예시 (출력 형식 전용 — 좌표·부대명은 placeholder) ────────
+# ⚠️ 아래 예시의 좌표·부대명·호출부호는 형식 설명용 placeholder입니다.
+# 절대로 예시 값을 그대로 사용하지 말고, 반드시 툴 호출 결과를 사용하십시오.
 
 _FEW_SHOT_EXAMPLES = """\
-[예시1] 전력우세·공중지원 병행
-{"reasoning":"CAS로 Red3 전차 집결지 제압 후 Alpha 측방 기동.",
+[형식예시1] 전력우세·공중지원 병행 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
+{"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
-  {"company_id":"Alpha","mission_type":"flank","waypoints":[[9000,8000],[13000,11000],[15000,13000]],"objective":"Red1 측방 공격"},
-  {"company_id":"Bravo","mission_type":"attack","waypoints":[[10000,9000],[14000,13000]],"objective":"Red2 정면 압박"}
+  {"company_id":"<BLUFOR_ID_A>","mission_type":"flank","waypoints":[[X1,Y1],[X2,Y2],[X3,Y3]],"objective":"<OPFOR_ID_1> 측방 공격"},
+  {"company_id":"<BLUFOR_ID_B>","mission_type":"attack","waypoints":[[X4,Y4],[X5,Y5]],"objective":"<OPFOR_ID_2> 정면 압박"}
  ],
  "air_support_plans":[
-  {"call_sign":"VIPER-1","support_type":"cas","target":[21000,21000],"radius":1500,"delay":60},
-  {"call_sign":"THUNDER-1","support_type":"strike","target":[23000,20000],"radius":400,"delay":120}
+  {"call_sign":"<CALLSIGN_1>","support_type":"cas","target":[TX1,TY1],"radius":1500,"delay":60},
+  {"call_sign":"<CALLSIGN_2>","support_type":"strike","target":[TX2,TY2],"radius":400,"delay":120}
  ]}
 
-[예시2] 전력열세·방어+포병지원
-{"reasoning":"전투력 30%↓, 고지 철수. 포병으로 적 접근로 차단.",
+[형식예시2] 전력열세·방어+포병지원 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
+{"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
-  {"company_id":"Alpha","mission_type":"defend","waypoints":[[14000,12000]],"objective":"고지 방어"},
-  {"company_id":"Bravo","mission_type":"withdraw","waypoints":[[13000,12500],[14000,12000]],"objective":"Alpha 합류"}
+  {"company_id":"<BLUFOR_ID_A>","mission_type":"defend","waypoints":[[X1,Y1]],"objective":"고지 방어"},
+  {"company_id":"<BLUFOR_ID_B>","mission_type":"withdraw","waypoints":[[X2,Y2],[X1,Y1]],"objective":"<BLUFOR_ID_A> 합류"}
  ],
  "air_support_plans":[
-  {"call_sign":"ARTY-1","support_type":"artillery","target":[16000,14000],"radius":2500,"delay":30}
+  {"call_sign":"<CALLSIGN_1>","support_type":"artillery","target":[TX1,TY1],"radius":2500,"delay":30}
  ]}
 
-[예시3] 공중지원 없음·포위 섬멸
-{"reasoning":"Red1 전투불능. Delta 고속 우회, Charlie 정면으로 Red2 포위.",
+[형식예시3] 공중지원 없음·포위 섬멸 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
+{"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
-  {"company_id":"Charlie","mission_type":"attack","waypoints":[[18000,16000],[21000,19000]],"objective":"정면 압박"},
-  {"company_id":"Delta","mission_type":"flank","waypoints":[[20000,21000],[23000,22000]],"objective":"후방 차단"}
+  {"company_id":"<BLUFOR_ID_C>","mission_type":"attack","waypoints":[[X1,Y1],[X2,Y2]],"objective":"정면 압박"},
+  {"company_id":"<BLUFOR_ID_D>","mission_type":"flank","waypoints":[[X3,Y3],[X4,Y4]],"objective":"후방 차단"}
  ],
  "air_support_plans":[]}"""
 
@@ -67,7 +69,7 @@ def _sample_elevation_map(state: dict) -> str:
         elev  = _terrain.elevation(u["x"], u["y"])
         cover = _terrain.cover_factor(u["x"], u["y"])
         lines.append(
-            f"{u['id']}({u['x']/1000:.0f}k,{u['y']/1000:.0f}k) "
+            f"{u['id']}({int(u['x'])},{int(u['y'])}) "
             f"→{elev:.0f}m 엄폐{cover:.2f}"
         )
 
@@ -85,7 +87,7 @@ def _sample_elevation_map(state: dict) -> str:
                 ys = cy - span + r * span
                 xs = max(0, min(29999, xs))
                 ys = max(0, min(29999, ys))
-                grid.append(f"({xs/1000:.0f}k,{ys/1000:.0f}k)={_terrain.elevation(xs,ys):.0f}m")
+                grid.append(f"({int(xs)},{int(ys)})={_terrain.elevation(xs,ys):.0f}m")
         lines.append("접촉구역:" + " ".join(grid))
 
         # TOP2 고지
@@ -97,7 +99,7 @@ def _sample_elevation_map(state: dict) -> str:
                 high.append((_terrain.elevation(xs, ys), xs, ys))
         high.sort(reverse=True)
         lines.append("고지TOP2:" + " ".join(
-            f"({xs/1000:.0f}k,{ys/1000:.0f}k)={e:.0f}m" for e, xs, ys in high[:2]
+            f"({int(xs)},{int(ys)})={e:.0f}m" for e, xs, ys in high[:2]
         ))
 
     return "\n".join(lines)
@@ -107,62 +109,70 @@ def _sample_elevation_map(state: dict) -> str:
 
 def build_mission_query(state: dict) -> str:
     """
-    BattlefieldAgent.run()에 전달할 전체 쿼리 문자열 생성.
-    구성: 시스템 지시 + 전장 현황 + 고도맵 + few-shot + 출력 요청
+    BattlefieldAgent.run()에 전달할 공격 임무계획 쿼리 문자열 생성.
+
+    에이전트 툴 활용 순서:
+      1. get_wargame_situation()         → 부대 위치·전투력·행동 조회
+      2. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
+      3. predict_opfor_routes()          → 탐지된 OPFOR 예상 기동 경로 분석
+      4. get_optimal_attack_positions(opfor_routes_json=<3번 predicted_routes JSON>)
+                                         → 경로 차단 보너스 반영 최적 공격 위치 추천
+      5. strategy_advisor_tool(query=..., additional_context=<4번 결과>)
+                                         → EXAONE Deep이 공격 위치 결과 검토·조언
+      6. 최종 임무계획 JSON 생성         → 4번+5번 종합, detected OPFOR만 목표
+      7. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      8. 응답에 JSON 블록 출력
+
+    ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
-    # ── 부대 현황 ──
-    unit_lines = []
-    for u in state.get("units", []):
-        if u["status"] == "destroyed":
-            status_str = "전투불능(×)"
-        elif u["status"] == "suppressed":
-            status_str = f"제압({u['combat_power']:.0f}%)"
-        else:
-            status_str = f"전투가능({u['combat_power']:.0f}%)"
-        unit_lines.append(
-            f"  [{u['side']}] {u['id']:6s}: 위치=({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)  "
-            f"고도={u.get('elevation', 0):.0f}m  {status_str}"
-        )
-
-    # ── 위협 분석 ──
-    blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
-    opfor  = [u for u in state["units"] if u["side"] == "OPFOR"  and u["status"] != "destroyed"]
-    if blufor and opfor:
-        bl_cx = sum(u["x"] for u in blufor) / len(blufor)
-        bl_cy = sum(u["y"] for u in blufor) / len(blufor)
-        op_cx = sum(u["x"] for u in opfor)  / len(opfor)
-        op_cy = sum(u["y"] for u in opfor)  / len(opfor)
-        dist  = ((bl_cx - op_cx)**2 + (bl_cy - op_cy)**2)**0.5
-        threat_line = (
-            f"BLUFOR 중심: ({bl_cx/1000:.1f}km, {bl_cy/1000:.1f}km)  "
-            f"OPFOR 중심: ({op_cx/1000:.1f}km, {op_cy/1000:.1f}km)  "
-            f"거리: {dist/1000:.1f}km"
-        )
-    else:
-        threat_line = "전투 종료 또는 전멸"
-
     elev_section = _sample_elevation_map(state)
-    winner = state.get("winner")
 
-    query = f"""대대급 C2 AI: BLUFOR 임무계획을 JSON으로 출력하라.
+    query = f"""대대급 C2 AI: BLUFOR 임무계획을 수립하라.
 
-[전장상황] 게임시간:{state.get('game_time_str','00:00:00')} {"종료:"+winner+"승" if winner else ""}
-{chr(10).join(unit_lines)}
-위협:{threat_line}
+⚠️ 필수: 아래 툴을 반드시 순서대로 호출하여 실제 전장 데이터를 수집한 후 임무계획을 수립하라.
+예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
 
-[지형고도] 좌표(m),x=동쪽,y=북쪽,범위0~30000,고도우위±40%
+[필수 툴 호출 순서]
+1. get_wargame_situation()
+   → BLUFOR·OPFOR 실제 위치·전투력·행동 조회 (이 결과를 situation 변수에 저장)
+2. assess_recon_need()
+   → OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
+   → ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 호출 금지
+3. predict_opfor_routes()
+   → 탐지된 OPFOR 부대의 예상 기동 경로(정면/우측우회/좌측우회) 분석
+   → 결과를 opfor_routes_result에 저장
+   → import json; opfor_routes_json = json.dumps(opfor_routes_result["predicted_routes"])
+4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
+   → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
+5. strategy_advisor_tool(
+     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요.",
+     additional_context=str(attack_positions_result)
+   )
+   → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
+6. 위 1~5 결과를 종합하여 최종 임무계획 JSON 생성
+   → 실제 부대 ID, 실제 좌표만 사용 / detected OPFOR만 목표
+7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
+   → 워게임 즉시 적용
+
+[지형고도] 좌표=미터(m) 정수, x=동쪽, y=북쪽, 범위 0~30000
+⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)
 {elev_section}
 
-[출력예시]
+[출력 형식 예시] ← 형식만 참고. 좌표·ID는 placeholder이므로 절대 그대로 사용 금지
 {_FEW_SHOT_EXAMPLES}
 
 [공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
-[규칙] 좌표m정수,WP 3~5개,CP<30%→defend/withdraw,고지선점·측방기동 고려,공중지원은 필요 시만 사용
-아래 JSON만 출력(설명금지):
+⚠️ [공중지원·포격 목표 좌표 강제 규칙]
+   air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서
+   조회한 탐지된(detected) OPFOR 부대의 x_m, y_m 값을 그대로 사용해야 합니다.
+   임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
+   예: Red1 위치가 (12500, 8300) 이면 → "target": [12500, 8300]
+[규칙] 좌표는 반드시 미터(m) 정수 (9000이지 9가 아님), WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
+최종 JSON 출력(설명금지):
 ```json
-{{"reasoning":"한국어 판단근거",
-"mission_plans":[{{"company_id":"ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[x,y]],"objective":"목표"}}],
-"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[x,y],"radius":반경m,"delay":지연초}}]}}
+{{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
+"mission_plans":[{{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[미터정수x,미터정수y]],"objective":"목표"}}],
+"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[미터정수tx,미터정수ty],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""
     return query
 
@@ -267,10 +277,10 @@ class MissionPlanner:
                      round(u["y"] + (op_cy - u["y"]) * 0.70 + offset * 0.6)],
                     [round(op_cx + offset * 0.5), round(op_cy)],
                 ],
-                "objective": f"OPFOR 격멸 ({op_cx/1000:.1f}km,{op_cy/1000:.1f}km)"
+                "objective": f"OPFOR 격멸 ({int(op_cx)},{int(op_cy)})"
             })
 
         return {
-            "reasoning": f"[규칙 기반] OPFOR 집결점 ({op_cx/1000:.1f}km, {op_cy/1000:.1f}km) 공격.",
+            "reasoning": f"[규칙 기반] OPFOR 집결점 ({int(op_cx)},{int(op_cy)}) 공격.",
             "mission_plans": plans,
         }

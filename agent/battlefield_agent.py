@@ -17,11 +17,47 @@ def _load_agent_config() -> dict:
         return yaml.safe_load(f)
 
 
+INSTRUCTIONS_FILE = CONFIG_DIR / "agent_custom_instructions.txt"
+
+
 def _load_custom_instructions() -> str:
-    instr_file = CONFIG_DIR / "agent_custom_instructions.txt"
-    if instr_file.exists():
-        return instr_file.read_text(encoding="utf-8")
+    if INSTRUCTIONS_FILE.exists():
+        return INSTRUCTIONS_FILE.read_text(encoding="utf-8")
     return ""
+
+
+def get_instruction_section(section: str) -> str:
+    """[SECTION_NAME] 헤더 아래의 규칙 줄을 추출합니다."""
+    content = _load_custom_instructions()
+    lines = content.splitlines()
+    in_section = False
+    result = []
+    for line in lines:
+        if line.strip() == f"[{section}]":
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("[") and line.endswith("]"):
+                break
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                result.append(stripped)
+    return "\n".join(result)
+
+
+def append_learned_rule(rule: str) -> bool:
+    """워게임 평가 후 학습된 규칙을 [LEARNED_RULES] 섹션에 추가합니다."""
+    from datetime import datetime
+    content = _load_custom_instructions()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    new_line = f"- [{timestamp}] {rule}"
+    if "[LEARNED_RULES]" in content:
+        content = content + f"\n{new_line}"
+    else:
+        content += f"\n[LEARNED_RULES]\n{new_line}"
+    INSTRUCTIONS_FILE.write_text(content, encoding="utf-8")
+    logger.info(f"Learned rule appended: {rule[:80]}")
+    return True
 
 
 def is_strategy_query(text: str, config: dict = None) -> bool:
@@ -132,12 +168,12 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
 
+        # validate/approve tool은 에이전트에서 제외 — [EXECUTION] 규칙상 dry_run=False 직접 적용
+        # (등록 시 에이전트가 불필요하게 호출하여 step을 낭비하는 문제 방지)
         try:
-            from tools.mission_plan_validator_tool import (
-                validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool,
-            )
-            tools.extend([validate_mission_plan_tool, approve_mission_plan_tool, get_pending_plan_tool])
-            logger.info("Mission plan validator tools loaded")
+            from tools.mission_plan_validator_tool import get_pending_plan_tool
+            tools.append(get_pending_plan_tool)
+            logger.info("Mission plan validator tools loaded (validate/approve excluded)")
         except Exception as e:
             logger.warning(f"Failed to load mission plan validator tools: {e}")
 
@@ -154,6 +190,13 @@ class BattlefieldAgent:
             logger.info("Wargame tactical recommendation tool loaded")
         except Exception as e:
             logger.warning(f"Failed to load wargame strategy tool: {e}")
+
+        try:
+            from tools.wargame_opfor_routes_tool import predict_opfor_routes
+            tools.append(predict_opfor_routes)
+            logger.info("OPFOR predicted routes tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load opfor routes tool: {e}")
 
         try:
             from tools.wargame_attack_advisor_tool import get_optimal_attack_positions
@@ -253,37 +296,40 @@ class BattlefieldAgent:
         return str(result)
 
     def _augment_by_intent(self, query, intent, preferred_tools, requires_confirmation):
+        # gradio_app.py가 이미 규칙을 삽입한 쿼리는 재삽입하지 않는다.
+        _already_has_rules = (
+            "[RECON 규칙]" in query
+            or "[ATTACK 규칙]" in query
+            or "[EXECUTION 규칙]" in query
+        )
+        if _already_has_rules:
+            return query
+
+        execution_rules = get_instruction_section("EXECUTION")
+        recon_rules = get_instruction_section("RECON")
+        attack_rules = get_instruction_section("ATTACK")
+        strategy_rules = get_instruction_section("STRATEGY")
+        learned_rules = get_instruction_section("LEARNED_RULES")
+        learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+
         if intent == "execution_request":
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 워게임 임무계획 실행 요청입니다.\n"
-                f"반드시 dry_run=True(기본값)로 apply_wargame_mission_plan을 먼저 호출하여 검증하세요.\n"
-                f"검증 결과에서 plan_id를 사용자에게 안내하고, 사용자 승인(approve_plan) 후 dry_run=False로 실행하세요.\n"
-                f"사용자 승인 없이 dry_run=False를 직접 호출하는 것은 금지됩니다."
+                f"{query}\n\n[커스텀 지시 — EXECUTION]\n{execution_rules}{learned_suffix}"
             )
 
         if intent in ("attack_planning", "general_strategy_advice", "planning_request"):
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+                f"{query}\n\n[커스텀 지시 — STRATEGY]\n{strategy_rules}{learned_suffix}"
             )
 
         if intent == "recon_planning":
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 정찰 임무 요청입니다. "
-                f"반드시 assess_recon_need() → recommend_recon_routes() → recon_advisor_tool() 순서로 호출하여 "
-                f"정찰 임무계획을 수립하세요."
+                f"{query}\n\n[커스텀 지시 — RECON]\n{recon_rules}{learned_suffix}"
             )
 
         if is_strategy_query(query, self._agent_config):
             return (
-                f"{query}\n\n"
-                f"[중요] 이 쿼리는 군사 전략/전술 추천 요청입니다. "
-                f"반드시 strategy_advisor_tool을 호출하여 EXAONE Deep의 전략/전술 권고를 받은 후, "
-                f"나의 이전 상황 분석과 EXAONE Deep의 권고를 종합하여 최종 응답을 작성하세요."
+                f"{query}\n\n[커스텀 지시 — STRATEGY]\n{strategy_rules}{learned_suffix}"
             )
 
         return query
@@ -318,6 +364,33 @@ class BattlefieldAgent:
     def get_situation_memory(self) -> dict:
         from tools.strategy_advisor_tool import get_situation_memory
         return get_situation_memory()
+
+    def reload_instructions(self):
+        """agent_custom_instructions.txt를 재로드하여 에이전트 지시사항을 갱신합니다."""
+        self._custom_instructions = _load_custom_instructions()
+        # CodeAgent의 system_prompt도 갱신
+        try:
+            pt = self._agent.prompt_templates
+            if isinstance(pt, dict):
+                existing = pt.get("system_prompt", "")
+                # 기존 커스텀 지시사항 제거 후 새 것으로 교체
+                if "\n\n[시스템 지시사항]\n" in existing:
+                    base = existing.split("\n\n[시스템 지시사항]\n")[0]
+                else:
+                    base = existing
+                if self._custom_instructions:
+                    pt["system_prompt"] = base + "\n\n[시스템 지시사항]\n" + self._custom_instructions
+            elif hasattr(pt, "system_prompt"):
+                existing = getattr(pt, "system_prompt", "") or ""
+                if "\n\n[시스템 지시사항]\n" in existing:
+                    base = existing.split("\n\n[시스템 지시사항]\n")[0]
+                else:
+                    base = existing
+                if self._custom_instructions:
+                    pt.system_prompt = base + "\n\n[시스템 지시사항]\n" + self._custom_instructions
+            logger.info("Instructions reloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to update agent prompt_templates: {e}")
 
     @property
     def agent(self):
