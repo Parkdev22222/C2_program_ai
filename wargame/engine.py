@@ -392,6 +392,14 @@ class WargameEngine:
                 if entry is None:
                     continue
 
+                # 격멸된 부대: Dead Reckoning 중지 + 탐지 상실 처리
+                if enemy.status == "destroyed":
+                    if entry["status"] in ("detected", "approximate"):
+                        entry["status"] = "lost"
+                        entry["ticks_since_lost"] = 0
+                    self._unit_velocity[enemy.id] = (0.0, 0.0)
+                    continue
+
                 # 적 부대 이동/정지 여부에 따른 피탐지 배율
                 is_moving = bool(enemy.waypoints)
                 cov       = terrain.cover_factor(enemy.x, enemy.y)
