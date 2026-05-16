@@ -114,12 +114,14 @@ def build_mission_query(state: dict) -> str:
     에이전트 툴 활용 순서:
       1. get_wargame_situation()         → 부대 위치·전투력·행동 조회
       2. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
-      3. get_optimal_attack_positions()  → 최적 공격 위치·기동 방향 추천
-      4. strategy_advisor_tool(query=..., additional_context=<3번 결과>)
+      3. predict_opfor_routes()          → 탐지된 OPFOR 예상 기동 경로 분석
+      4. get_optimal_attack_positions(opfor_routes_json=<3번 predicted_routes JSON>)
+                                         → 경로 차단 보너스 반영 최적 공격 위치 추천
+      5. strategy_advisor_tool(query=..., additional_context=<4번 결과>)
                                          → EXAONE Deep이 공격 위치 결과 검토·조언
-      5. 최종 임무계획 JSON 생성         → 3번+4번 종합, detected OPFOR만 목표
-      6. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      7. 응답에 JSON 블록 출력
+      6. 최종 임무계획 JSON 생성         → 4번+5번 종합, detected OPFOR만 목표
+      7. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      8. 응답에 JSON 블록 출력
 
     ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
@@ -136,16 +138,20 @@ def build_mission_query(state: dict) -> str:
 2. assess_recon_need()
    → OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
    → ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 호출 금지
-3. get_optimal_attack_positions()
-   → 탐지된 OPFOR 기준 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-4. strategy_advisor_tool(
-     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 공중지원 배치, 우선순위를 조언해주세요.",
-     additional_context=attack_positions_result
+3. predict_opfor_routes()
+   → 탐지된 OPFOR 부대의 예상 기동 경로(정면/우측우회/좌측우회) 분석
+   → 결과를 opfor_routes_result에 저장
+   → import json; opfor_routes_json = json.dumps(opfor_routes_result["predicted_routes"])
+4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
+   → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
+5. strategy_advisor_tool(
+     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요.",
+     additional_context=str(attack_positions_result)
    )
    → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
-5. 위 1~4 결과를 종합하여 최종 임무계획 JSON 생성
+6. 위 1~5 결과를 종합하여 최종 임무계획 JSON 생성
    → 실제 부대 ID, 실제 좌표만 사용 / detected OPFOR만 목표
-6. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
+7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 좌표=미터(m) 정수, x=동쪽, y=북쪽, 범위 0~30000

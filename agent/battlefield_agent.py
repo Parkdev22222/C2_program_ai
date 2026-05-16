@@ -192,6 +192,13 @@ class BattlefieldAgent:
             logger.warning(f"Failed to load wargame strategy tool: {e}")
 
         try:
+            from tools.wargame_opfor_routes_tool import predict_opfor_routes
+            tools.append(predict_opfor_routes)
+            logger.info("OPFOR predicted routes tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load opfor routes tool: {e}")
+
+        try:
             from tools.wargame_attack_advisor_tool import get_optimal_attack_positions
             tools.append(get_optimal_attack_positions)
             logger.info("Wargame attack position advisor tool loaded")
