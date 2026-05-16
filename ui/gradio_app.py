@@ -556,6 +556,157 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
     return fig
 
 
+def _build_damage_chart(state: dict) -> Optional[go.Figure]:
+    if not _PLOTLY_OK:
+        return None
+    units = state.get("units", [])
+    game_time = state.get("game_time_str", "00:00:00")
+
+    blufor_units = [u for u in units if u["side"] == "BLUFOR"]
+    opfor_units = [u for u in units if u["side"] == "OPFOR"]
+
+    all_units = blufor_units + opfor_units
+    if not all_units:
+        return None
+
+    x_labels = [u["id"] for u in all_units]
+    sides = [u["side"] for u in all_units]
+
+    cp_values = []
+    damage_values = []
+    cp_colors = []
+    damage_colors = []
+
+    for u in all_units:
+        cp = u["combat_power"] if u["status"] != "destroyed" else 0.0
+        damage = 100.0 - cp
+        cp_values.append(cp)
+        damage_values.append(damage)
+        if u["side"] == "BLUFOR":
+            cp_colors.append("#4CAF50")
+            damage_colors.append("#1B5E20")
+        else:
+            cp_colors.append("#F44336")
+            damage_colors.append("#B71C1C")
+
+    fig = go.Figure()
+
+    # Bottom bars: remaining combat power
+    fig.add_trace(go.Bar(
+        x=x_labels,
+        y=cp_values,
+        name="잔여 전투력",
+        marker_color=cp_colors,
+        showlegend=False,
+        hovertemplate="%{x}: 전투력 %{y:.0f}%<extra></extra>",
+    ))
+
+    # Top bars: damage taken
+    fig.add_trace(go.Bar(
+        x=x_labels,
+        y=damage_values,
+        name="피해",
+        marker_color=damage_colors,
+        showlegend=False,
+        hovertemplate="%{x}: 피해 %{y:.0f}%<extra></extra>",
+    ))
+
+    # Annotations: CP labels at top of each bar
+    annotations = []
+    for i, u in enumerate(all_units):
+        cp = cp_values[i]
+        annotations.append(dict(
+            x=u["id"],
+            y=102,
+            text=f"{cp:.0f}%",
+            showarrow=False,
+            font=dict(color="#cccccc", size=9),
+            xanchor="center",
+            yanchor="bottom",
+        ))
+
+    # Average CP annotations for BLUFOR and OPFOR
+    if blufor_units:
+        blufor_cps = [cp_values[i] for i, u in enumerate(all_units) if u["side"] == "BLUFOR"]
+        avg_blufor = sum(blufor_cps) / len(blufor_cps)
+        annotations.append(dict(
+            x=0.18,
+            y=1.12,
+            xref="paper",
+            yref="paper",
+            text=f"BLUFOR 평균 CP: {avg_blufor:.0f}%",
+            showarrow=False,
+            font=dict(color="#4FC3F7", size=10),
+            bgcolor="rgba(13,17,23,0.7)",
+            bordercolor="#4FC3F7",
+            borderwidth=1,
+            xanchor="center",
+        ))
+
+    if opfor_units:
+        opfor_cps = [cp_values[i] for i, u in enumerate(all_units) if u["side"] == "OPFOR"]
+        avg_opfor = sum(opfor_cps) / len(opfor_cps)
+        annotations.append(dict(
+            x=0.82,
+            y=1.12,
+            xref="paper",
+            yref="paper",
+            text=f"OPFOR 평균 CP: {avg_opfor:.0f}%",
+            showarrow=False,
+            font=dict(color="#EF5350", size=10),
+            bgcolor="rgba(13,17,23,0.7)",
+            bordercolor="#EF5350",
+            borderwidth=1,
+            xanchor="center",
+        ))
+
+    # Vertical separator between BLUFOR and OPFOR
+    shapes = []
+    if blufor_units and opfor_units:
+        sep_x = len(blufor_units) - 0.5
+        shapes.append(dict(
+            type="line",
+            x0=sep_x,
+            x1=sep_x,
+            y0=0,
+            y1=100,
+            line=dict(color="#555555", width=1.5, dash="dot"),
+            xref="x",
+            yref="y",
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        title=dict(
+            text=f"피해 현황 | {game_time}",
+            font=dict(color="#dddddd", size=13),
+        ),
+        xaxis=dict(
+            title="",
+            tickfont=dict(color="#aaaaaa", size=9),
+            gridcolor="#2a3a4a",
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title="전투력 (%)",
+            range=[0, 100],
+            tickfont=dict(color="#aaaaaa", size=9),
+            gridcolor="#2a3a4a",
+            zeroline=False,
+            titlefont=dict(color="#aaaaaa", size=10),
+        ),
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#0f1923",
+        font=dict(color="#dddddd"),
+        showlegend=False,
+        height=220,
+        margin=dict(l=50, r=20, t=45, b=40),
+        annotations=annotations,
+        shapes=shapes,
+    )
+    return fig
+
+
 def _wg_status_text(state: dict) -> str:
     try:
         from wargame.scenario import get_unit_type
@@ -633,13 +784,14 @@ def wargame_refresh():
     eng = _wg_ensure_engine()
     if eng is None:
         msg = f"워게임 모듈 로드 실패: {_wg_err if not _WARGAME_OK else '엔진 없음'}"
-        return None, msg, ""
+        return None, None, msg, ""
     state = eng.get_state()
     fig = _build_wargame_map(state)
+    damage_fig = _build_damage_chart(state)
     status = _wg_status_text(state)
     events = eng.db.get_recent_events(20)
     log_text = "\n".join(f"[{e['event_type']:10s}] T={e['tick']:4d} {e['message']}" for e in events)
-    return fig, status, log_text
+    return fig, damage_fig, status, log_text
 
 
 def wargame_on_load():
@@ -651,12 +803,12 @@ def wargame_on_load():
     saved_scale  = state.get("timescale", 60.0)
 
     if eng is None:
-        return "▶ 시뮬레이션 시작", None, "워게임 초기화 실패", "", wg_history, plan_box, saved_scale
+        return "▶ 시뮬레이션 시작", None, None, "워게임 초기화 실패", "", wg_history, plan_box, saved_scale
     # 저장된 time_scale을 엔진에도 반영
     eng.time_scale = float(saved_scale)
     btn_label = "⏸ 일시정지" if eng.running else "▶ 시뮬레이션 시작"
-    fig, status, log_text = wargame_refresh()
-    return btn_label, fig, status, log_text, wg_history, plan_box, saved_scale
+    fig, damage_fig, status, log_text = wargame_refresh()
+    return btn_label, fig, damage_fig, status, log_text, wg_history, plan_box, saved_scale
 
 
 def wargame_start_pause():
@@ -669,14 +821,14 @@ def wargame_start_pause():
     else:
         eng.start()
         label = "⏸ 일시정지"
-    fig, status, log_text = wargame_refresh()
-    return label, fig, status, log_text
+    fig, damage_fig, status, log_text = wargame_refresh()
+    return label, fig, damage_fig, status, log_text
 
 
 def wargame_reset_sim():
     global _wg_engine, _wg_last_plan
     if not _WARGAME_OK:
-        return "초기화 실패", None, "", ""
+        return "초기화 실패", None, None, "", ""
     units = setup_bn_vs_bn()
     if _wg_engine is not None:
         _wg_engine.reset(units)
@@ -684,8 +836,8 @@ def wargame_reset_sim():
         _wg_engine = WargameEngine(units)
         _wg_register_engine(_wg_engine)
     _wg_last_plan = {}
-    fig, status, log_text = wargame_refresh()
-    return "▶ 시뮬레이션 시작", fig, status, log_text
+    fig, damage_fig, status, log_text = wargame_refresh()
+    return "▶ 시뮬레이션 시작", fig, damage_fig, status, log_text
 
 
 def wargame_set_timescale(scale: float):
@@ -722,25 +874,25 @@ def wargame_request_recon_plan(history: List = None):
     eng = _wg_ensure_engine()
     if eng is None:
         history.append(("🔍 정찰 임무계획 요청", "워게임 초기화 실패"))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     try:
         from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
     except ImportError as e:
         history.append(("🔍 정찰 임무계획 요청", f"정찰 도구 로드 실패: {e}"))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     assessment = assess_recon_need()
     opfor_sum = assessment.get("opfor_summary", {})
     if assessment.get("recommendation") == "공격 즉시 가능":
         msg = (f"**✅ 모든 OPFOR 위치가 이미 탐지되어 정찰이 불필요합니다.**\n\n탐지된 적군: {opfor_sum.get('detected', 0)}개\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하여 공격을 시작하세요.")
         history.append(("🔍 정찰 임무계획 요청", msg))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     if assessment.get("recommendation") == "적 없음":
         history.append(("🔍 정찰 임무계획 요청", "탐지된 적군이 없습니다."))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     agent = _get_agent()
     agent_label = "BattlefieldAgent" if agent else "규칙 기반"
     try:
@@ -844,16 +996,16 @@ def wargame_request_recon_plan(history: List = None):
                 elif recon_result.get("status") == "no_recon_units":
                     msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
                     history[-1] = (history[-1][0], msg)
-                    fig, status, log_text = wargame_refresh()
-                    return history, "", fig, status, log_text, ""
+                    fig, damage_fig, status, log_text = wargame_refresh()
+                    return history, "", fig, damage_fig, status, log_text, ""
         else:
             agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
             recon_result = recommend_recon_routes()
             if recon_result.get("status") == "no_recon_units":
                 msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
                 history[-1] = (history[-1][0], msg)
-                fig, status, log_text = wargame_refresh()
-                return history, "", fig, status, log_text, ""
+                fig, damage_fig, status, log_text = wargame_refresh()
+                return history, "", fig, damage_fig, status, log_text, ""
             if recon_result.get("status") == "success":
                 plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
                 eng.apply_mission_plan(plan_dict)
