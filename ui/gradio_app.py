@@ -355,23 +355,33 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
     별도 백그라운드 스레드에서 실행됨.
     """
     eng = _wg_engine
-    agent = _get_agent()
-    if eng is None or _wg_planner is None:
+    if eng is None:
+        logger.warning("[자동임무계획] 엔진 없음 — 건너뜀")
         return
 
     logger.info(f"[자동임무계획] 신규 탐지: {enemy_id}({unit_type}) @ "
-                f"({x/1000:.1f}km, {y/1000:.1f}km) → 공격임무계획 수립 시작")
+                f"({x/1000:.1f}km, {y/1000:.1f}km) — running={eng.running}")
 
-    # 시뮬레이션 일시정지
+    # 시뮬레이션 즉시 일시정지 (planner/agent 상태와 무관하게 먼저 수행)
     was_running = eng.running
     if was_running:
         eng.stop()
-        logger.info("[자동임무계획] 시뮬레이션 일시정지")
+        logger.info(f"[자동임무계획] 시뮬레이션 일시정지 완료 — running={eng.running}")
         try:
             from tools.wargame_mission_tool import set_resume_on_apply
             set_resume_on_apply(True)
         except Exception:
             pass
+    else:
+        logger.info("[자동임무계획] 시뮬레이션이 이미 정지 상태")
+
+    if _wg_planner is None:
+        logger.warning("[자동임무계획] planner 없음 → 재개")
+        if was_running:
+            eng.start()
+        return
+
+    agent = _get_agent()
 
     try:
         state = eng.get_state()
