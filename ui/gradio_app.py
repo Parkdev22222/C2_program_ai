@@ -563,117 +563,100 @@ def _build_damage_chart(state: dict) -> Optional[go.Figure]:
     game_time = state.get("game_time_str", "00:00:00")
 
     blufor_units = [u for u in units if u["side"] == "BLUFOR"]
-    opfor_units = [u for u in units if u["side"] == "OPFOR"]
-
-    all_units = blufor_units + opfor_units
-    if not all_units:
+    opfor_units  = [u for u in units if u["side"] == "OPFOR"]
+    if not blufor_units and not opfor_units:
         return None
 
-    x_labels = [u["id"] for u in all_units]
-    sides = [u["side"] for u in all_units]
+    def _cp(u):
+        return u["combat_power"] if u["status"] != "destroyed" else 0.0
 
-    cp_values = []
-    damage_values = []
-    cp_colors = []
-    damage_colors = []
+    bl_ids  = [u["id"] for u in blufor_units]
+    bl_cp   = [_cp(u) for u in blufor_units]
+    bl_dmg  = [100.0 - c for c in bl_cp]
 
-    for u in all_units:
-        cp = u["combat_power"] if u["status"] != "destroyed" else 0.0
-        damage = 100.0 - cp
-        cp_values.append(cp)
-        damage_values.append(damage)
-        if u["side"] == "BLUFOR":
-            cp_colors.append("#4CAF50")
-            damage_colors.append("#1B5E20")
-        else:
-            cp_colors.append("#F44336")
-            damage_colors.append("#B71C1C")
+    op_ids  = [u["id"] for u in opfor_units]
+    op_cp   = [_cp(u) for u in opfor_units]
+    op_dmg  = [100.0 - c for c in op_cp]
 
     fig = go.Figure()
 
-    # Bottom bars: remaining combat power
+    # BLUFOR 잔여 전투력 (초록)
     fig.add_trace(go.Bar(
-        x=x_labels,
-        y=cp_values,
-        name="잔여 전투력",
-        marker_color=cp_colors,
+        x=bl_ids, y=bl_cp,
+        name="BLUFOR 전투력",
+        marker=dict(color="#4CAF50"),
         showlegend=False,
-        hovertemplate="%{x}: 전투력 %{y:.0f}%<extra></extra>",
+        hovertemplate="%{x}: 잔여전력 %{y:.0f}%<extra></extra>",
     ))
-
-    # Top bars: damage taken
+    # BLUFOR 피해량 (짙은 초록)
     fig.add_trace(go.Bar(
-        x=x_labels,
-        y=damage_values,
-        name="피해",
-        marker_color=damage_colors,
+        x=bl_ids, y=bl_dmg,
+        name="BLUFOR 피해",
+        marker=dict(color="#1B5E20"),
+        showlegend=False,
+        hovertemplate="%{x}: 피해 %{y:.0f}%<extra></extra>",
+    ))
+    # OPFOR 잔여 전투력 (빨강)
+    fig.add_trace(go.Bar(
+        x=op_ids, y=op_cp,
+        name="OPFOR 전투력",
+        marker=dict(color="#F44336"),
+        showlegend=False,
+        hovertemplate="%{x}: 잔여전력 %{y:.0f}%<extra></extra>",
+    ))
+    # OPFOR 피해량 (짙은 빨강)
+    fig.add_trace(go.Bar(
+        x=op_ids, y=op_dmg,
+        name="OPFOR 피해",
+        marker=dict(color="#B71C1C"),
         showlegend=False,
         hovertemplate="%{x}: 피해 %{y:.0f}%<extra></extra>",
     ))
 
-    # Annotations: CP labels at top of each bar
+    # 각 부대 상단 CP 레이블
     annotations = []
-    for i, u in enumerate(all_units):
-        cp = cp_values[i]
+    for uid, cp in zip(bl_ids, bl_cp):
         annotations.append(dict(
-            x=u["id"],
-            y=102,
+            x=uid, y=102,
             text=f"{cp:.0f}%",
             showarrow=False,
             font=dict(color="#cccccc", size=9),
-            xanchor="center",
-            yanchor="bottom",
+            xanchor="center", yanchor="bottom",
+        ))
+    for uid, cp in zip(op_ids, op_cp):
+        annotations.append(dict(
+            x=uid, y=102,
+            text=f"{cp:.0f}%",
+            showarrow=False,
+            font=dict(color="#cccccc", size=9),
+            xanchor="center", yanchor="bottom",
         ))
 
-    # Average CP annotations for BLUFOR and OPFOR
-    if blufor_units:
-        blufor_cps = [cp_values[i] for i, u in enumerate(all_units) if u["side"] == "BLUFOR"]
-        avg_blufor = sum(blufor_cps) / len(blufor_cps)
+    # 평균 CP 박스 주석
+    if bl_cp:
+        avg_bl = sum(bl_cp) / len(bl_cp)
         annotations.append(dict(
-            x=0.18,
-            y=1.12,
-            xref="paper",
-            yref="paper",
-            text=f"BLUFOR 평균 CP: {avg_blufor:.0f}%",
+            x=0.18, y=1.12, xref="paper", yref="paper",
+            text=f"BLUFOR 평균 CP: {avg_bl:.0f}%",
             showarrow=False,
             font=dict(color="#4FC3F7", size=10),
             bgcolor="rgba(13,17,23,0.7)",
-            bordercolor="#4FC3F7",
-            borderwidth=1,
+            bordercolor="#4FC3F7", borderwidth=1,
             xanchor="center",
         ))
-
-    if opfor_units:
-        opfor_cps = [cp_values[i] for i, u in enumerate(all_units) if u["side"] == "OPFOR"]
-        avg_opfor = sum(opfor_cps) / len(opfor_cps)
+    if op_cp:
+        avg_op = sum(op_cp) / len(op_cp)
         annotations.append(dict(
-            x=0.82,
-            y=1.12,
-            xref="paper",
-            yref="paper",
-            text=f"OPFOR 평균 CP: {avg_opfor:.0f}%",
+            x=0.82, y=1.12, xref="paper", yref="paper",
+            text=f"OPFOR 평균 CP: {avg_op:.0f}%",
             showarrow=False,
             font=dict(color="#EF5350", size=10),
             bgcolor="rgba(13,17,23,0.7)",
-            bordercolor="#EF5350",
-            borderwidth=1,
+            bordercolor="#EF5350", borderwidth=1,
             xanchor="center",
         ))
 
-    # Vertical separator between BLUFOR and OPFOR
     shapes = []
-    if blufor_units and opfor_units:
-        sep_x = len(blufor_units) - 0.5
-        shapes.append(dict(
-            type="line",
-            x0=sep_x,
-            x1=sep_x,
-            y0=0,
-            y1=100,
-            line=dict(color="#555555", width=1.5, dash="dot"),
-            xref="x",
-            yref="y",
-        ))
 
     fig.update_layout(
         barmode="stack",
