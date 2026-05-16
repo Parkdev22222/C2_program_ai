@@ -1012,8 +1012,8 @@ def wargame_request_recon_plan(history: List = None):
                 applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
         if applied_plan is None:
             history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
-            fig, status, log_text = wargame_refresh()
-            return history, "", fig, status, log_text, ""
+            fig, damage_fig, status, log_text = wargame_refresh()
+            return history, "", fig, damage_fig, status, log_text, ""
         _wg_last_plan = applied_plan
         plans = applied_plan.get("mission_plans", [])
         plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
@@ -1025,8 +1025,8 @@ def wargame_request_recon_plan(history: List = None):
         result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
         history[-1] = (history[-1][0], result_msg)
         _save_ui_state(wg_history=history, plan_box=plan_text)
-        fig, status, log_text = wargame_refresh()
-        return history, plan_text, fig, status, log_text
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, plan_text, fig, damage_fig, status, log_text
     finally:
         # 에이전트가 apply_wargame_mission_plan을 호출하지 않은 경우 안전망
         if was_running and not eng.running:
@@ -1073,12 +1073,12 @@ def wargame_request_attack_plan(history: List = None):
     eng = _wg_ensure_engine()
     if eng is None:
         history.append(("⚔️ 공격 임무계획 요청", "워게임 초기화 실패"))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     if _wg_planner is None:
         history.append(("⚔️ 공격 임무계획 요청", "Planner 없음"))
-        fig, status, log_text = wargame_refresh()
-        return history, "", fig, status, log_text, ""
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
     warning_msg = ""
     try:
         from tools.wargame_recon_tool import assess_recon_need
@@ -1212,8 +1212,8 @@ def wargame_request_attack_plan(history: List = None):
         result_msg += f"\n\n```json\n{plan_text}\n```"
         history[-1] = (history[-1][0], result_msg)
         _save_ui_state(wg_history=history, plan_box=plan_text)
-        fig, status, log_text = wargame_refresh()
-        return history, plan_text, fig, status, log_text
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, plan_text, fig, damage_fig, status, log_text
     finally:
         # 에이전트가 apply_wargame_mission_plan을 호출하지 않은 경우 안전망
         if was_running and not eng.running:
@@ -1317,7 +1317,7 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
 
 def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
     global _wg_last_opfor_ai_count
-    fig, status, log_text = wargame_refresh()
+    fig, damage_fig, status, log_text = wargame_refresh()
     chatbot_history = list(chatbot_history or [])
     eng = _wg_ensure_engine()
     if eng is not None:
@@ -1328,7 +1328,7 @@ def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
             alert_msg = _build_opfor_alert(state)
             chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
             _save_chat_history(chatbot_history)
-    return fig, status, log_text, chatbot_history
+    return fig, damage_fig, status, log_text, chatbot_history
 
 
 def clear_chat_history() -> Tuple[List, str]:
@@ -1574,6 +1574,8 @@ def create_app(agent=None) -> gr.Blocks:
                             wg_chat_send_btn = gr.Button("전송", variant="primary", scale=1)
                         wg_chat_clear_btn = gr.Button("대화 초기화", variant="secondary", size="sm")
                 with gr.Row():
+                    wg_damage_chart = gr.Plot(label="피해 현황", show_label=False, elem_id="wg_damage_chart")
+                with gr.Row():
                     with gr.Column(scale=1):
                         gr.Markdown("### 시뮬레이션 제어")
                         wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
@@ -1633,12 +1635,12 @@ def create_app(agent=None) -> gr.Blocks:
         clear_btn.click(fn=clear_chat_history, outputs=[chatbot, clear_status])
         memory_status_btn.click(fn=get_situation_memory_status, outputs=[memory_status_box])
         if _WARGAME_OK:
-            _WG_OUTPUTS = [wg_map, wg_status, wg_event_log]
-            wg_startstop_btn.click(fn=wargame_start_pause, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
-            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log])
+            _WG_OUTPUTS = [wg_map, wg_damage_chart, wg_status, wg_event_log]
+            wg_startstop_btn.click(fn=wargame_start_pause, outputs=[wg_startstop_btn, wg_map, wg_damage_chart, wg_status, wg_event_log])
+            wg_reset_btn.click(fn=wargame_reset_sim, outputs=[wg_startstop_btn, wg_map, wg_damage_chart, wg_status, wg_event_log])
             wg_apply_scale_btn.click(fn=wargame_set_timescale, inputs=[wg_timescale], outputs=_WG_OUTPUTS)
-            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
-            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_status, wg_event_log])
+            wg_recon_btn.click(fn=wargame_request_recon_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_damage_chart, wg_status, wg_event_log])
+            wg_attack_btn.click(fn=wargame_request_attack_plan, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_plan_box, wg_map, wg_damage_chart, wg_status, wg_event_log])
             wg_eval_btn.click(fn=wargame_evaluate_and_learn, inputs=[wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_send_btn.click(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
             wg_chat_input.submit(fn=wg_chat_send, inputs=[wg_chat_input, wg_chatbot], outputs=[wg_chatbot, wg_chat_input])
@@ -1646,8 +1648,8 @@ def create_app(agent=None) -> gr.Blocks:
                 fn=lambda: (_save_chat_history([]) or [], ""),
                 outputs=[wg_chatbot, wg_chat_input]
             )
-            wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_status, wg_event_log, wg_chatbot])
-            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_status, wg_event_log, wg_chatbot, wg_plan_box, wg_timescale])
+            wg_timer.tick(fn=wargame_refresh_with_alert, inputs=[wg_chatbot], outputs=[wg_map, wg_damage_chart, wg_status, wg_event_log, wg_chatbot])
+            app.load(fn=wargame_on_load, outputs=[wg_startstop_btn, wg_map, wg_damage_chart, wg_status, wg_event_log, wg_chatbot, wg_plan_box, wg_timescale])
         harness_start_btn.click(
             fn=harness_start_training,
             inputs=[harness_n_episodes, harness_replan_interval, harness_chatbot],
