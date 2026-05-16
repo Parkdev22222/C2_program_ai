@@ -35,12 +35,12 @@ def get_wargame_situation() -> dict:
             "game_time": str,
             "tick": int,
             "blufor_units": [
-                { "unit_id", "unit_type", "x_km", "y_km",
+                { "unit_id", "unit_type", "x_m", "y_m",
                   "combat_power_pct", "status", "current_action" }, ...
             ],
             "opfor_intel": [
                 { "unit_id", "detection_status",
-                  "known_x_km", "known_y_km",
+                  "known_x_m", "known_y_m",
                   "unit_type",       # 탐지 전: "미확인"
                   "combat_power",    # 탐지 전: null
                   "detected_by" }, ...
@@ -62,8 +62,8 @@ def get_wargame_situation() -> dict:
             {
                 "unit_id":         u["id"],
                 "unit_type":       u.get("unit_type", ""),
-                "x_km":            round(u["x"] / 1000, 2),
-                "y_km":            round(u["y"] / 1000, 2),
+                "x_m":             int(u["x"]),
+                "y_m":             int(u["y"]),
                 "combat_power_pct": round(u["combat_power"], 1),
                 "status":          u["status"],
                 "current_action":  u.get("current_action", "hold"),
@@ -77,8 +77,8 @@ def get_wargame_situation() -> dict:
             {
                 "unit_id":          e["unit_id"],
                 "detection_status": e["status"],
-                "known_x_km":       round(e["known_x"] / 1000, 2),
-                "known_y_km":       round(e["known_y"] / 1000, 2),
+                "known_x_m":      int(e["known_x"]),
+                "known_y_m":      int(e["known_y"]),
                 "unit_type":        e["unit_type"] or "미확인",
                 "combat_power":     e["combat_power"],
                 "detected_by":      e["detected_by"],
@@ -131,8 +131,8 @@ def get_intelligence_report(side: str = "BLUFOR") -> dict:
                 {
                     "unit_id": str,
                     "status": "detected" | "approximate" | "lost",
-                    "known_x_km": float,
-                    "known_y_km": float,
+                    "known_x_m": int,
+                    "known_y_m": int,
                     "unit_type": str,           # 탐지 전: "미확인"
                     "combat_power": float | None,  # 탐지 전: null
                     "detected_by": str | None,
@@ -162,8 +162,8 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
     Returns:
         {
             "status": "success" | "not_found" | "engine_not_ready",
-            "unit": { unit_id, side, unit_type, x_km, y_km, combat_power_pct, status, current_action },
-            "history": [ {tick, game_time, x_km, y_km, combat_power_pct, status}, ... ]
+            "unit": { unit_id, side, unit_type, x_m, y_m, combat_power_pct, status, current_action },
+            "history": [ {tick, game_time, x_m, y_m, combat_power_pct, status}, ... ]
         }
     """
     if _wargame_engine is None:
@@ -184,8 +184,8 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
             "unit_id": unit_row.get("unit_id", unit_row.get("id", "")),
             "side": unit_row["side"],
             "unit_type": unit_row.get("unit_type", ""),
-            "x_km": round(unit_row["x"] / 1000, 2),
-            "y_km": round(unit_row["y"] / 1000, 2),
+            "x_m": int(unit_row["x"]),
+            "y_m": int(unit_row["y"]),
             "combat_power_pct": round(unit_row["combat_power"], 1),
             "status": unit_row["status"],
             "current_action": unit_row.get("current_action", "hold"),
@@ -196,8 +196,8 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
             {
                 "tick": r["tick"],
                 "game_time": round(r["game_time"], 1),
-                "x_km": round(r["x"] / 1000, 2),
-                "y_km": round(r["y"] / 1000, 2),
+                "x_m": int(r["x"]),
+                "y_m": int(r["y"]),
                 "combat_power_pct": round(r["combat_power"], 1),
                 "status": r["status"],
             }

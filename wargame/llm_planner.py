@@ -69,7 +69,7 @@ def _sample_elevation_map(state: dict) -> str:
         elev  = _terrain.elevation(u["x"], u["y"])
         cover = _terrain.cover_factor(u["x"], u["y"])
         lines.append(
-            f"{u['id']}({u['x']/1000:.0f}k,{u['y']/1000:.0f}k) "
+            f"{u['id']}({int(u['x'])},{int(u['y'])}) "
             f"→{elev:.0f}m 엄폐{cover:.2f}"
         )
 
@@ -87,7 +87,7 @@ def _sample_elevation_map(state: dict) -> str:
                 ys = cy - span + r * span
                 xs = max(0, min(29999, xs))
                 ys = max(0, min(29999, ys))
-                grid.append(f"({xs/1000:.0f}k,{ys/1000:.0f}k)={_terrain.elevation(xs,ys):.0f}m")
+                grid.append(f"({int(xs)},{int(ys)})={_terrain.elevation(xs,ys):.0f}m")
         lines.append("접촉구역:" + " ".join(grid))
 
         # TOP2 고지
@@ -99,7 +99,7 @@ def _sample_elevation_map(state: dict) -> str:
                 high.append((_terrain.elevation(xs, ys), xs, ys))
         high.sort(reverse=True)
         lines.append("고지TOP2:" + " ".join(
-            f"({xs/1000:.0f}k,{ys/1000:.0f}k)={e:.0f}m" for e, xs, ys in high[:2]
+            f"({int(xs)},{int(ys)})={e:.0f}m" for e, xs, ys in high[:2]
         ))
 
     return "\n".join(lines)
@@ -148,19 +148,20 @@ def build_mission_query(state: dict) -> str:
 6. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
    → 워게임 즉시 적용
 
-[지형고도] 좌표(m),x=동쪽,y=북쪽,범위0~30000,고도우위±40%
+[지형고도] 좌표=미터(m) 정수, x=동쪽, y=북쪽, 범위 0~30000
+⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)
 {elev_section}
 
 [출력 형식 예시] ← 형식만 참고. 좌표·ID는 placeholder이므로 절대 그대로 사용 금지
 {_FEW_SHOT_EXAMPLES}
 
 [공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
-[규칙] 좌표m정수,WP 3~5개,CP<30%→defend/withdraw,고지선점·측방기동 고려,공중지원은 필요 시만 사용
+[규칙] 좌표는 반드시 미터(m) 정수 (9000이지 9가 아님), WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
 최종 JSON 출력(설명금지):
 ```json
 {{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
-"mission_plans":[{{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[실제x,실제y]],"objective":"목표"}}],
-"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[실제tx,실제ty],"radius":반경m,"delay":지연초}}]}}
+"mission_plans":[{{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[미터정수x,미터정수y]],"objective":"목표"}}],
+"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[미터정수tx,미터정수ty],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""
     return query
 
@@ -265,10 +266,10 @@ class MissionPlanner:
                      round(u["y"] + (op_cy - u["y"]) * 0.70 + offset * 0.6)],
                     [round(op_cx + offset * 0.5), round(op_cy)],
                 ],
-                "objective": f"OPFOR 격멸 ({op_cx/1000:.1f}km,{op_cy/1000:.1f}km)"
+                "objective": f"OPFOR 격멸 ({int(op_cx)},{int(op_cy)})"
             })
 
         return {
-            "reasoning": f"[규칙 기반] OPFOR 집결점 ({op_cx/1000:.1f}km, {op_cy/1000:.1f}km) 공격.",
+            "reasoning": f"[규칙 기반] OPFOR 집결점 ({int(op_cx)},{int(op_cy)}) 공격.",
             "mission_plans": plans,
         }

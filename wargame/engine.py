@@ -498,8 +498,8 @@ class WargameEngine:
                     {
                         "unit_id":            e["unit_id"],
                         "status":             e["status"],
-                        "known_x_km":         round(e["known_x"] / 1000, 2),
-                        "known_y_km":         round(e["known_y"] / 1000, 2),
+                        "known_x_m":          int(e["known_x"]),
+                        "known_y_m":          int(e["known_y"]),
                         "unit_type":          e["unit_type"] or "미확인",
                         "combat_power":       e["combat_power"],
                         "detected_by":        e["detected_by"],

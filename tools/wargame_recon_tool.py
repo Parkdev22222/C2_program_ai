@@ -241,10 +241,10 @@ def assess_recon_need() -> dict:
                 "lost": int
             },
             "undetected_targets": [
-                {"unit_id", "status", "known_x_km", "known_y_km"}, ...
+                {"unit_id", "status", "known_x_m", "known_y_m"}, ...
             ],
             "available_recon_units": [
-                {"unit_id", "x_km", "y_km", "combat_power_pct"}, ...
+                {"unit_id", "x_m", "y_m", "combat_power_pct"}, ...
             ]
         }
     """
@@ -301,8 +301,8 @@ def assess_recon_need() -> dict:
                 {
                     "unit_id":    e["unit_id"],
                     "status":     e["status"],
-                    "known_x_km": round(e["known_x"] / 1000, 2),
-                    "known_y_km": round(e["known_y"] / 1000, 2),
+                    "known_x_m": int(e["known_x"]),
+                    "known_y_m": int(e["known_y"]),
                 }
                 for e in approx + lost_list
             ],
@@ -310,8 +310,8 @@ def assess_recon_need() -> dict:
                 {
                     "unit_id":          u["id"],
                     "status":           u["status"],
-                    "x_km":             round(u["x"] / 1000, 2),
-                    "y_km":             round(u["y"] / 1000, 2),
+                    "x_m":              int(u["x"]),
+                    "y_m":              int(u["y"]),
                     "combat_power_pct": round(u["combat_power"], 1),
                 }
                 for u in recon_units

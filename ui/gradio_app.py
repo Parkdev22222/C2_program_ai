@@ -403,7 +403,8 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
             + f"\n\n⚠️ [자동 탐지 트리거] {enemy_id}({unit_type}) 새로 탐지 "
             f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
             f"위 위치는 참고용이며, 실제 임무계획은 반드시 아래 툴 호출 결과를 기반으로 수립하라.\n"
-            f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지.\n\n"
+            f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지.\n"
+            f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
             f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
             f"1. get_wargame_situation()\n"
             f"   → 실제 BLUFOR·OPFOR 부대 ID·위치·전투력 조회 후 situation 변수에 저장\n"
@@ -947,7 +948,8 @@ def wargame_request_attack_plan(history: List = None):
     base_query = build_mission_query(state)
     attack_suffix = (
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
-        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n\n"
+        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
+        f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
         f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
         f"1. get_wargame_situation()\n"
         f"   → 실제 BLUFOR·OPFOR 부대 ID·위치·전투력 조회 → situation 변수에 저장\n"

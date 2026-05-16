@@ -126,7 +126,7 @@ def _score_attack_position(
     detail = {
         "elevation_m":         round(atk_elev, 1),
         "cover":               round(atk_cover, 3),
-        "distance_km":         round(dist / 1000, 2),
+        "distance_m":          int(dist),
         "elevation_advantage": round(elev_adv, 2),
         "engagement_factor":   round(ef, 2),
         "los_quality":         round(los, 2),
@@ -156,7 +156,7 @@ def _recommend_attack_methods(
     elev_adv = best_pos.get("elevation_advantage", 1.0)
     ef       = best_pos.get("engagement_factor", 0.0)
     atk_cov  = best_pos.get("cover", 0.0)
-    dist_km  = best_pos.get("distance_km", 5.0)
+    dist_m   = best_pos.get("distance_m", 5000)
 
     # ── 직접 지상 공격 ────────────────────────────────────────────
     if ef >= 0.4:
@@ -188,7 +188,7 @@ def _recommend_attack_methods(
 
     # ── 포병/자주포 간접 사격 ─────────────────────────────────────
     has_artillery = any(u.get("unit_type") == "자주포" for u in available_blufor)
-    if target_cover <= 0.30 or (ef < 0.3 and dist_km <= _ARTILLERY_RANGE / 1000):
+    if target_cover <= 0.30 or (ef < 0.3 and dist_m <= _ARTILLERY_RANGE):
         arty_priority = "1순위" if target_cover <= 0.15 and not has_artillery else "2순위"
         methods.append({
             "method": "포병 간접 사격",
@@ -196,7 +196,7 @@ def _recommend_attack_methods(
             "reason": (
                 f"적 엄폐 낮음({target_cover:.2f}) — 면제압 효과 극대화"
                 if target_cover <= 0.25
-                else f"직사 불리 거리({dist_km:.1f}km) — 간접화력으로 제압 후 기동"
+                else f"직사 불리 거리({dist_m:.0f}m) — 간접화력으로 제압 후 기동"
             ),
         })
 
@@ -273,8 +273,8 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
                     "target": {
                         "unit_id": str,
                         "unit_type": str,
-                        "x_km": float,
-                        "y_km": float,
+                        "x_m": int,
+                        "y_m": int,
                         "elevation_m": float,
                         "cover": float,
                         "combat_power": float | None,
@@ -283,11 +283,11 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
                     "optimal_positions": [
                         {
                             "rank": int,
-                            "x_km": float,
-                            "y_km": float,
+                            "x_m": int,
+                            "y_m": int,
                             "elevation_m": float,
                             "cover": float,
-                            "distance_km": float,
+                            "distance_m": int,
                             "elevation_advantage": float,
                             "engagement_factor": float,
                             "los_quality": float,
@@ -391,8 +391,8 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
                         continue
 
                     candidates.append({
-                        "x_km":  round(cx / 1000, 2),
-                        "y_km":  round(cy / 1000, 2),
+                        "x_m":   int(cx),
+                        "y_m":   int(cy),
                         "score": round(score, 1),
                         **detail,
                     })
@@ -429,7 +429,7 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
             )
             summary = (
                 f"{target_entry['unit_id']}({target_unit_type}) 공략: "
-                f"최적 위치 ({best['x_km']}km, {best['y_km']}km) "
+                f"최적 위치 ({best['x_m']}m, {best['y_m']}m) "
                 f"고도{best['elevation_m']:.0f}m / {elev_note} / "
                 f"권고 수단: {best_method} / 종합점수 {best['score']:.0f}점"
             )
@@ -438,8 +438,8 @@ def get_optimal_attack_positions(top_n: int = 3) -> dict:
                 "target": {
                     "unit_id":         target_entry["unit_id"],
                     "unit_type":       target_unit_type,
-                    "x_km":            round(ox / 1000, 2),
-                    "y_km":            round(oy / 1000, 2),
+                    "x_m":             int(ox),
+                    "y_m":             int(oy),
                     "elevation_m":     round(target_elev, 1),
                     "cover":           round(target_cover, 3),
                     "combat_power":    target_entry.get("combat_power"),
