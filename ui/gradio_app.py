@@ -532,15 +532,11 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"   → import json; opfor_routes_json = json.dumps(opfor_routes_result[\"predicted_routes\"])\n"
             f"4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)\n"
             f"   → 적 예상 경로 차단 보너스 반영 최적 공격 위치 추천 → attack_positions_result에 저장\n"
-            f"5. strategy_advisor_tool(\n"
-            f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. "
-            f"{strategy_hint}\",\n"
-            f"     additional_context=str(attack_positions_result)\n"
-            f"   ) → deep_advice에 저장\n"
-            f"6. attack_positions_result + deep_advice 종합 → 최종 JSON 생성\n"
+            f"   ⚠️ strategy_advisor_tool 호출 금지 (자동 재계획에서는 사용 안 함)\n"
+            f"5. attack_positions_result 기반으로 최종 JSON 생성\n"
             f"   (실제 부대 ID·좌표만 사용, detected OPFOR만 목표)\n"
             f"   재배정이 필요한 부대만 mission_plans에 포함 (기존 임무 유지 부대는 제외)\n"
-            f"7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)\n\n"
+            f"6. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)\n\n"
             f"⚠️ [공중지원·포격 목표 좌표 강제 규칙]\n"
             f"   air_support_plans 의 target 은 반드시 get_wargame_situation() 에서 조회한\n"
             f"   탐지된(detected) OPFOR 부대의 실제 x_m, y_m 값을 그대로 사용할 것.\n"
@@ -552,7 +548,16 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
         if agent is not None:
             try:
-                raw = agent.agent.run(full_query, reset=True)
+                import concurrent.futures as _cf
+                _AGENT_TIMEOUT = 180  # 자동 재계획 최대 대기 시간 (초)
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(agent.agent.run, full_query, True)
+                    try:
+                        raw = _fut.result(timeout=_AGENT_TIMEOUT)
+                    except _cf.TimeoutError:
+                        logger.warning(f"[자동임무계획] 에이전트 타임아웃 ({_AGENT_TIMEOUT}s) → 규칙 기반 폴백")
+                        _fut.cancel()
+                        raise RuntimeError("agent timeout")
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
                     try:
