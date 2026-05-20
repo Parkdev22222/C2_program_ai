@@ -564,6 +564,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                         raise RuntimeError("agent timeout")
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
+                    # 에이전트가 JSON을 반환한 경우 → 직접 적용
                     try:
                         eng.apply_mission_plan(plan)
                         if plan.get("air_support_plans"):
@@ -572,8 +573,12 @@ def _execute_auto_attack_plan(event_type: str, *args):
                                     f"— {len(plan['mission_plans'])}개 중대 재배정")
                     except Exception as _ae:
                         logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
+                elif (isinstance(raw, dict) and raw.get("status") == "success") or \
+                     (isinstance(raw, str) and '"status": "success"' in raw):
+                    # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
+                    logger.info("[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요")
                 else:
-                    logger.warning("[자동임무계획] JSON 파싱 실패 → 규칙 기반 폴백")
+                    logger.warning(f"[자동임무계획] JSON 파싱 실패 (raw={str(raw)[:120]}) → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
                     eng.apply_mission_plan(plan)
             except Exception as _e:
