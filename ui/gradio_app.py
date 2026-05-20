@@ -430,9 +430,28 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
     logger.info(f"[자동임무계획] {log_tag} — running={eng.running}")
 
-    # 시뮬레이션 즉시 일시정지 (planner/agent 상태와 무관하게 먼저 수행)
+    # 진행 중인 공중지원(pending/active)이 완료될 때까지 대기한 후 정지
+    # 직접사격·간접사격은 틱 내 즉시 처리되므로 대기 불필요
     was_running = eng.running
     if was_running:
+        import time as _time
+        _COMBAT_WAIT_MAX = 120.0   # 최대 2분 대기
+        _waited = 0.0
+        _wait_step = 0.5
+        while _waited < _COMBAT_WAIT_MAX:
+            try:
+                _air_ongoing = [
+                    a for a in eng.get_state().get("air_supports", [])
+                    if a.get("status") in ("pending", "active")
+                ]
+            except Exception:
+                _air_ongoing = []
+            if not _air_ongoing:
+                break
+            _time.sleep(_wait_step)
+            _waited += _wait_step
+        if _waited > 0:
+            logger.info(f"[자동임무계획] 공중지원 완료 대기 {_waited:.1f}s 후 일시정지")
         eng.stop()
         logger.info(f"[자동임무계획] 시뮬레이션 일시정지 완료 — running={eng.running}")
         try:
