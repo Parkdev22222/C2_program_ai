@@ -555,7 +555,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 import concurrent.futures as _cf
                 _AGENT_TIMEOUT = 900  # 자동 재계획 최대 대기 시간 (초)
                 with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-                    _fut = _ex.submit(agent.agent.run, full_query, True)
+                    _fut = _ex.submit(lambda: agent.agent.run(full_query, reset=True))
                     try:
                         raw = _fut.result(timeout=_AGENT_TIMEOUT)
                     except _cf.TimeoutError:
