@@ -525,7 +525,12 @@ def _execute_auto_attack_plan(event_type: str, *args):
         learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
         base_query = build_mission_query(state)
         full_query = (
-            base_query
+            f"⛔ [최우선 지시 — 반드시 준수]\n"
+            f"1. 아래 툴 호출 순서를 완전히 수행하기 전에 절대 final_answer()를 호출하지 말 것.\n"
+            f"2. 정찰임무계획(recon) 출력 금지 — 이 쿼리는 공격임무계획(attack/defend/flank/withdraw/hold) 전용.\n"
+            f"3. recommend_recon_routes, recon_advisor_tool 호출 금지.\n"
+            f"4. 반드시 get_wargame_situation() → assess_recon_need() → predict_opfor_routes() → get_optimal_attack_positions() → strategy_advisor_tool() → apply_wargame_mission_plan() 순서로 툴을 호출하라.\n\n"
+            + base_query
             + f"\n\n{trigger_desc}\n"
             f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
