@@ -1319,6 +1319,9 @@ class WargameEngine:
                 # 신규 임무 발령 후 30틱 이내: AI 개입 차단
                 if u.mission_lock_ticks > 0:
                     continue
+                # LLM 임무 수행 중 (웨이포인트 남음): AI 개입 차단 (경로 덮어쓰기 방지)
+                if u.id in self._blufor_llm_units and u.waypoints:
+                    continue
                 # LLM 미지정 부대 + CP 충분 → 자율 행동 유지, AI 불필요
                 if u.id not in self._blufor_llm_units and u.combat_power >= 30:
                     continue
