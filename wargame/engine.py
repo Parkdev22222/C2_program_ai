@@ -230,6 +230,15 @@ class WargameEngine:
         self.on_new_opfor_detection: Optional[Callable] = None
         self._auto_plan_triggered_ids: set = set()  # 이미 자동 임무계획 발동된 OPFOR ID
 
+        # BLUFOR 전투력 임계값 도달 자동 임무계획 훅
+        # callback(unit_id, unit_type, threshold_pct, current_cp)
+        # threshold_pct: 70 또는 30 (각 유닛×임계값 조합당 1회만 발동)
+        self.on_blufor_cp_threshold: Optional[Callable] = None
+        _CP_THRESHOLDS = [70.0, 30.0]
+        # {unit_id: set of already-fired threshold values}
+        self._blufor_cp_thresholds_fired: Dict[str, set] = {}
+        self._CP_THRESHOLDS: list = _CP_THRESHOLDS
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -706,6 +715,26 @@ class WargameEngine:
                 if secondary is not primary:
                     self._exchange_fire(attacker, secondary, dt_h, focus=False)
 
+    def _check_blufor_cp_threshold(self, unit: Unit, cp_before: float):
+        """BLUFOR 유닛의 CP가 임계값(70%, 30%)을 새로 통과했으면 콜백 발동."""
+        if unit.side != "BLUFOR" or self.on_blufor_cp_threshold is None:
+            return
+        if unit.id not in self._blufor_cp_thresholds_fired:
+            self._blufor_cp_thresholds_fired[unit.id] = set()
+        fired = self._blufor_cp_thresholds_fired[unit.id]
+        for thr in self._CP_THRESHOLDS:
+            if thr in fired:
+                continue
+            # cp_before > thr 이었는데 현재 <= thr 이면 임계값 통과
+            if cp_before > thr and unit.combat_power <= thr:
+                fired.add(thr)
+                try:
+                    self.on_blufor_cp_threshold(
+                        unit.id, unit.unit_type, thr, round(unit.combat_power, 1)
+                    )
+                except Exception as _cb_err:
+                    logger.error(f"on_blufor_cp_threshold 콜백 오류: {_cb_err}")
+
     def _exchange_fire(self, attacker: Unit, defender: Unit,
                        dt_h: float, focus: bool = True):
         dist = attacker.distance_to(defender)
@@ -765,7 +794,9 @@ class WargameEngine:
             * dt_h
         ) * random.uniform(0.7, 1.3)
 
+        _cp_before = defender.combat_power
         defender.combat_power = max(0.0, defender.combat_power - damage)
+        self._check_blufor_cp_threshold(defender, _cp_before)
 
         # 교전 발생 시 공격자 측 인텔리전스에 피탐지 즉시 반영
         # (실제로 교전 중인 적은 위치가 노출된 것이므로)
@@ -879,7 +910,9 @@ class WargameEngine:
                     * fp_mult
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
+                _cp_before_ind = enemy.combat_power
                 enemy.combat_power = max(0.0, enemy.combat_power - damage)
+                self._check_blufor_cp_threshold(enemy, _cp_before_ind)
                 # 간접사격 피탄 시 공격자 측 인텔리전스에 위치 노출 반영
                 ie = self._intelligence[spg.side].get(enemy.id)
                 if ie is not None and ie["status"] != "detected":
@@ -936,7 +969,9 @@ class WargameEngine:
                 # 직격 시 최소 30% 피해 보장: duration 전체 동안 누적 시 proximity 비례 30% 이상
                 min_damage = 30.0 * proximity * (1.0 - cover * 0.5) * (dt / air.duration)
                 damage = max(raw_damage, min_damage)
+                _cp_before_air = u.combat_power
                 u.combat_power = max(0.0, u.combat_power - damage)
+                self._check_blufor_cp_threshold(u, _cp_before_air)
                 if damage >= 3.0:
                     self.db.log_event(
                         self.tick, self.game_time, "AIR_STRIKE",

@@ -341,28 +341,69 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_register_engine(_wg_engine)
         # 자동 탐지 임무계획 콜백 등록
         _wg_engine.on_new_opfor_detection = _detection_enqueue
+        # BLUFOR 전투력 임계값 임무계획 콜백 등록
+        _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
     return _wg_engine
 
 
-# ── 자동 탐지 → 공격임무계획 수립 ────────────────────────────────
+# ── 자동 탐지 / 전투력 임계값 → 공격임무계획 수립 ──────────────────
+# 큐 이벤트 형식:
+#   ("detection", enemy_id, unit_type, x, y)
+#   ("cp_threshold", unit_id, unit_type, threshold_pct, current_cp)
 
 def _detection_enqueue(enemy_id: str, unit_type: str, x: float, y: float):
     """엔진 틱 스레드에서 호출 — 큐에만 넣고 즉시 반환."""
-    _detection_queue.put_nowait((enemy_id, unit_type, x, y))
+    _detection_queue.put_nowait(("detection", enemy_id, unit_type, x, y))
 
 
-def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float):
+def _cp_threshold_enqueue(unit_id: str, unit_type: str,
+                          threshold_pct: float, current_cp: float):
+    """BLUFOR CP 임계값 도달 시 엔진 틱 스레드에서 호출 — 큐에만 넣고 즉시 반환."""
+    _detection_queue.put_nowait(("cp_threshold", unit_id, unit_type,
+                                 threshold_pct, current_cp))
+
+
+def _execute_auto_attack_plan(event_type: str, *args):
     """
-    신규 OPFOR 탐지 시 자동으로 공격임무계획 수립 → 적용 → 시뮬레이션 재개.
+    신규 OPFOR 탐지 또는 BLUFOR CP 임계값 도달 시 공격임무계획 재수립.
     별도 백그라운드 스레드에서 실행됨.
+
+    event_type == "detection"    : args = (enemy_id, unit_type, x, y)
+    event_type == "cp_threshold" : args = (unit_id, unit_type, threshold_pct, current_cp)
     """
     eng = _wg_engine
     if eng is None:
         logger.warning("[자동임무계획] 엔진 없음 — 건너뜀")
         return
 
-    logger.info(f"[자동임무계획] 신규 탐지: {enemy_id}({unit_type}) @ "
-                f"({x/1000:.1f}km, {y/1000:.1f}km) — running={eng.running}")
+    if event_type == "detection":
+        enemy_id, unit_type, x, y = args
+        trigger_desc = (
+            f"⚠️ [자동 탐지 트리거] {enemy_id}({unit_type}) 새로 탐지 "
+            f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
+            f"위 위치는 참고용이며, 실제 임무계획은 반드시 아래 툴 호출 결과를 기반으로 수립하라.\n"
+            f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지."
+        )
+        strategy_hint = (
+            f"새로 탐지된 {enemy_id}와 기존 기동 중인 BLUFOR 부대 현황을 고려하여, "
+            f"어느 부대를 재배정하고 어느 부대는 기존 임무를 유지할지 조언해주세요."
+        )
+        log_tag = f"신규 탐지: {enemy_id}({unit_type}) @ ({x/1000:.1f}km, {y/1000:.1f}km)"
+    else:  # cp_threshold
+        unit_id, unit_type, threshold_pct, current_cp = args
+        trigger_desc = (
+            f"⚠️ [전투력 임계값 트리거] 아군 {unit_id}({unit_type})의 전투력이 "
+            f"{threshold_pct:.0f}% 이하로 저하 (현재 {current_cp:.1f}%)\n"
+            f"전술적 상황을 재평가하여 임무계획을 갱신하라."
+        )
+        strategy_hint = (
+            f"아군 {unit_id}({unit_type})의 전투력이 {threshold_pct:.0f}%로 저하되었습니다. "
+            f"해당 부대를 후퇴·방어로 전환할지, 지속 임무를 부여할지, "
+            f"다른 부대로 임무를 인계할지 전술적으로 판단하여 최적 임무계획을 조언해주세요."
+        )
+        log_tag = f"CP 임계값: {unit_id}({unit_type}) {threshold_pct:.0f}% 이하 (현재 {current_cp:.1f}%)"
+
+    logger.info(f"[자동임무계획] {log_tag} — running={eng.running}")
 
     # 시뮬레이션 즉시 일시정지 (planner/agent 상태와 무관하게 먼저 수행)
     was_running = eng.running
@@ -441,10 +482,7 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
         base_query = build_mission_query(state)
         full_query = (
             base_query
-            + f"\n\n⚠️ [자동 탐지 트리거] {enemy_id}({unit_type}) 새로 탐지 "
-            f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
-            f"위 위치는 참고용이며, 실제 임무계획은 반드시 아래 툴 호출 결과를 기반으로 수립하라.\n"
-            f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지.\n"
+            + f"\n\n{trigger_desc}\n"
             f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
             f"{current_mission_summary}\n\n"
@@ -454,7 +492,8 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
             f"   • 전술적 판단 기준:\n"
             f"     - 기존 목표 OPFOR가 격멸되었거나 위협이 낮으면 → 새 목표로 재배정 고려\n"
             f"     - 이미 교전 중이거나 목표까지 거리가 짧으면 → 기존 임무 유지 고려\n"
-            f"     - 새로 탐지된 OPFOR가 고위협·측방 노출이면 → 일부 부대 전환 고려\n"
+            f"     - 전투력이 임계값 이하로 저하된 부대는 후퇴·방어 전환 또는 임무 인계 고려\n"
+            f"     - 새로 탐지된 OPFOR 또는 손상 부대 상황에 따라 일부 부대 전환 고려\n"
             f"     - 병력 집중이 유리한 경우 여러 부대를 동일 목표에 재배정 가능\n\n"
             f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
             f"1. get_wargame_situation()\n"
@@ -470,8 +509,7 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
             f"   → 적 예상 경로 차단 보너스 반영 최적 공격 위치 추천 → attack_positions_result에 저장\n"
             f"5. strategy_advisor_tool(\n"
             f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. "
-            f"새로 탐지된 {enemy_id}와 기존 기동 중인 BLUFOR 부대 현황을 고려하여, "
-            f"어느 부대를 재배정하고 어느 부대는 기존 임무를 유지할지 조언해주세요.\",\n"
+            f"{strategy_hint}\",\n"
             f"     additional_context=str(attack_positions_result)\n"
             f"   ) → deep_advice에 저장\n"
             f"6. attack_positions_result + deep_advice 종합 → 최종 JSON 생성\n"
