@@ -20,7 +20,7 @@ except ImportError:
 try:
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-    from wargame import WargameEngine, setup_bn_vs_bn
+    from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
     from wargame.llm_planner import MissionPlanner
     from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
     _WARGAME_OK = True
@@ -1584,7 +1584,7 @@ def _init_harness_controller():
         return None
     try:
         from wargame.harness import HarnessController
-        from wargame import WargameEngine, setup_bn_vs_bn
+        from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
         from wargame.llm_planner import MissionPlanner
 
         def _engine_factory():

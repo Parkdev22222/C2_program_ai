@@ -122,7 +122,24 @@ def setup_bn_vs_bn() -> list:
     ]
 
 
-def setup_bn_vs_bn_random() -> list:
+def setup_bn_vs_bn_blufor_random() -> list:
+    """
+    BN vs BN — BLUFOR만 진영 구역 내 랜덤 초기 배치, OPFOR는 고정 학익진.
+
+    아군 부대 유형·전투력·색상은 고정, 좌표만 BLUFOR 구역 내에서 랜덤 생성.
+    같은 진영 부대 간 최소 이격 거리(_MIN_SEP)를 보장합니다.
+    """
+    base = setup_bn_vs_bn()
+    blufor_placed: list = []
+    for unit in base:
+        if unit.side == "BLUFOR":
+            x, y = _pick_pos(_BLUFOR_ZONE, blufor_placed)
+            blufor_placed.append((x, y))
+            unit.x = x
+            unit.y = y
+    return base
+
+
     """
     BN vs BN — 매 에피소드마다 진영별 구역 내 랜덤 초기 배치.
 
