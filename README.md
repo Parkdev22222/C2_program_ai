@@ -90,7 +90,7 @@ python main.py ui
 
 ## 에이전트 도구 목록
 
-총 **26개** 도구가 등록되어 있으며 역할별로 6개 그룹으로 분류됩니다.
+총 **33개** 도구가 등록되어 있으며 역할별로 8개 그룹으로 분류됩니다.
 
 ---
 
@@ -132,7 +132,8 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | `get_wargame_unit_detail(unit_id)` | unit_id: 부대 ID | 특정 부대의 상세 정보·최근 이동 이력 반환 |
 | `get_wargame_battle_log(n)` | n: 가져올 로그 수(기본 20) | 최근 전투 이벤트 로그 반환 (교전·기습·이동 기록) |
 
-> **FOW(Fog of War) 상태값:** `"detected"` (정확) / `"approximate"` (대략) / `"lost"` (탐지 소실)
+> **FOW(Fog of War) 상태값:** `"detected"` (정확) / `"approximate"` (대략) / `"lost"` (탐지 소실)  
+> **좌표 단위:** 모든 위치 값은 미터(m) 정수 반환 (예: `x_m: 9000`, `y_m: 8000`)
 
 ---
 
@@ -142,13 +143,11 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
-| `apply_wargame_mission_plan(plan_json)` | plan_json: 임무계획 JSON 문자열 | BLUFOR 임무계획(이동 경로·목표)을 워게임에 적용 |
-| `apply_wargame_air_support(support_json)` | support_json: 공중지원 계획 JSON | CAS(근접항공지원) 임무를 워게임 엔진에 적용 |
+| `apply_wargame_mission_plan(plan_json, dry_run)` | plan_json: 임무계획 JSON, dry_run: 검증만(기본 True) | BLUFOR 임무계획(이동 경로·목표·공중지원)을 워게임에 적용 |
+| `apply_wargame_air_support(support_json, dry_run)` | support_json: 공중지원 계획 JSON, dry_run: 검증만(기본 True) | CAS·타격·포병·헬기 지원 임무를 워게임 엔진에 적용 |
 | `get_wargame_engine_status()` | — | 워게임 엔진 상태(실행 중 여부, 시간 배율, 현재 틱 등) 반환 |
 
 #### 임무계획 2단계 승인 게이트
-
-`apply_wargame_mission_plan`은 사용자 승인 없이 실제 적용이 차단됩니다.
 
 ```
 1단계: apply_wargame_mission_plan(plan_json)          # dry_run=True (기본값)
@@ -157,6 +156,18 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 2단계: approve_mission_plan_tool(plan_id="plan_xxx")   # 사용자 승인
        → apply_wargame_mission_plan(plan_json, dry_run=False)  # 실제 적용
 ```
+
+#### 공중지원·포격 목표 좌표 강제 교정
+
+`apply_wargame_mission_plan` / `apply_wargame_air_support` 적용 시, `air_support_plans`의 `target` 좌표를 가장 가까운 **탐지된(detected) OPFOR 부대의 정확 좌표로 자동 교정**합니다.  
+탐지 OPFOR로부터 4 km 이상 벗어난 목표는 오류로 차단됩니다.
+
+| 공중지원 유형 | 반경 | 지연 | 특징 |
+|-------------|------|------|------|
+| `cas` | 1,500 m | 60 s | 근접항공지원 — 지속 제압 |
+| `strike` | 400 m | 120 s | 정밀타격 — 순간 고위력 |
+| `artillery` | 2,500 m | 30 s | 포병 광역 지속 |
+| `helicopter` | 1,000 m | 60 s | 공격헬기 |
 
 ---
 
@@ -172,20 +183,26 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 **정찰 경로 설계 원칙:**
 - 직선 접근 금지 → 60° 측방 우회 경유지 삽입
 - standoff 5 km 유지 (교전 범위 4 km 바깥)
-- 목표 주변 3개 관측 포인트 (고도·엄폐율 기준 최적화)
+- 목표 주변 관측 포인트 (고도·엄폐율 기준 최적화)
 - 관측 완료 후 안전 복귀점
 
-#### 5-2. 전술 권고 (`wargame_strategy_tool.py`)
+#### 5-2. 적군 예상 기동 경로 예측 (`wargame_opfor_routes_tool.py`) ★ 신규
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
-| `get_wargame_tactical_recommendation()` | — | 병종 상성 분석 + 지형 기반 최적 기동 경로 추천 |
+| `predict_opfor_routes()` | — | 탐지된 OPFOR 부대가 BLUFOR를 공격하기 위해 기동할 예상 경로 3가지(정면/우측우회/좌측우회)를 지형 기반으로 생성 |
+
+**반환 정보:**
+- 각 경로별 `waypoints`, `threat_level` (`high` / `medium` / `low`), `key_chokepoints`
+- `interdict_priority`: 여러 경로가 교차하는 차단 우선 지점 상위 6개
+
+**활용법:** 반환된 `predicted_routes`를 `json.dumps()`로 직렬화하여 `get_optimal_attack_positions(opfor_routes_json=...)`에 전달하면 경로 차단 보너스가 적용됩니다.
 
 #### 5-3. 최적 공격 위치·수단 추천 (`wargame_attack_advisor_tool.py`)
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
-| `get_optimal_attack_positions(top_n)` | top_n: 목표별 추천 위치 수(기본 3) | 탐지된 OPFOR 위치·고도·엄폐를 분석하여 최적 공격 위치 및 수단 추천 |
+| `get_optimal_attack_positions(top_n, opfor_routes_json)` | top_n: 목표별 추천 위치 수(기본 3), opfor_routes_json: `predict_opfor_routes()` 결과 JSON(선택) | 탐지된 OPFOR 위치·고도·엄폐를 분석하여 최적 공격 위치 및 수단 추천 |
 
 **위치 후보 생성:** 각 OPFOR 목표 기준 16방향 × 4거리(1.2/2.0/3.0/4.5 km) = 64개 후보
 
@@ -198,8 +215,15 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 | 적 노출도 | 20% | 적의 엄폐가 낮을수록 고점수 |
 | 교전 효율 | 15% | 거리별 교전 효율 (1.2 km 최적) |
 | 시선 품질 | 10% | 지형 차폐 없이 적을 관측 가능한 정도 |
+| 경로 차단 보너스 | 최대 +25점 | `opfor_routes_json` 제공 시, LOS + 사거리 내 예상 경로 경유지를 차단할 수 있는 위치에 가산 |
 
-#### 5-4. COA(행동 방책) 분석 (`coa_analysis_tool.py`)
+#### 5-4. 전술 권고 (`wargame_strategy_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_wargame_tactical_recommendation()` | — | 병종 상성 분석 + 지형 기반 최적 기동 경로 추천 |
+
+#### 5-5. COA(행동 방책) 분석 (`coa_analysis_tool.py`)
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
@@ -222,7 +246,7 @@ SAM3 기반으로 분석된 전장 영상 세그먼트를 검색하고 조회합
 
 **위험도 분류:** `low` (≥70) / `medium` (≥45) / `high` (<45)
 
-#### 5-5. 임무계획 검증·승인 도구 (`mission_plan_validator_tool.py`)
+#### 5-6. 임무계획 검증·승인 도구 (`mission_plan_validator_tool.py`)
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
@@ -241,16 +265,51 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 | `strategy_advisor_tool(query, additional_context)` | query: 전략/전술 질문, additional_context: 보완 정보(선택) | EXAONE4의 상황 분석 + 사용자 쿼리를 EXAONE Deep에 전달하여 전략·전술 권고 생성 |
 | `recon_advisor_tool(recon_routes_json, recon_summary)` | recon_routes_json: `recommend_recon_routes()`의 apply_json, recon_summary: 경로 요약(선택) | 제안된 정찰 경로를 EXAONE Deep에 전술 검토 요청 → 수정 의견 + 최종 확정 JSON 반환 |
 
-**정찰 임무계획 흐름 (케이스 A — 미탐지 OPFOR 존재):**
+---
+
+### 7. ARMA3 연동 도구
+
+실제 ARMA3 게임과 relay.py를 통해 실시간 전장 데이터를 주고받습니다.
+
+#### 7-1. ARMA3 전장 조회 (`arma3_query_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_arma3_situation()` | — | ARMA3 현재 전장 상황 요약 (미션 경과 시간, 진영별 병력 현황) 반환 |
+| `get_arma3_enemy_units(category)` | category: 유닛 카테고리 필터(선택) | ARMA3 수신 적군(OPFOR) 유닛 목록 반환 |
+| `get_arma3_friendly_units(category)` | category: 유닛 카테고리 필터(선택) | ARMA3 수신 아군(BLUFOR) 유닛 목록 반환 |
+| `get_arma3_units_by_category(category)` | category: 유닛 카테고리 | 특정 카테고리(전차, 헬기 등)의 전체 유닛(아군+적군) 반환 |
+
+#### 7-2. ARMA3 임무 명령 (`arma3_order_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `send_mission_orders_to_arma3(mission_orders_json)` | mission_orders_json: 임무 명령 JSON | 전술·전략 임무 경로를 ARMA3로 전송 — relay.py가 SQF 파일로 저장하여 게임 내 자동 실행 |
+| `get_arma3_order_status()` | — | 최근 ARMA3 임무 명령 목록과 전달 상태 반환 |
+
+---
+
+### 공격 임무계획 수립 흐름
+
 ```
-assess_recon_need()
-  → recommend_recon_routes()
-    → recon_advisor_tool()   ← EXAONE Deep 전술 검토
-      → apply_wargame_mission_plan(final_json)
+1. get_wargame_situation()          → 전장 상황 파악
+2. assess_recon_need()              → OPFOR 탐지 현황 확인
+3. predict_opfor_routes()           → 탐지된 OPFOR 예상 기동 경로 분석 (★ 신규)
+4. get_optimal_attack_positions(    → 경로 차단 보너스 반영 최적 공격 위치 추천
+     opfor_routes_json=json.dumps(routes["predicted_routes"])
+   )
+5. strategy_advisor_tool(...)       → EXAONE Deep 전술 검토
+6. 최종 JSON 생성 → apply_wargame_mission_plan(dry_run=False)
 ```
 
-> `strategy_advisor_tool`은 전략/전술 키워드 쿼리 시 자동 호출됩니다 (`agent_config.yaml`의 `strategy_keywords` 기준).  
-> `recon_advisor_tool`은 정찰 임무계획 흐름에서 `recommend_recon_routes()` 직후 호출됩니다.
+### 정찰 임무계획 수립 흐름
+
+```
+1. assess_recon_need()              → 정찰 필요 여부 평가
+2. recommend_recon_routes()         → 교전 회피 정찰 경로 생성
+3. recon_advisor_tool(...)          → EXAONE Deep 경로 전술 검토 (선택)
+4. apply_wargame_mission_plan(dry_run=False)
+```
 
 ---
 
@@ -262,10 +321,15 @@ assess_recon_need()
 | PDF RAG | `pdf_rag_tool.py` | 2 | 군사 교범 문서 검색 |
 | 워게임 조회 | `wargame_query_tool.py` | 4 | 시뮬레이터 실시간 전장 상황 |
 | 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 적용 |
-| 전술 분석 | `wargame_recon_tool.py` + `wargame_strategy_tool.py` + `wargame_attack_advisor_tool.py` | 4 | 정찰·전술 권고·최적 공격 위치 |
+| 정찰 임무 | `wargame_recon_tool.py` | 2 | 정찰 필요 평가 + 경로 생성 |
+| 적군 경로 예측 | `wargame_opfor_routes_tool.py` | 1 | OPFOR 예상 기동 경로 분석 ★ |
+| 최적 공격 위치 | `wargame_attack_advisor_tool.py` | 1 | 경로 차단 보너스 반영 공격 위치 추천 |
+| 전술 권고 | `wargame_strategy_tool.py` | 1 | 병종 상성 + 기동 경로 추천 |
 | COA 분석 | `coa_analysis_tool.py` | 1 | 행동 방책 비교 평가 |
 | 임무계획 검증·승인 | `mission_plan_validator_tool.py` | 3 | 검증·승인·pending 조회 |
 | EXAONE Deep 어드바이저 | `strategy_advisor_tool.py` | 2 | 전략·전술 권고 / 정찰 경로 전술 검토 |
+| ARMA3 조회 | `arma3_query_tool.py` | 4 | 실제 ARMA3 전장 데이터 조회 |
+| ARMA3 명령 | `arma3_order_tool.py` | 2 | ARMA3로 임무 명령 전송 |
 
 ---
 
