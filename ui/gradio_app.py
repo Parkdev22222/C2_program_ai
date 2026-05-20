@@ -962,7 +962,7 @@ def wargame_start_pause():
 
 
 def wargame_reset_sim():
-    global _wg_engine, _wg_last_plan
+    global _wg_engine, _wg_planner, _wg_last_plan
     if not _WARGAME_OK:
         return "초기화 실패", None, None, "", ""
     units = setup_bn_vs_bn()
@@ -971,6 +971,13 @@ def wargame_reset_sim():
     else:
         _wg_engine = WargameEngine(units)
         _wg_register_engine(_wg_engine)
+    # planner가 없으면 항상 초기화
+    if _wg_planner is None:
+        _wg_planner = MissionPlanner()
+    # 콜백 항상 재등록 — 초기화 순서에 무관하게 보장
+    _wg_engine.on_new_opfor_detection = _detection_enqueue
+    _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
+    _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
     _wg_last_plan = {}
     fig, damage_fig, status, log_text = wargame_refresh()
     return "▶ 시뮬레이션 시작", fig, damage_fig, status, log_text
