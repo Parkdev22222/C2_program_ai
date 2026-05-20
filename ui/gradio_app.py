@@ -553,7 +553,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
         if agent is not None:
             try:
                 import concurrent.futures as _cf
-                _AGENT_TIMEOUT = 180  # 자동 재계획 최대 대기 시간 (초)
+                _AGENT_TIMEOUT = 900  # 자동 재계획 최대 대기 시간 (초)
                 with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
                     _fut = _ex.submit(agent.agent.run, full_query, True)
                     try:
