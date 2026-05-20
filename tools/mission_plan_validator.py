@@ -50,11 +50,18 @@ try:
                 raise ValueError(f"mission_type '{v}'는 허용 값({VALID_MISSION_TYPES})이 아닙니다.")
             return v
 
-        @validator("waypoints")
-        def _check_waypoints(cls, v):
-            if not v:
+        @validator("waypoints", pre=True)
+        def _coerce_waypoints(cls, v):
+            # [x, y] 리스트 형식을 {"x": x, "y": y} 딕셔너리로 자동 변환
+            coerced = []
+            for wp in v:
+                if isinstance(wp, (list, tuple)) and len(wp) == 2:
+                    coerced.append({"x": wp[0], "y": wp[1]})
+                else:
+                    coerced.append(wp)
+            if not coerced:
                 raise ValueError("waypoints는 최소 1개 이상이어야 합니다.")
-            return v
+            return coerced
 
     class AirSupportItem(BaseModel):
         call_sign: str
