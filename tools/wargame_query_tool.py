@@ -4,17 +4,94 @@
 WargameEngine SQLite DB를 통해 전장 상황을 조회합니다.
 """
 import logging
+import re as _re
 from smolagents import tool
 
 logger = logging.getLogger(__name__)
 
 _wargame_engine = None
 
+# 최근 몇 틱 이내 이벤트를 "현재 교전 중"으로 판정할지
+_ATTACK_WINDOW_TICKS = 5
+
 
 def register_wargame_engine(engine):
     """UI에서 WargameEngine 인스턴스를 등록."""
     global _wargame_engine
     _wargame_engine = engine
+
+
+def _build_attack_status(current_tick: int, blufor_ids: set) -> dict:
+    """
+    최근 _ATTACK_WINDOW_TICKS 틱 이내 이벤트를 파싱해
+    각 BLUFOR 유닛의 피격 여부 및 공격 수단을 반환.
+
+    Returns:
+        {unit_id: {"be_attacked": bool, "enemy_attack_method": list[str]}}
+        attack_method 값: "직사격" | "간접사격" | "공중폭격"
+    """
+    result = {uid: {"be_attacked": False, "enemy_attack_method": []} for uid in blufor_ids}
+    if _wargame_engine is None:
+        return result
+
+    try:
+        events = _wargame_engine.db.get_recent_events(n=60)
+    except Exception:
+        return result
+
+    tick_threshold = current_tick - _ATTACK_WINDOW_TICKS
+
+    for ev in events:
+        if ev.get("tick", 0) < tick_threshold:
+            continue
+        etype = ev.get("event_type", "")
+        msg   = ev.get("message", "")
+
+        if etype in ("COMBAT", "SURPRISE"):
+            # 형식: "{attacker}({type})→{defender}({type}): ..."
+            # OPFOR→BLUFOR인 경우만 추출
+            m = _re.search(r'→(\w+)\(', msg)
+            if m:
+                defender = m.group(1)
+                if defender in blufor_ids:
+                    entry = result[defender]
+                    entry["be_attacked"] = True
+                    if "직사격" not in entry["enemy_attack_method"]:
+                        entry["enemy_attack_method"].append("직사격")
+
+        elif etype == "INDIRECT":
+            # 형식: "{spg}(자주포) 간접사격 → {defender}: ..."
+            m = _re.search(r'간접사격 → (\w+):', msg)
+            if m:
+                defender = m.group(1)
+                if defender in blufor_ids:
+                    entry = result[defender]
+                    entry["be_attacked"] = True
+                    if "간접사격" not in entry["enemy_attack_method"]:
+                        entry["enemy_attack_method"].append("간접사격")
+
+        elif etype == "AIR_STRIKE":
+            # 형식: "[OPFOR] {call_sign}→{unit_id}: ..."
+            if "[OPFOR]" in msg:
+                m = _re.search(r'→(\w+):', msg)
+                if m:
+                    defender = m.group(1)
+                    if defender in blufor_ids:
+                        entry = result[defender]
+                        entry["be_attacked"] = True
+                        if "공중폭격" not in entry["enemy_attack_method"]:
+                            entry["enemy_attack_method"].append("공중폭격")
+
+    # 공격 수단이 없으면 빈 문자열로 통일
+    for uid, entry in result.items():
+        if not entry["be_attacked"]:
+            entry["enemy_attack_method"] = None
+        elif len(entry["enemy_attack_method"]) == 1:
+            entry["enemy_attack_method"] = entry["enemy_attack_method"][0]
+        else:
+            entry["enemy_attack_method"] = ", ".join(entry["enemy_attack_method"])
+
+    return result
 
 
 @tool
@@ -35,8 +112,12 @@ def get_wargame_situation() -> dict:
             "game_time": str,
             "tick": int,
             "blufor_units": [
-                { "unit_id", "unit_type", "x_m", "y_m",
-                  "combat_power_pct", "status", "current_action" }, ...
+                {
+                  "unit_id", "unit_type", "x_m", "y_m",
+                  "combat_power_pct", "status", "current_action",
+                  "be_attacked": bool,            # 최근 5틱 내 피격 여부
+                  "enemy_attack_method": str|null  # "직사격"|"간접사격"|"공중폭격"|복합
+                }, ...
             ],
             "opfor_intel": [
                 { "unit_id", "detection_status",
@@ -56,19 +137,29 @@ def get_wargame_situation() -> dict:
 
     try:
         state = _wargame_engine.get_state()
+        current_tick = state.get("tick", 0)
+
+        # BLUFOR 유닛 ID 집합
+        blufor_raw = [u for u in state.get("units", []) if u["side"] == "BLUFOR"]
+        blufor_ids = {u["id"] for u in blufor_raw}
+
+        # 피격 상태 판정
+        attack_status = _build_attack_status(current_tick, blufor_ids)
 
         # BLUFOR 아군 실제 정보
         blufor_units = [
             {
-                "unit_id":         u["id"],
-                "unit_type":       u.get("unit_type", ""),
-                "x_m":             int(u["x"]),
-                "y_m":             int(u["y"]),
-                "combat_power_pct": round(u["combat_power"], 1),
-                "status":          u["status"],
-                "current_action":  u.get("current_action", "hold"),
+                "unit_id":            u["id"],
+                "unit_type":          u.get("unit_type", ""),
+                "x_m":                int(u["x"]),
+                "y_m":                int(u["y"]),
+                "combat_power_pct":   round(u["combat_power"], 1),
+                "status":             u["status"],
+                "current_action":     u.get("current_action", "hold"),
+                "be_attacked":        attack_status[u["id"]]["be_attacked"],
+                "enemy_attack_method": attack_status[u["id"]]["enemy_attack_method"],
             }
-            for u in state.get("units", []) if u["side"] == "BLUFOR"
+            for u in blufor_raw
         ]
 
         # OPFOR 인텔 필터 적용
@@ -92,7 +183,7 @@ def get_wargame_situation() -> dict:
         return {
             "status":      "success",
             "game_time":   state.get("game_time_str", "00:00:00"),
-            "tick":        state.get("tick", 0),
+            "tick":        current_tick,
             "blufor_units": blufor_units,
             "opfor_intel":  opfor_intel,
             "summary": {
