@@ -56,11 +56,16 @@ class AirSupport:
     damage_rate: float          # %/hour — 반경 중심 최대 피해율
     duration: float             # 지속 시간 (게임 초)
     delay: float                # 투입 지연 (게임 초)
+    side: str = "BLUFOR"        # 요청 측: "BLUFOR" | "OPFOR"
     status: str = "pending"     # "pending" | "active" | "completed"
     elapsed: float = 0.0        # 활성화 후 경과 게임 시간 (초)
+    # OPFOR 공중지원 피격 재계획 콜백 1회 발동 여부 (직렬화 제외)
+    hit_reported: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("hit_reported", None)
+        return d
 
 
 @dataclass

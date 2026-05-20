@@ -239,6 +239,15 @@ class WargameEngine:
         self._blufor_cp_thresholds_fired: Dict[str, set] = {}
         self._CP_THRESHOLDS: list = _CP_THRESHOLDS
 
+        # BLUFOR 유닛이 OPFOR 공중지원에 피격 시 호출
+        # callback(unit_id, unit_type, call_sign, current_cp)
+        # 공중지원 1회당 1회만 발동 (air.hit_reported 플래그로 관리)
+        self.on_blufor_air_hit: Optional[Callable] = None
+
+        # OPFOR 공중지원 쿨다운 (게임 초 단위)
+        self._opfor_air_cooldown: float = 0.0
+        self._OPFOR_AIR_INTERVAL = 900.0   # 게임 15분마다 공중지원 요청 가능
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -281,29 +290,34 @@ class WargameEngine:
 
     def apply_air_support_plan(self, plan: dict):
         with self._lock:
-            for sp in plan.get("air_support_plans", []):
-                stype  = sp.get("support_type", "cas")
-                preset = AIR_SUPPORT_PRESETS.get(stype, AIR_SUPPORT_PRESETS["cas"])
-                target = sp.get("target", [0, 0])
-                as_obj = AirSupport(
-                    call_sign=sp.get("call_sign", f"AIR-{len(self.air_supports)+1}"),
-                    support_type=stype,
-                    target_x=float(target[0]),
-                    target_y=float(target[1]),
-                    radius=float(sp.get("radius",      preset["radius"])),
-                    damage_rate=float(sp.get("damage_rate", preset["damage_rate"])),
-                    duration=float(sp.get("duration",    preset["duration"])),
-                    delay=float(sp.get("delay",       preset["delay"])),
-                    status="pending",
-                    elapsed=0.0,
-                )
-                self.air_supports.append(as_obj)
-                self.db.log_event(
-                    self.tick, self.game_time, "AIR_ORDER",
-                    f"{as_obj.call_sign} ({stype}) 요청 — "
-                    f"목표({target[0]/1000:.1f}km,{target[1]/1000:.1f}km) "
-                    f"반경{as_obj.radius:.0f}m 지연{as_obj.delay:.0f}s",
-                )
+            self._apply_air_support_plan_locked(plan, side="BLUFOR")
+
+    def _apply_air_support_plan_locked(self, plan: dict, side: str = "BLUFOR"):
+        """락 보유 상태에서 공중지원 계획 적용 (BLUFOR/OPFOR 공용)."""
+        for sp in plan.get("air_support_plans", []):
+            stype  = sp.get("support_type", "cas")
+            preset = AIR_SUPPORT_PRESETS.get(stype, AIR_SUPPORT_PRESETS["cas"])
+            target = sp.get("target", [0, 0])
+            as_obj = AirSupport(
+                call_sign=sp.get("call_sign", f"{side[:3]}-AIR-{len(self.air_supports)+1}"),
+                support_type=stype,
+                target_x=float(target[0]),
+                target_y=float(target[1]),
+                radius=float(sp.get("radius",      preset["radius"])),
+                damage_rate=float(sp.get("damage_rate", preset["damage_rate"])),
+                duration=float(sp.get("duration",    preset["duration"])),
+                delay=float(sp.get("delay",       preset["delay"])),
+                side=side,
+                status="pending",
+                elapsed=0.0,
+            )
+            self.air_supports.append(as_obj)
+            self.db.log_event(
+                self.tick, self.game_time, "AIR_ORDER",
+                f"[{side}] {as_obj.call_sign} ({stype}) 요청 — "
+                f"목표({target[0]/1000:.1f}km,{target[1]/1000:.1f}km) "
+                f"반경{as_obj.radius:.0f}m 지연{as_obj.delay:.0f}s",
+            )
 
     def reset(self, units: List[Unit]):
         was_running = self.running
@@ -324,7 +338,9 @@ class WargameEngine:
             self._opfor_strategy          = "recon"
             self._opfor_strategy_decided  = False
             self._opfor_defend_positions  = {}
-            self._auto_plan_triggered_ids = set()
+            self._auto_plan_triggered_ids   = set()
+            self._blufor_cp_thresholds_fired = {}
+            self._opfor_air_cooldown         = 0.0
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -935,8 +951,12 @@ class WargameEngine:
     # ── 공중지원 ─────────────────────────────────────────────────────
 
     def _resolve_air_support(self, dt: float):
-        dt_h  = dt / 3600.0
-        opfor = [u for u in self.units if u.side == "OPFOR" and u.is_active()]
+        dt_h = dt / 3600.0
+        # 공중지원 요청 side의 반대편 부대가 피격 대상
+        side_targets = {
+            "BLUFOR": [u for u in self.units if u.side == "OPFOR" and u.is_active()],
+            "OPFOR":  [u for u in self.units if u.side == "BLUFOR" and u.is_active()],
+        }
 
         for air in self.air_supports:
             if air.status == "completed":
@@ -948,42 +968,62 @@ class WargameEngine:
                     air.status  = "active"
                     self.db.log_event(
                         self.tick, self.game_time, "AIR_ACTIVE",
-                        f"{air.call_sign} ({air.support_type}) 투입 — "
+                        f"[{air.side}] {air.call_sign} ({air.support_type}) 투입 — "
                         f"목표({air.target_x/1000:.1f}km,{air.target_y/1000:.1f}km)",
                     )
                 continue
 
+            targets = side_targets.get(air.side, [])
             air.elapsed += dt
-            for u in opfor:
-                dist      = math.hypot(u.x - air.target_x, u.y - air.target_y)
+            blufor_hit_this_tick = False
+            for u in targets:
+                dist = math.hypot(u.x - air.target_x, u.y - air.target_y)
                 if dist > air.radius:
                     continue
-                proximity = 1.0 - dist / air.radius
-                cover     = terrain.cover_factor(u.x, u.y) * 0.5
+                proximity  = 1.0 - dist / air.radius
+                cover      = terrain.cover_factor(u.x, u.y) * 0.5
                 raw_damage = (
-                    air.damage_rate
-                    * proximity
-                    * (1.0 - cover)
-                    * dt_h
+                    air.damage_rate * proximity * (1.0 - cover) * dt_h
                 ) * random.uniform(0.7, 1.3)
-                # 직격 시 최소 30% 피해 보장: duration 전체 동안 누적 시 proximity 비례 30% 이상
                 min_damage = 30.0 * proximity * (1.0 - cover * 0.5) * (dt / air.duration)
                 damage = max(raw_damage, min_damage)
                 _cp_before_air = u.combat_power
                 u.combat_power = max(0.0, u.combat_power - damage)
+                # CP 임계값 트리거 (BLUFOR 피격 시)
                 self._check_blufor_cp_threshold(u, _cp_before_air)
+                # OPFOR 공중지원에 BLUFOR 피격 → 별도 재계획 트리거 (1회)
+                if air.side == "OPFOR" and u.side == "BLUFOR" and damage >= 5.0:
+                    blufor_hit_this_tick = True
                 if damage >= 3.0:
                     self.db.log_event(
                         self.tick, self.game_time, "AIR_STRIKE",
-                        f"{air.call_sign}→{u.id}: -{damage:.1f}% CP "
+                        f"[{air.side}] {air.call_sign}→{u.id}: -{damage:.1f}% CP "
                         f"(거리{dist/1000:.1f}km)",
                     )
+            # OPFOR 공중지원 피격 → 재계획 콜백 (공중지원 1회당 1번만)
+            if blufor_hit_this_tick and not air.hit_reported:
+                air.hit_reported = True
+                if self.on_blufor_air_hit is not None:
+                    # 피격 부대 중 가장 많이 피해 입은 BLUFOR 유닛 대표로 전달
+                    hit_units = [
+                        u for u in side_targets.get("OPFOR", [])   # OPFOR 공중지원 → BLUFOR 피격
+                        if math.hypot(u.x - air.target_x, u.y - air.target_y) <= air.radius
+                    ]
+                    if hit_units:
+                        rep = min(hit_units, key=lambda u: u.combat_power)
+                        try:
+                            self.on_blufor_air_hit(
+                                rep.id, rep.unit_type,
+                                air.call_sign, round(rep.combat_power, 1)
+                            )
+                        except Exception as _cb_err:
+                            logger.error(f"on_blufor_air_hit 콜백 오류: {_cb_err}")
 
             if air.elapsed >= air.duration:
                 air.status = "completed"
                 self.db.log_event(
                     self.tick, self.game_time, "AIR_COMPLETE",
-                    f"{air.call_sign} ({air.support_type}) 임무 완료",
+                    f"[{air.side}] {air.call_sign} ({air.support_type}) 임무 완료",
                 )
 
     # ── 양측 룰 기반 AI ──────────────────────────────────────────────
@@ -1015,8 +1055,35 @@ class WargameEngine:
         if not opfor_all:
             return
 
-        opfor_intel    = self._intelligence["OPFOR"]
-        detected_blu   = [e for e in opfor_intel.values() if e["status"] == "detected"]
+        opfor_intel  = self._intelligence["OPFOR"]
+        detected_blu = [e for e in opfor_intel.values() if e["status"] == "detected"]
+
+        # ── OPFOR 공중지원 (쿨다운 기반) ─────────────────────────────
+        self._opfor_air_cooldown -= self._OPFOR_AI_INTERVAL
+        if self._opfor_air_cooldown <= 0.0 and detected_blu:
+            self._opfor_air_cooldown = self._OPFOR_AIR_INTERVAL
+            # 탐지된 BLUFOR 중 전투력이 높고 밀집한 위치 선택
+            target_entry = max(detected_blu, key=lambda e: e.get("combat_power", 0))
+            stype = random.choice(["strike", "artillery", "helicopter"])
+            preset = AIR_SUPPORT_PRESETS[stype]
+            air_plan = {
+                "air_support_plans": [{
+                    "call_sign": f"OPFOR-{stype.upper()}-{self.tick}",
+                    "support_type": stype,
+                    "target": [target_entry["known_x"], target_entry["known_y"]],
+                    "radius": preset["radius"],
+                    "damage_rate": preset["damage_rate"],
+                    "duration": preset["duration"],
+                    "delay": preset["delay"],
+                }]
+            }
+            self._apply_air_support_plan_locked(air_plan, side="OPFOR")
+            self.db.log_event(
+                self.tick, self.game_time, "OPFOR_AI",
+                f"OPFOR 공중지원 요청: {stype} → "
+                f"BLUFOR {target_entry['unit_id']} 위치 "
+                f"({target_entry['known_x']/1000:.1f}km, {target_entry['known_y']/1000:.1f}km)"
+            )
 
         # ① 제압·저하 부대 우선 처리
         for u in opfor_all:

@@ -343,13 +343,16 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_engine.on_new_opfor_detection = _detection_enqueue
         # BLUFOR 전투력 임계값 임무계획 콜백 등록
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
+        # BLUFOR 유닛 공중지원 피격 임무계획 콜백 등록
+        _wg_engine.on_blufor_air_hit = _air_hit_enqueue
     return _wg_engine
 
 
-# ── 자동 탐지 / 전투력 임계값 → 공격임무계획 수립 ──────────────────
+# ── 자동 탐지 / 전투력 임계값 / 공중지원 피격 → 공격임무계획 수립 ──
 # 큐 이벤트 형식:
-#   ("detection", enemy_id, unit_type, x, y)
+#   ("detection",    enemy_id, unit_type, x, y)
 #   ("cp_threshold", unit_id, unit_type, threshold_pct, current_cp)
+#   ("air_hit",      unit_id, unit_type, call_sign, current_cp)
 
 def _detection_enqueue(enemy_id: str, unit_type: str, x: float, y: float):
     """엔진 틱 스레드에서 호출 — 큐에만 넣고 즉시 반환."""
@@ -363,13 +366,21 @@ def _cp_threshold_enqueue(unit_id: str, unit_type: str,
                                  threshold_pct, current_cp))
 
 
+def _air_hit_enqueue(unit_id: str, unit_type: str,
+                     call_sign: str, current_cp: float):
+    """BLUFOR 유닛이 OPFOR 공중지원에 피격 시 엔진 틱 스레드에서 호출."""
+    _detection_queue.put_nowait(("air_hit", unit_id, unit_type,
+                                 call_sign, current_cp))
+
+
 def _execute_auto_attack_plan(event_type: str, *args):
     """
-    신규 OPFOR 탐지 또는 BLUFOR CP 임계값 도달 시 공격임무계획 재수립.
+    신규 OPFOR 탐지 / BLUFOR CP 임계값 / BLUFOR 공중지원 피격 시 공격임무계획 재수립.
     별도 백그라운드 스레드에서 실행됨.
 
     event_type == "detection"    : args = (enemy_id, unit_type, x, y)
     event_type == "cp_threshold" : args = (unit_id, unit_type, threshold_pct, current_cp)
+    event_type == "air_hit"      : args = (unit_id, unit_type, call_sign, current_cp)
     """
     eng = _wg_engine
     if eng is None:
@@ -389,7 +400,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"어느 부대를 재배정하고 어느 부대는 기존 임무를 유지할지 조언해주세요."
         )
         log_tag = f"신규 탐지: {enemy_id}({unit_type}) @ ({x/1000:.1f}km, {y/1000:.1f}km)"
-    else:  # cp_threshold
+    elif event_type == "cp_threshold":
         unit_id, unit_type, threshold_pct, current_cp = args
         trigger_desc = (
             f"⚠️ [전투력 임계값 트리거] 아군 {unit_id}({unit_type})의 전투력이 "
@@ -402,6 +413,20 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"다른 부대로 임무를 인계할지 전술적으로 판단하여 최적 임무계획을 조언해주세요."
         )
         log_tag = f"CP 임계값: {unit_id}({unit_type}) {threshold_pct:.0f}% 이하 (현재 {current_cp:.1f}%)"
+    else:  # air_hit
+        unit_id, unit_type, call_sign, current_cp = args
+        trigger_desc = (
+            f"⚠️ [공중지원 피격 트리거] 아군 {unit_id}({unit_type})이 "
+            f"적 공중지원({call_sign})에 피격 (현재 전투력 {current_cp:.1f}%)\n"
+            f"공중지원 피격으로 전술 상황이 변경되었다. 임무계획을 즉시 재평가하라."
+        )
+        strategy_hint = (
+            f"아군 {unit_id}({unit_type})이 적 공중지원({call_sign})에 피격당했습니다 "
+            f"(현재 전투력 {current_cp:.1f}%). "
+            f"피격 부대의 임무 지속 가능 여부를 판단하고, 필요 시 후퇴·방어 전환 또는 "
+            f"다른 부대로 임무를 인계하는 방안을 조언해주세요."
+        )
+        log_tag = f"공중지원 피격: {unit_id}({unit_type}) by {call_sign} (현재 CP {current_cp:.1f}%)"
 
     logger.info(f"[자동임무계획] {log_tag} — running={eng.running}")
 
