@@ -1351,6 +1351,7 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
 
 def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
     """워게임 현재 상태를 평가하고 학습된 규칙을 agent_custom_instructions.txt에 추가합니다."""
+    import re as _re
     history = list(history or [])
     eng = _wg_ensure_engine()
     agent = _get_agent()
@@ -1363,25 +1364,104 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
     except ImportError:
         history.append(("🧠 전술 평가", "battlefield_agent 로드 실패"))
         return history, ""
+
     blufor = [u for u in state["units"] if u["side"] == "BLUFOR"]
     opfor  = [u for u in state["units"] if u["side"] == "OPFOR"]
     bf_alive = [u for u in blufor if u["status"] == "active"]
     op_alive = [u for u in opfor  if u["status"] == "active"]
+    bf_destroyed = [u for u in blufor if u["status"] == "destroyed"]
+    op_destroyed = [u for u in opfor  if u["status"] == "destroyed"]
     winner = state.get("winner")
-    last_plan = _wg_last_plan or {}
+
+    # ── 주요 전투 이벤트 요약 (좌표·고도 수치는 유닛타입/방향 정보로 추상화) ──
+    events = eng.db.get_recent_events(n=500)
+    # 전투력 소모 이벤트만 추려서 전술 패턴 추출
+    event_types_of_interest = {"COMBAT", "INDIRECT", "AIR_STRIKE", "SURPRISE",
+                                "DESTROYED", "OPFOR_AI", "AIR_ORDER", "AIR_COMPLETE"}
+    filtered_events = [e for e in events if e.get("event_type") in event_types_of_interest]
+
+    # 유닛별 생존/격멸 상태 및 타입 맵
+    unit_type_map = {u["id"]: u["unit_type"] for u in state["units"]}
+    unit_side_map = {u["id"]: u["side"]      for u in state["units"]}
+    unit_cp_map   = {u["id"]: u["combat_power"] for u in state["units"]}
+
+    # 격멸된 유닛 요약
+    op_destroyed_summary = ", ".join(
+        f"{u['id']}({u['unit_type']})" for u in op_destroyed
+    ) or "없음"
+    bf_destroyed_summary = ", ".join(
+        f"{u['id']}({u['unit_type']})" for u in bf_destroyed
+    ) or "없음"
+
+    # 공중지원 사용 여부
+    air_orders = [e for e in events if e.get("event_type") == "AIR_ORDER"]
+    air_by_side = {"BLUFOR": [], "OPFOR": []}
+    for ev in air_orders:
+        msg = ev.get("message", "")
+        if "[BLUFOR]" in msg:
+            air_by_side["BLUFOR"].append(msg)
+        elif "[OPFOR]" in msg:
+            air_by_side["OPFOR"].append(msg)
+
+    # 이벤트 메시지에서 좌표([x, y]), 고도, 특정 ID를 제거한 전술 요약 생성
+    def _abstract_event(msg: str) -> str:
+        """이벤트 메시지에서 구체적 수치/ID를 제거하고 전술 패턴만 남김."""
+        # 좌표 제거: (12.3km, 4.5km) / (12345, 67890)
+        msg = _re.sub(r'\(\d+\.?\d*km,\s*\d+\.?\d*km\)', '(위치)', msg)
+        msg = _re.sub(r'\[\d+,\s*\d+\]', '[좌표]', msg)
+        # 고도 수치 제거: 고도우위0.85 → 고도우위있음
+        msg = _re.sub(r'고도우위[\d.]+', '고도우위', msg)
+        # 거리 수치 제거: 거리1.2km → 근거리 / 중거리 / 원거리
+        def dist_abstract(m):
+            v = float(m.group(1))
+            if v < 1.0: return "근거리"
+            elif v < 3.0: return "중거리"
+            else: return "원거리"
+        msg = _re.sub(r'거리([\d.]+)km', dist_abstract, msg)
+        # 피해 수치: -12.3% CP → 피해있음
+        msg = _re.sub(r'-[\d.]+% CP', '피해', msg)
+        # AoE 반경 수치 제거
+        msg = _re.sub(r'AoE반경\d+m', 'AoE', msg)
+        return msg
+
+    key_events_text = "\n".join(
+        f"  [{e['event_type']}] {_abstract_event(e['message'])}"
+        for e in filtered_events[-60:]  # 최근 60개
+    )
+
     summary_lines = [
-        f"[워게임 평가 요청]",
+        "[워게임 전술 평가 요청]",
         f"게임시간: {state['game_time_str']} | 승자: {winner or '미결'}",
-        f"BLUFOR 생존: {len(bf_alive)}/{len(blufor)} | OPFOR 생존: {len(op_alive)}/{len(opfor)}",
-        f"마지막 임무계획 부대 수: {len(last_plan.get('mission_plans', []))}",
+        f"BLUFOR — 생존: {len(bf_alive)}/{len(blufor)}, 격멸된 아군: {bf_destroyed_summary}",
+        f"OPFOR  — 생존: {len(op_alive)}/{len(opfor)},  격멸된 적군: {op_destroyed_summary}",
+        f"아군 공중지원 사용: {len(air_by_side['BLUFOR'])}회 | 적군 공중지원: {len(air_by_side['OPFOR'])}회",
         "",
-        "위 워게임 결과를 분석하여 다음을 수행하세요:",
-        "1. 이번 전투에서 효과적이었던 전술 패턴 1~3가지를 간결한 규칙 문장으로 작성",
-        "2. 개선이 필요한 전술 패턴 1~2가지를 규칙 문장으로 작성",
-        "3. 각 규칙을 '- <규칙 내용>' 형식으로 줄별로 출력 (JSON 불필요)",
-        "4. 규칙은 다음 워게임에서 바로 적용 가능한 구체적 내용으로 작성",
+        "[주요 전투 이벤트 (추상화)]",
+        key_events_text or "  이벤트 없음",
+        "",
+        "─" * 60,
+        "위 전투 결과를 분석하여 다음 지침에 따라 전술 규칙을 작성하세요.",
+        "",
+        "■ 규칙 작성 필수 지침:",
+        "  1. 규칙은 반드시 어떤 전투 상황에도 재사용 가능한 일반적 원칙으로 작성",
+        "  2. 특정 좌표([x,y]), 고도 수치(m), 거리 수치(km), 특정 부대명(Red1, Alpha 등) 절대 포함 금지",
+        "  3. 부대명 대신 병종(전차, 자주포, 기계화보병, 정찰, 대전차)으로 표현",
+        "  4. 수치 대신 상대적 표현 사용: '고지대', '근거리', '측방', '전방', '후방', '우세', '취약'",
+        "",
+        "  ✗ 나쁜 예: '고도 226m의 [13723, 14083]에서 Red5(자주포) 격멸'",
+        "  ✓ 좋은 예: '적 자주포보다 고지대를 선점하여 화력 우위 확보 시 자주포 격멸 효과적'",
+        "",
+        "  ✗ 나쁜 예: 'Alpha가 (12.3km, 4.5km)에서 Red3와 2km 거리 교전 시 효과적'",
+        "  ✓ 좋은 예: '전차는 2~3km 거리에서 기계화보병 지원을 받아 교전 시 전투 효과 극대화'",
+        "",
+        "■ 출력 형식 (JSON·코드블록 불필요):",
+        "  - <긍정적 전술 원칙>  (이번 전투에서 효과적이었던 패턴, 1~3개)",
+        "  - <개선 필요 전술 원칙>  (이번 전투에서 문제가 된 패턴, 1~2개)",
+        "",
+        "규칙만 출력하고 부연 설명은 최소화하세요.",
     ]
     eval_query = "\n".join(summary_lines)
+
     if agent is not None:
         try:
             response = agent.run(eval_query, reset=False)
@@ -1396,14 +1476,57 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
             + ("- 승리: 현재 전술 패턴 유지 권장" if winner == "BLUFOR"
                else "- 패배 또는 미결: 정찰 강화 및 공격 분산 권장")
         )
-    learned_count = 0
+
+    # ── 2차 일반화 패스: 응답에 좌표·특정 ID·수치가 남아있으면 재작성 ──
+    _SPECIFIC_PATTERN = _re.compile(
+        r'\[\d{3,},\s*\d{3,}\]'          # [13723, 14083] 형태 좌표
+        r'|(?:Red|Blue|Alpha|Bravo|Charlie|Delta|Echo|Foxtrot)\d*'  # 특정 부대명
+        r'|\b\d{3,}m\b'                    # 1200m 같은 수치
+        r'|\(\d+\.?\d*km,\s*\d+\.?\d*km\)'  # (12.3km, 4.5km)
+    )
+
+    def _needs_generalization(rule: str) -> bool:
+        return bool(_SPECIFIC_PATTERN.search(rule))
+
+    # 2차 일반화가 필요한 규칙은 에이전트에게 재작성 요청
+    raw_rules = []
     for line in response_text.splitlines():
         line = line.strip()
         if line.startswith("- ") and len(line) > 5:
-            rule_text = line[2:].strip()
-            if rule_text:
-                append_learned_rule(rule_text)
-                learned_count += 1
+            raw_rules.append(line[2:].strip())
+
+    final_rules = []
+    needs_rewrite = [r for r in raw_rules if _needs_generalization(r)]
+    if needs_rewrite and agent is not None:
+        rewrite_query = (
+            "다음 전술 규칙들에 특정 좌표, 수치, 부대명이 포함되어 있습니다. "
+            "각각을 병종·방향·상대적 거리 등의 일반적 표현으로 재작성하세요. "
+            "출력은 '- <재작성된 규칙>' 형식으로만 작성하세요.\n\n"
+            + "\n".join(f"- {r}" for r in needs_rewrite)
+        )
+        try:
+            rewrite_response = agent.run(rewrite_query, reset=False)
+            rewritten = []
+            for line in str(rewrite_response).splitlines():
+                line = line.strip()
+                if line.startswith("- ") and len(line) > 5:
+                    rewritten.append(line[2:].strip())
+            # 원본 규칙 중 재작성된 것은 교체
+            for orig, new in zip(needs_rewrite, rewritten):
+                for i, r in enumerate(raw_rules):
+                    if r == orig:
+                        raw_rules[i] = new
+                        break
+        except Exception:
+            pass  # 재작성 실패 시 원본 유지
+
+    final_rules = [r for r in raw_rules if r and not _needs_generalization(r)]
+
+    learned_count = 0
+    for rule_text in final_rules:
+        append_learned_rule(rule_text)
+        learned_count += 1
+
     result_msg = (
         f"**🧠 전술 평가 완료** — {learned_count}개 규칙이 `agent_custom_instructions.txt`에 추가됨\n\n"
         f"{response_text}"
