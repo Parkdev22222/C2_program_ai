@@ -56,6 +56,54 @@ _harness_controller = None
 _detection_queue: _queue.Queue = _queue.Queue()
 _auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
 
+# ── 임무 유지 판단 ────────────────────────────────────────────────
+# committed 유닛: 이미 활성 OPFOR 방향으로 기동 중인 유닛 → 재계획 제외
+# available 유닛: 웨이포인트 없거나 목표 무효화된 유닛 → 재계획 대상
+_COMMITTED_RANGE_M = 5_000.0   # 최종 WP가 탐지 OPFOR 이 거리 이내면 committed
+
+
+def _classify_blufor_for_replan(state: dict) -> tuple:
+    """
+    BLUFOR 부대를 재계획 필요 여부에 따라 분류.
+
+    Returns:
+        (committed_ids, available_ids)
+        committed_ids: 기존 임무 유지 (이미 활성 OPFOR 방향으로 기동 중)
+        available_ids: 재계획 필요 (유휴 또는 목표 무효화)
+    """
+    import math as _math
+    blufor = [
+        u for u in state.get("units", [])
+        if u["side"] == "BLUFOR" and u["status"] != "destroyed"
+    ]
+    intel = state.get("intelligence", {}).get("BLUFOR", [])
+    active_opfor = {
+        e["unit_id"]: (e["known_x"], e["known_y"])
+        for e in intel
+        if e["status"] in ("detected", "approximate")
+    }
+
+    committed, available = set(), set()
+    for u in blufor:
+        waypoints = u.get("waypoints", [])
+        if not waypoints:
+            available.add(u["id"])
+            continue
+
+        # 잔여 웨이포인트의 최종 지점이 활성 OPFOR 근처면 committed
+        fx, fy = waypoints[-1][0], waypoints[-1][1]
+        near_active = any(
+            _math.hypot(fx - ox, fy - oy) <= _COMMITTED_RANGE_M
+            for (ox, oy) in active_opfor.values()
+        )
+        if near_active:
+            committed.add(u["id"])
+        else:
+            # 목표 OPFOR가 사라졌거나 경로가 무효화 → 재계획
+            available.add(u["id"])
+
+    return committed, available
+
 # ── UI 상태 영속성 ────────────────────────────────────────────
 import json as _json_mod
 
@@ -389,6 +437,28 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
         import json as _j
         from wargame.llm_planner import build_mission_query
 
+        # ── 임무 유지 / 재계획 대상 분류 ──────────────────────────────
+        committed_ids, available_ids = _classify_blufor_for_replan(state)
+        logger.info(
+            f"[자동임무계획] 부대 분류 — 임무유지(committed): {sorted(committed_ids)} "
+            f"| 재계획(available): {sorted(available_ids)}"
+        )
+
+        if not available_ids:
+            logger.info("[자동임무계획] 재계획 대상 없음 — 모든 BLUFOR 부대가 기존 임무 유지")
+            return  # finally 블록에서 시뮬레이션 재개됨
+
+        committed_note = ""
+        if committed_ids:
+            committed_note = (
+                f"\n\n⚠️ [임무 유지 부대 — 계획 수립 제외]\n"
+                f"   다음 부대는 이미 활성 OPFOR 방향으로 기동 중이므로 새 임무계획에 포함하지 말 것:\n"
+                f"   {', '.join(sorted(committed_ids))}\n"
+                f"   → mission_plans 에 위 부대 ID 절대 포함 금지.\n\n"
+                f"⚠️ [재계획 대상 부대 — 반드시 이 부대들만 계획 수립]\n"
+                f"   {', '.join(sorted(available_ids))}"
+            )
+
         try:
             from agent.battlefield_agent import get_instruction_section
             attack_rules      = get_instruction_section("ATTACK")
@@ -405,7 +475,8 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
             f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
             f"위 위치는 참고용이며, 실제 임무계획은 반드시 아래 툴 호출 결과를 기반으로 수립하라.\n"
             f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지.\n"
-            f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
+            f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n"
+            f"{committed_note}\n\n"
             f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
             f"1. get_wargame_situation()\n"
             f"   → 실제 BLUFOR·OPFOR 부대 ID·위치·전투력 조회 후 situation 변수에 저장\n"
@@ -440,26 +511,50 @@ def _execute_auto_attack_plan(enemy_id: str, unit_type: str, x: float, y: float)
                 raw = agent.agent.run(full_query, reset=True)
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
-                    try:
-                        eng.apply_mission_plan(plan)
-                        if plan.get("air_support_plans"):
-                            eng.apply_air_support_plan(plan)
-                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
-                                    f"— {len(plan['mission_plans'])}개 중대")
-                    except Exception as _ae:
-                        logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
+                    # committed 부대는 계획에서 제거 (이중 안전장치)
+                    plan["mission_plans"] = [
+                        mp for mp in plan["mission_plans"]
+                        if mp.get("company_id") not in committed_ids
+                    ]
+                    if not plan["mission_plans"]:
+                        logger.info("[자동임무계획] 에이전트 계획 — 적용 대상 부대 없음 (모두 committed)")
+                    else:
+                        try:
+                            eng.apply_mission_plan(plan)
+                            if plan.get("air_support_plans"):
+                                eng.apply_air_support_plan(plan)
+                            logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
+                                        f"— {len(plan['mission_plans'])}개 중대 "
+                                        f"(유지: {len(committed_ids)}개)")
+                        except Exception as _ae:
+                            logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
                 else:
                     logger.warning("[자동임무계획] JSON 파싱 실패 → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
-                    eng.apply_mission_plan(plan)
+                    plan["mission_plans"] = [
+                        mp for mp in plan.get("mission_plans", [])
+                        if mp.get("company_id") not in committed_ids
+                    ]
+                    if plan["mission_plans"]:
+                        eng.apply_mission_plan(plan)
             except Exception as _e:
                 logger.warning(f"[자동임무계획] 에이전트 실행 실패: {_e} → 규칙 기반 폴백")
                 plan = _wg_planner._rule_based(state)
-                eng.apply_mission_plan(plan)
+                plan["mission_plans"] = [
+                    mp for mp in plan.get("mission_plans", [])
+                    if mp.get("company_id") not in committed_ids
+                ]
+                if plan["mission_plans"]:
+                    eng.apply_mission_plan(plan)
         else:
             plan = _wg_planner._rule_based(state)
-            eng.apply_mission_plan(plan)
-            logger.info("[자동임무계획] 규칙 기반 계획 적용")
+            plan["mission_plans"] = [
+                mp for mp in plan.get("mission_plans", [])
+                if mp.get("company_id") not in committed_ids
+            ]
+            if plan["mission_plans"]:
+                eng.apply_mission_plan(plan)
+                logger.info(f"[자동임무계획] 규칙 기반 계획 적용 (유지: {len(committed_ids)}개)")
 
     except Exception as _ex:
         logger.error(f"[자동임무계획] 오류: {_ex}", exc_info=True)
