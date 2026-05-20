@@ -961,20 +961,32 @@ class WargameEngine:
         for air in self.air_supports:
             if air.status == "completed":
                 continue
+
             if air.status == "pending":
                 air.elapsed += dt
-                if air.elapsed >= air.delay:
-                    air.elapsed = 0.0
-                    air.status  = "active"
-                    self.db.log_event(
-                        self.tick, self.game_time, "AIR_ACTIVE",
-                        f"[{air.side}] {air.call_sign} ({air.support_type}) 투입 — "
-                        f"목표({air.target_x/1000:.1f}km,{air.target_y/1000:.1f}km)",
-                    )
-                continue
+                if air.elapsed < air.delay:
+                    continue
+                # Activated this tick — carry over excess time into active phase
+                eff_dt = air.elapsed - air.delay
+                air.elapsed = eff_dt
+                air.status = "active"
+                self.db.log_event(
+                    self.tick, self.game_time, "AIR_ACTIVE",
+                    f"[{air.side}] {air.call_sign} ({air.support_type}) 투입 — "
+                    f"목표({air.target_x/1000:.1f}km,{air.target_y/1000:.1f}km)",
+                )
+                # Fall through to damage calculation (no continue)
+            else:
+                air.elapsed += dt
+                eff_dt = dt
+
+            # Cap effective damage window to remaining active duration
+            elapsed_before = air.elapsed - eff_dt
+            remaining = max(0.0, air.duration - elapsed_before)
+            eff_dt = min(eff_dt, remaining)
+            eff_dt_h = eff_dt / 3600.0
 
             targets = side_targets.get(air.side, [])
-            air.elapsed += dt
             blufor_hit_this_tick = False
             for u in targets:
                 dist = math.hypot(u.x - air.target_x, u.y - air.target_y)
@@ -983,9 +995,9 @@ class WargameEngine:
                 proximity  = 1.0 - dist / air.radius
                 cover      = terrain.cover_factor(u.x, u.y) * 0.5
                 raw_damage = (
-                    air.damage_rate * proximity * (1.0 - cover) * dt_h
+                    air.damage_rate * proximity * (1.0 - cover) * eff_dt_h
                 ) * random.uniform(0.7, 1.3)
-                min_damage = 30.0 * proximity * (1.0 - cover * 0.5) * (dt / air.duration)
+                min_damage = 30.0 * proximity * (1.0 - cover * 0.5) * (eff_dt / air.duration)
                 damage = max(raw_damage, min_damage)
                 _cp_before_air = u.combat_power
                 u.combat_power = max(0.0, u.combat_power - damage)
