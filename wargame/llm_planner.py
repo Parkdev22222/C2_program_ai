@@ -127,6 +127,18 @@ def build_mission_query(state: dict) -> str:
     """
     elev_section = _sample_elevation_map(state)
 
+    air_use = state.get("air_use_count", {})
+    air_limit = state.get("air_use_limit", 5)
+    blu_used = air_use.get("BLUFOR", 0)
+    blu_remaining = max(0, air_limit - blu_used)
+    air_reset_at = state.get("air_reset_at", 0)
+    cur_tick = state.get("tick", 0)
+    ticks_to_reset = max(0, air_reset_at - cur_tick)
+    air_limit_line = (
+        f"[공중지원 잔여 횟수] BLUFOR 현재 {blu_remaining}/{air_limit}회 사용 가능"
+        f" (잔여 {ticks_to_reset}틱 후 리셋). 잔여 횟수가 0이면 air_support_plans는 빈 배열로."
+    )
+
     query = f"""대대급 C2 AI: BLUFOR 임무계획을 수립하라.
 
 ⚠️ 필수: 아래 툴을 반드시 순서대로 호출하여 실제 전장 데이터를 수집한 후 임무계획을 수립하라.
@@ -161,6 +173,7 @@ def build_mission_query(state: dict) -> str:
 [출력 형식 예시] ← 형식만 참고. 좌표·ID는 placeholder이므로 절대 그대로 사용 금지
 {_FEW_SHOT_EXAMPLES}
 
+{air_limit_line}
 [공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
 ⚠️ [공중지원·포격 목표 좌표 강제 규칙]
    air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서

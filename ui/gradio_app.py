@@ -860,6 +860,18 @@ def _wg_status_text(state: dict) -> str:
         bar = "█" * int(u["combat_power"] / 10) + "░" * (10 - int(u["combat_power"] / 10))
         utype = get_unit_type(u["id"])
         lines.append(f"  {u['id']:7s}({utype:6s}) [{bar}] {u['combat_power']:5.1f}%  {u['status']}")
+    air_use = state.get("air_use_count", {})
+    air_limit = state.get("air_use_limit", 5)
+    air_reset = state.get("air_reset_at", 0)
+    cur_tick = state.get("tick", 0)
+    ticks_left = max(0, air_reset - cur_tick)
+    blu_used = air_use.get("BLUFOR", 0)
+    opp_used = air_use.get("OPFOR", 0)
+    lines.append(
+        f"✈ 공중지원: BLUFOR {air_limit - blu_used}/{air_limit} 잔여"
+        f" | OPFOR {air_limit - opp_used}/{air_limit} 잔여"
+        f" | 리셋까지 {ticks_left}틱"
+    )
     _STATUS_KO = {"detected": "탐지됨", "approximate": "개략위치", "lost": "탐지상실"}
     lines.append("🔴 OPFOR (BLUFOR 인텔 기준)")
     for e in state.get("intelligence", {}).get("BLUFOR", []):

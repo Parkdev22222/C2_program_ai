@@ -248,6 +248,12 @@ class WargameEngine:
         self._opfor_air_cooldown: float = 0.0
         self._OPFOR_AIR_INTERVAL = 900.0   # 게임 15분마다 공중지원 요청 가능
 
+        # 공중지원 횟수 제한 (양측 공통)
+        self._AIR_USE_LIMIT   = 5          # 300틱당 최대 사용 횟수
+        self._AIR_RESET_TICKS = 300        # 횟수 리셋 주기 (틱)
+        self._air_use_count: Dict[str, int] = {"BLUFOR": 0, "OPFOR": 0}
+        self._air_reset_at: int = self._AIR_RESET_TICKS  # 다음 리셋 틱
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -295,6 +301,13 @@ class WargameEngine:
     def _apply_air_support_plan_locked(self, plan: dict, side: str = "BLUFOR"):
         """락 보유 상태에서 공중지원 계획 적용 (BLUFOR/OPFOR 공용)."""
         for sp in plan.get("air_support_plans", []):
+            if self._air_use_count.get(side, 0) >= self._AIR_USE_LIMIT:
+                logger.warning(
+                    f"[공중지원 제한] {side} 공중지원 횟수 초과 "
+                    f"({self._air_use_count[side]}/{self._AIR_USE_LIMIT}) — 요청 무시"
+                )
+                continue
+            self._air_use_count[side] = self._air_use_count.get(side, 0) + 1
             stype  = sp.get("support_type", "cas")
             preset = AIR_SUPPORT_PRESETS.get(stype, AIR_SUPPORT_PRESETS["cas"])
             target = sp.get("target", [0, 0])
@@ -341,6 +354,8 @@ class WargameEngine:
             self._auto_plan_triggered_ids   = set()
             self._blufor_cp_thresholds_fired = {}
             self._opfor_air_cooldown         = 0.0
+            self._air_use_count  = {"BLUFOR": 0, "OPFOR": 0}
+            self._air_reset_at   = self._AIR_RESET_TICKS
             self.db.clear()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -595,6 +610,9 @@ class WargameEngine:
                     }
                     for a in self.air_supports
                 ],
+                "air_use_count":  dict(self._air_use_count),
+                "air_use_limit":  self._AIR_USE_LIMIT,
+                "air_reset_at":   self._air_reset_at,
             }
 
     # ── 시뮬레이션 루프 ──────────────────────────────────────────────
@@ -625,6 +643,15 @@ class WargameEngine:
         self._update_status(dt)
         self.tick      += 1
         self.game_time += dt
+
+        # 공중지원 횟수 300틱마다 리셋
+        if self.tick >= self._air_reset_at:
+            self._air_use_count = {"BLUFOR": 0, "OPFOR": 0}
+            self._air_reset_at  = self.tick + self._AIR_RESET_TICKS
+            self.db.log_event(
+                self.tick, self.game_time, "AIR_RESET",
+                f"공중지원 횟수 리셋 (다음 리셋: tick {self._air_reset_at})",
+            )
 
         self.db.save_unit_realtime(self.tick, self.game_time, self.units)
         if self.tick % 10 == 0:
