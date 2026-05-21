@@ -163,8 +163,8 @@ def build_mission_query(state: dict) -> str:
 5. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
    → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
 6. strategy_advisor_tool(
-     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요.",
-     additional_context=str(attack_positions_result)
+     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요. 또한 Delta 정찰부대의 정찰 경로(recon_result의 waypoints)가 공격 임무를 효과적으로 지원하는지, 경로 개선이 필요한지도 검토해주세요.",
+     additional_context=str(attack_positions_result) + "\n\n[Delta 정찰 경로]\n" + str(recon_result)
    )
    → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
 7. 위 1~6 결과를 종합하여 최종 임무계획 JSON 생성
