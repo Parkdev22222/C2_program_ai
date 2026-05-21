@@ -249,10 +249,6 @@ class StrategyAdvisorTool(Tool):
 
             result = self._extract_text(response)
             logger.info("EXAONE Deep strategy response received successfully")
-            # 에이전트 컨텍스트 오버플로 방지: 2000자 초과 시 요약 표시
-            _MAX_ADVICE_CHARS = 2000
-            if len(result) > _MAX_ADVICE_CHARS:
-                result = result[:_MAX_ADVICE_CHARS] + "\n...[전술 조언 요약됨 — 핵심 내용만 반영]"
             return result
 
         except Exception as e:
