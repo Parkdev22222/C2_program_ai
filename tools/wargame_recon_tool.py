@@ -359,14 +359,20 @@ def recommend_recon_routes() -> dict:
         all_units = state.get("units", [])
 
         targets = [e for e in intel if e["status"] in ("approximate", "lost")]
+        # 모든 OPFOR가 탐지된 경우: detected 부대를 측방 관측 목표로 사용 (화력지원 관측·추적)
+        screen_mode = False
         if not targets:
-            return {
-                "status":  "no_targets",
-                "message": "모든 OPFOR 위치가 탐지됨. 정찰 불필요.",
-                "mission_plans": [],
-                "apply_json": json.dumps({"mission_plans": []}, ensure_ascii=False),
-                "summary": "모든 OPFOR 위치가 탐지됨. 정찰 불필요.",
-            }
+            detected_targets = [e for e in intel if e["status"] == "detected"]
+            if not detected_targets:
+                return {
+                    "status":  "no_targets",
+                    "message": "탐지된 적 없음. 정찰 경로 생성 불가.",
+                    "mission_plans": [],
+                    "apply_json": json.dumps({"mission_plans": []}, ensure_ascii=False),
+                    "summary": "탐지된 적 없음.",
+                }
+            targets = detected_targets
+            screen_mode = True
 
         # degraded(전투력 저하)도 정찰 임무 수행 가능 — suppressed·destroyed만 제외
         recon_units = [
@@ -400,11 +406,15 @@ def recommend_recon_routes() -> dict:
                 continue
             wps = _build_combined_recon_waypoints(ru["x"], ru["y"], chunk)
             target_ids = ", ".join(t["unit_id"] for t in chunk)
+            if screen_mode:
+                objective = f"탐지 부대 측방 관측·추적: {target_ids}"
+            else:
+                objective = f"OPFOR 위치 정밀확인: {target_ids}"
             assignments.append({
                 "company_id":     ru["id"],
                 "mission_type":   "recon",
                 "waypoints":      wps,
-                "objective":      f"OPFOR 위치 정밀확인: {target_ids}",
+                "objective":      objective,
                 "target_unit_ids": [t["unit_id"] for t in chunk],
             })
 
@@ -420,8 +430,9 @@ def recommend_recon_routes() -> dict:
 
         ru_status = {ru["id"]: ru["status"] for ru in recon_units}
 
+        mode_label = "측방 관측·추적" if screen_mode else "정찰"
         summary_lines = [
-            f"정찰 임무계획: {len(assignments)}개 부대, "
+            f"{mode_label} 임무계획: {len(assignments)}개 부대, "
             f"목표 {len(targets)}개 통합 경로"
         ]
         for a in assignments:

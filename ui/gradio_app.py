@@ -527,8 +527,8 @@ def _execute_auto_attack_plan(event_type: str, *args):
         full_query = (
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
-            f"2. 정찰임무계획(recon) 출력 금지 — 공격임무계획(attack/defend/flank/withdraw/hold) 전용.\n"
-            f"3. recommend_recon_routes, recon_advisor_tool 호출 금지.\n\n"
+            f"2. Delta는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
+            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 Delta 경로 생성에 사용.\n\n"
             + base_query
             + f"\n\n{trigger_desc}\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
@@ -1196,7 +1196,7 @@ def wargame_request_attack_plan(history: List = None):
     Step 7. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
-          정찰부대(Delta) 공격 임무 부여
+          정찰부대(Delta) 공격/flank 임무 부여 (recon 임무는 필수 포함)
     """
     global _wg_last_plan
     history = list(history or [])
@@ -1238,7 +1238,8 @@ def wargame_request_attack_plan(history: List = None):
     base_query = build_mission_query(state)
     attack_suffix = (
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
-        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n\n"
+        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
+        f"⚠️ Delta(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"

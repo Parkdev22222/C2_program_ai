@@ -25,6 +25,7 @@ _FEW_SHOT_EXAMPLES = """\
 [형식예시1] 전력우세·공중지원 병행 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
 {"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
+  {"company_id":"Delta","mission_type":"recon","waypoints":[[RX1,RY1],[RX2,RY2],[RX3,RY3]],"objective":"측방 관측·추적"},
   {"company_id":"<BLUFOR_ID_A>","mission_type":"flank","waypoints":[[X1,Y1],[X2,Y2],[X3,Y3]],"objective":"<OPFOR_ID_1> 측방 공격"},
   {"company_id":"<BLUFOR_ID_B>","mission_type":"attack","waypoints":[[X4,Y4],[X5,Y5]],"objective":"<OPFOR_ID_2> 정면 압박"}
  ],
@@ -36,6 +37,7 @@ _FEW_SHOT_EXAMPLES = """\
 [형식예시2] 전력열세·방어+포병지원 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
 {"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
+  {"company_id":"Delta","mission_type":"recon","waypoints":[[RX1,RY1],[RX2,RY2]],"objective":"측방 경계"},
   {"company_id":"<BLUFOR_ID_A>","mission_type":"defend","waypoints":[[X1,Y1]],"objective":"고지 방어"},
   {"company_id":"<BLUFOR_ID_B>","mission_type":"withdraw","waypoints":[[X2,Y2],[X1,Y1]],"objective":"<BLUFOR_ID_A> 합류"}
  ],
@@ -46,6 +48,7 @@ _FEW_SHOT_EXAMPLES = """\
 [형식예시3] 공중지원 없음·포위 섬멸 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
 {"reasoning":"<툴 조회 결과 기반 한국어 판단근거>",
  "mission_plans":[
+  {"company_id":"Delta","mission_type":"recon","waypoints":[[RX1,RY1],[RX2,RY2],[RX3,RY3]],"objective":"미탐지 적 부대 추적"},
   {"company_id":"<BLUFOR_ID_C>","mission_type":"attack","waypoints":[[X1,Y1],[X2,Y2]],"objective":"정면 압박"},
   {"company_id":"<BLUFOR_ID_D>","mission_type":"flank","waypoints":[[X3,Y3],[X4,Y4]],"objective":"후방 차단"}
  ],
@@ -149,21 +152,26 @@ def build_mission_query(state: dict) -> str:
    → BLUFOR·OPFOR 실제 위치·전투력·행동 조회 (이 결과를 situation 변수에 저장)
 2. assess_recon_need()
    → OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
-   → ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 호출 금지
-3. predict_opfor_routes()
+3. recommend_recon_routes()
+   → Delta 정찰부대의 경로 생성 → recon_result에 저장
+   → recon_result["mission_plans"]의 첫 번째 항목을 Delta 임무로 사용
+   → status가 "no_recon_units"이면 Delta 임무 제외, 나머지는 항상 포함
+4. predict_opfor_routes()
    → 탐지된 OPFOR 부대의 예상 기동 경로(정면/우측우회/좌측우회) 분석
    → 결과를 opfor_routes_result에 저장
    → import json; opfor_routes_json = json.dumps(opfor_routes_result["predicted_routes"])
-4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
+5. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
    → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-5. strategy_advisor_tool(
+6. strategy_advisor_tool(
      query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요.",
      additional_context=str(attack_positions_result)
    )
    → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
-6. 위 1~5 결과를 종합하여 최종 임무계획 JSON 생성
+7. 위 1~6 결과를 종합하여 최종 임무계획 JSON 생성
    → 실제 부대 ID, 실제 좌표만 사용 / detected OPFOR만 목표
-7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
+   → Delta(정찰부대): recon_result["mission_plans"][0] 그대로 mission_plans에 추가
+   → 나머지 BLUFOR 부대: attack/flank/defend/hold 임무 부여
+8. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 좌표=미터(m) 정수, x=동쪽, y=북쪽, 범위 0~30000
@@ -181,10 +189,17 @@ def build_mission_query(state: dict) -> str:
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
    예: Red1 위치가 (12500, 8300) 이면 → "target": [12500, 8300]
 [규칙] 좌표는 반드시 미터(m) 정수 (9000이지 9가 아님), WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
+⚠️ [Delta 정찰부대 규칙]
+   • Delta는 반드시 mission_type="recon"으로 mission_plans에 포함 (공격/돌격 임무 절대 금지)
+   • Delta의 waypoints는 반드시 recommend_recon_routes() 결과의 mission_plans[0]["waypoints"]를 그대로 사용
+   • recon_result["status"]가 "no_recon_units"인 경우에만 Delta를 mission_plans에서 제외
 최종 JSON 출력(설명금지):
 ```json
 {{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
-"mission_plans":[{{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[미터정수x,미터정수y]],"objective":"목표"}}],
+"mission_plans":[
+  {{"company_id":"Delta","mission_type":"recon","waypoints":[[미터정수x,미터정수y]],"objective":"측방 관측·추적 또는 미탐지 부대 확인"}},
+  {{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[미터정수x,미터정수y]],"objective":"목표"}}
+],
 "air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[미터정수tx,미터정수ty],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""
     return query
