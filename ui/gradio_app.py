@@ -526,49 +526,19 @@ def _execute_auto_attack_plan(event_type: str, *args):
         base_query = build_mission_query(state)
         full_query = (
             f"⛔ [최우선 지시 — 반드시 준수]\n"
-            f"1. 아래 툴 호출 순서를 완전히 수행하기 전에 절대 final_answer()를 호출하지 말 것.\n"
-            f"2. 정찰임무계획(recon) 출력 금지 — 이 쿼리는 공격임무계획(attack/defend/flank/withdraw/hold) 전용.\n"
-            f"3. recommend_recon_routes, recon_advisor_tool 호출 금지.\n"
-            f"4. 반드시 get_wargame_situation() → assess_recon_need() → predict_opfor_routes() → get_optimal_attack_positions() → strategy_advisor_tool() → apply_wargame_mission_plan() 순서로 툴을 호출하라.\n\n"
+            f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
+            f"2. 정찰임무계획(recon) 출력 금지 — 공격임무계획(attack/defend/flank/withdraw/hold) 전용.\n"
+            f"3. recommend_recon_routes, recon_advisor_tool 호출 금지.\n\n"
             + base_query
-            + f"\n\n{trigger_desc}\n"
-            f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
+            + f"\n\n{trigger_desc}\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
             f"{current_mission_summary}\n\n"
             f"⚠️ [선택적 임무 재배정 규칙]\n"
             f"   • mission_plans에 포함된 부대만 새 임무를 받는다.\n"
             f"   • 포함하지 않은 부대는 위 현황의 기존 임무를 그대로 유지한다.\n"
-            f"   • 전술적 판단 기준:\n"
-            f"     - 기존 목표 OPFOR가 격멸되었거나 위협이 낮으면 → 새 목표로 재배정 고려\n"
-            f"     - 이미 교전 중이거나 목표까지 거리가 짧으면 → 기존 임무 유지 고려\n"
-            f"     - 전투력이 임계값 이하로 저하된 부대는 후퇴·방어 전환 또는 임무 인계 고려\n"
-            f"     - 새로 탐지된 OPFOR 또는 손상 부대 상황에 따라 일부 부대 전환 고려\n"
-            f"     - 병력 집중이 유리한 경우 여러 부대를 동일 목표에 재배정 가능\n\n"
-            f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
-            f"1. get_wargame_situation()\n"
-            f"   → 실제 BLUFOR·OPFOR 부대 ID·위치·전투력 조회 후 situation 변수에 저장\n"
-            f"2. assess_recon_need()\n"
-            f"   → 실제 OPFOR 탐지 현황 조회 (detected / approximate / lost)\n"
-            f"   → detected 부대만 공격 목표로 사용, approximate/lost 제외\n"
-            f"   ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 절대 호출 금지\n"
-            f"3. predict_opfor_routes()\n"
-            f"   → 탐지된 OPFOR 예상 기동 경로(정면/우측/좌측 우회) 분석 → opfor_routes_result에 저장\n"
-            f"   → import json; opfor_routes_json = json.dumps(opfor_routes_result[\"predicted_routes\"])\n"
-            f"4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)\n"
-            f"   → 적 예상 경로 차단 보너스 반영 최적 공격 위치 추천 → attack_positions_result에 저장\n"
-            f"5. strategy_advisor_tool(\n"
-            f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. "
-            f"{strategy_hint}\",\n"
-            f"     additional_context=str(attack_positions_result)\n"
-            f"   ) → deep_advice에 저장\n"
-            f"6. attack_positions_result + deep_advice 종합 → 최종 JSON 생성\n"
-            f"   (실제 부대 ID·좌표만 사용, detected OPFOR만 목표)\n"
-            f"   재배정이 필요한 부대만 mission_plans에 포함 (기존 임무 유지 부대는 제외)\n"
-            f"7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)\n\n"
-            f"⚠️ [공중지원·포격 목표 좌표 강제 규칙]\n"
-            f"   air_support_plans 의 target 은 반드시 get_wargame_situation() 에서 조회한\n"
-            f"   탐지된(detected) OPFOR 부대의 실제 x_m, y_m 값을 그대로 사용할 것.\n"
-            f"   임의 추정 좌표·waypoint 중간점 사용 절대 금지.\n\n"
+            f"   • 기존 목표 OPFOR가 격멸되거나 위협이 낮으면 새 목표로 재배정 고려\n"
+            f"   • 이미 교전 중이거나 목표까지 거리가 짧으면 기존 임무 유지 고려\n"
+            f"   • CP임계값 이하 부대는 후퇴·방어 전환 또는 임무 인계 고려\n\n"
             f"[ATTACK 규칙]\n{attack_rules}\n\n"
             f"[EXECUTION 규칙]\n{execution_rules}"
             f"{learned_suffix}"
@@ -617,6 +587,11 @@ def _execute_auto_attack_plan(event_type: str, *args):
     except Exception as _ex:
         logger.error(f"[자동임무계획] 오류: {_ex}", exc_info=True)
     finally:
+        # 재계획 완료 후 탐지 트리거 초기화 → 다음 OPFOR 탐지/이벤트가 다시 발동 가능
+        try:
+            eng.clear_detection_triggers()
+        except Exception:
+            pass
         if was_running and not eng.running:
             eng.start()
             logger.info("[자동임무계획] 시뮬레이션 재개")
@@ -1263,35 +1238,7 @@ def wargame_request_attack_plan(history: List = None):
     base_query = build_mission_query(state)
     attack_suffix = (
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
-        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
-        f"⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)\n\n"
-        f"[필수 툴 호출 순서 — 반드시 이 순서대로 실제 호출]\n"
-        f"1. get_wargame_situation()\n"
-        f"   → 실제 BLUFOR·OPFOR 부대 ID·위치·전투력 조회 → situation 변수에 저장\n"
-        f"2. assess_recon_need()\n"
-        f"   → 실제 OPFOR 탐지 현황 조회 (detected / approximate / lost)\n"
-        f"   → detected 부대만 공격 목표로 사용, approximate/lost 제외\n"
-        f"   ⚠️ 결과가 '정찰 필요'여도 recommend_recon_routes/recon_advisor_tool 절대 호출 금지\n"
-        f"   ⚠️ 이 두 툴은 정찰 임무 전용이며 공격 임무 중 호출 금지\n"
-        f"3. predict_opfor_routes()\n"
-        f"   → 탐지된 OPFOR 예상 기동 경로(정면/우측/좌측 우회) 분석 → opfor_routes_result에 저장\n"
-        f"   → import json; opfor_routes_json = json.dumps(opfor_routes_result[\"predicted_routes\"])\n"
-        f"4. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)\n"
-        f"   → 적 예상 경로 차단 보너스 반영 최적 공격 위치 추천 → attack_positions_result에 저장\n"
-        f"5. strategy_advisor_tool(\n"
-        f"     query=\"탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. "
-        f"적 예상 기동 경로와 아래 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요.\",\n"
-        f"     additional_context=str(attack_positions_result)\n"
-        f"   ) → deep_advice에 저장\n"
-        f"6. attack_positions_result + deep_advice 종합 → 최종 JSON 생성\n"
-        f"   (실제 부대 ID·좌표만 사용 / detected OPFOR만 목표 / CP<30%→defend/withdraw)\n"
-        f"7. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)\n"
-        f"   → 워게임 엔진 즉시 적용 (dry_run=True 절대 금지)\n"
-        f"8. 응답에 최종 임무계획 JSON 블록 출력\n\n"
-        f"⚠️ [공중지원·포격 목표 좌표 강제 규칙]\n"
-        f"   air_support_plans 의 target 은 반드시 get_wargame_situation() 에서 조회한\n"
-        f"   탐지된(detected) OPFOR 부대의 실제 x_m, y_m 값을 그대로 사용할 것.\n"
-        f"   임의 추정 좌표·waypoint 중간점 사용 절대 금지.\n\n"
+        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"
@@ -1372,6 +1319,11 @@ def wargame_request_attack_plan(history: List = None):
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, plan_text, fig, damage_fig, status, log_text
     finally:
+        # 재계획 완료 후 탐지 트리거 초기화 → 다음 이벤트가 다시 발동 가능
+        try:
+            eng.clear_detection_triggers()
+        except Exception:
+            pass
         # 에이전트가 apply_wargame_mission_plan을 호출하지 않은 경우 안전망
         if was_running and not eng.running:
             eng.start()

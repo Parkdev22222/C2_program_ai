@@ -362,6 +362,13 @@ class WargameEngine:
         if was_running:
             self.start()
 
+    def clear_detection_triggers(self):
+        """재계획 완료 후 호출 — 다음 탐지/임계값 이벤트가 다시 발동될 수 있도록 초기화."""
+        with self._lock:
+            self._auto_plan_triggered_ids.clear()
+            # CP 임계값은 부대별로 유지 (같은 CP 레벨에서 재발동 방지)
+            # — 단, 유닛이 완전히 재초기화되지 않는 한 동일 임계값 재발동은 없음
+
     def apply_mission_plan(self, plan: dict):
         with self._lock:
             id_map = {u.id: u for u in self.units}
