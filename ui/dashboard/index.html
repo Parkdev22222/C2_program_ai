@@ -209,9 +209,17 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .sc-del-btn{background:none;border:none;color:#555;cursor:pointer;font-size:13px;padding:1px 4px;
   border-radius:2px;line-height:1}
 .sc-del-btn:hover{color:var(--red);background:#2a0a0a}
+.sc-pick-btn{background:none;border:1px solid #1e2d3d;color:var(--dim);cursor:pointer;font-size:11px;
+  padding:1px 5px;border-radius:2px;line-height:1.4}
+.sc-pick-btn:hover{border-color:var(--blue);color:var(--blue);background:#0d1e35}
+.sc-pick-btn.active{border-color:var(--amber);color:var(--amber);background:#1a1200}
 .sc-add-btn{margin-top:6px;background:#080d14;border:1px solid var(--border);color:var(--dim);
   border-radius:3px;padding:4px 10px;font-size:11px;cursor:pointer;width:100%;text-align:left}
 .sc-add-btn:hover{border-color:var(--blue);color:var(--blue)}
+/* 지도 위치 선택 배너 */
+#sc-pick-banner{position:fixed;top:44px;left:0;right:0;z-index:10000;
+  background:#0a1f10;border-bottom:2px solid var(--green);
+  padding:8px 20px;font-size:12px;color:var(--green);display:none;align-items:center;gap:12px}
 .sc-footer{display:flex;align-items:center;gap:10px;padding:10px 16px;
   border-top:1px solid var(--border);flex-shrink:0}
 .sc-footer .sc-hint{flex:1;font-size:10px;color:var(--dim);line-height:1.4}
@@ -343,6 +351,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
   </div>
 </div>
 
+<!-- 지도 위치 선택 배너 -->
+<div id="sc-pick-banner">
+  <span id="sc-pick-msg">📍 지도를 클릭하여 위치를 선택하세요</span>
+  <button onclick="cancelMapPick()" style="background:#1a0808;border:1px solid var(--red);color:var(--red);border-radius:3px;padding:3px 10px;cursor:pointer;font-size:11px;margin-left:auto">✕ 취소 (ESC)</button>
+</div>
+
 <!-- 자동 재계획 배너 -->
 <div id="autoplan-banner">
   <div id="autoplan-spinner"></div>
@@ -363,11 +377,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <div class="sc-side-title blu">■ BLUFOR 아군 부대</div>
         <table class="sc-unit-table" id="blufor-table">
           <thead><tr>
-            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th></th>
+            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th>지도</th><th></th>
           </tr></thead>
           <tbody id="blufor-tbody"></tbody>
         </table>
-        <div class="sc-coord-hint">X/Y 비워두면 아군 구역 내 랜덤 배치 (x 2,000~13,000 / y 1,500~12,000)</div>
+        <div class="sc-coord-hint">X/Y 비워두면 아군 구역 내 랜덤 배치 (x 2,000~13,000 / y 1,500~12,000)<br>📍 버튼을 누르면 지도에서 직접 위치 클릭 선택</div>
         <button class="sc-add-btn" onclick="addUnit('blufor')">+ 아군 부대 추가</button>
       </div>
       <!-- OPFOR -->
@@ -375,7 +389,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <div class="sc-side-title red">■ OPFOR 적군 부대</div>
         <table class="sc-unit-table" id="opfor-table">
           <thead><tr>
-            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th></th>
+            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th>지도</th><th></th>
           </tr></thead>
           <tbody id="opfor-tbody"></tbody>
         </table>
@@ -410,6 +424,18 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 const MAP_CENTER = [38.135, 127.17];
 const MAP_ZOOM   = 11;
 const MAP_BOUNDS = [[38.0, 127.0], [38.27, 127.34]];
+
+// ── 좌표 변환 (backend coord_utils와 동일 공식) ─────────────────────
+const _REF_LAT = 38.0, _REF_LON = 127.0;
+const _MPDLAT  = 111000.0;
+const _MPDLON  = 111000.0 * Math.cos(38.0 * Math.PI / 180);
+function latlonToXY(lat, lon) {
+  return { x: Math.round((lon - _REF_LON) * _MPDLON),
+           y: Math.round((lat - _REF_LAT) * _MPDLAT) };
+}
+function xyToLatlon(x, y) {
+  return [_REF_LAT + y / _MPDLAT, _REF_LON + x / _MPDLON];
+}
 
 const map = L.map('map', {
   center: MAP_CENTER, zoom: MAP_ZOOM,
@@ -700,15 +726,24 @@ function updateForcePanel(state) {
 function updateHeader(state) {
   document.getElementById('game-time').textContent = state.game_time_str || '00:00:00';
 
-  const badge = document.getElementById('running-badge');
-  if (state.running) {
+  const badge    = document.getElementById('running-badge');
+  const startBtn = document.getElementById('btn-start');
+  if (_autoplanActive) {
+    badge.textContent = '⏸ PLANNING'; badge.className = 'stopped';
+    startBtn.disabled = true;
+    startBtn.textContent = '⏸ 재계획 중...';
+    startBtn.className   = 'sb-btn btn-warn';
+  } else if (state.running) {
     badge.textContent = '▶ RUNNING'; badge.className = 'running';
+    startBtn.disabled = false;
+    startBtn.textContent = '⏸ 일시정지';
+    startBtn.className   = 'sb-btn btn-warn';
   } else {
     badge.textContent = '⏸ PAUSED';  badge.className = 'stopped';
+    startBtn.disabled = false;
+    startBtn.textContent = '▶ 시뮬레이션 시작';
+    startBtn.className   = 'sb-btn btn-primary';
   }
-  const startBtn = document.getElementById('btn-start');
-  startBtn.textContent = state.running ? '⏸ 일시정지' : '▶ 시뮬레이션 시작';
-  startBtn.className   = state.running ? 'sb-btn btn-warn' : 'sb-btn btn-primary';
 
   if (state.winner) {
     const wb = document.getElementById('winner-banner');
@@ -964,7 +999,6 @@ fetchEvents();
 // ── 시나리오 설정 모달 ──────────────────────────────────────────
 const UNIT_TYPES = ['기계화보병', '전차', '정찰', '대전차', '자주포'];
 
-// 기본 5v5 시나리오
 const DEFAULT_BLUFOR = [
   {id:'Alpha',   unit_type:'기계화보병', x:9000,  y:4500},
   {id:'Bravo',   unit_type:'기계화보병', x:9000,  y:7500},
@@ -981,6 +1015,7 @@ const DEFAULT_OPFOR = [
 ];
 
 let _scCounter = 0;
+const _scPreviewMarkers = {};  // 시나리오 위치 미리보기 마커
 
 function makeTypeOptions(selected) {
   return UNIT_TYPES.map(t =>
@@ -990,12 +1025,14 @@ function makeTypeOptions(selected) {
 
 function makeUnitRow(side, u) {
   const key = ++_scCounter;
-  return `<tr id="scrow-${key}">
-    <td><input type="text" value="${u.id||''}" placeholder="예: Alpha" style="width:68px" data-field="id"></td>
+  const btnClr = side === 'blufor' ? 'color:var(--blue)' : 'color:var(--red)';
+  return `<tr id="scrow-${key}" data-side="${side}">
+    <td><input type="text" value="${u.id||''}" placeholder="예: Alpha" style="width:60px" data-field="id"></td>
     <td><select data-field="unit_type">${makeTypeOptions(u.unit_type||'기계화보병')}</select></td>
-    <td><input type="number" value="${u.x != null ? u.x : ''}" placeholder="랜덤" data-field="x"></td>
-    <td><input type="number" value="${u.y != null ? u.y : ''}" placeholder="랜덤" data-field="y"></td>
-    <td><button class="sc-del-btn" onclick="delRow('scrow-${key}')">✕</button></td>
+    <td><input type="number" value="${u.x != null ? u.x : ''}" placeholder="랜덤" data-field="x" oninput="updateScPreviewMarkers()"></td>
+    <td><input type="number" value="${u.y != null ? u.y : ''}" placeholder="랜덤" data-field="y" oninput="updateScPreviewMarkers()"></td>
+    <td><button class="sc-pick-btn" onclick="startMapPick('scrow-${key}')" title="지도에서 위치 클릭 선택" style="${btnClr}">📍</button></td>
+    <td><button class="sc-del-btn" onclick="delRow('scrow-${key}');updateScPreviewMarkers()">✕</button></td>
   </tr>`;
 }
 
@@ -1039,15 +1076,107 @@ function readTableRows(side) {
   return result;
 }
 
+// ── 시나리오 위치 미리보기 마커 ─────────────────────────────────
+function updateScPreviewMarkers() {
+  // 기존 마커 제거
+  for (const k of Object.keys(_scPreviewMarkers)) {
+    map.removeLayer(_scPreviewMarkers[k]); delete _scPreviewMarkers[k];
+  }
+  // BLUFOR + OPFOR 각 행 마커 추가
+  [['blufor-tbody','#40aaff'], ['opfor-tbody','#ff4040']].forEach(([tbodyId, color]) => {
+    for (const row of document.getElementById(tbodyId).querySelectorAll('tr')) {
+      const id   = row.querySelector('[data-field="id"]')?.value;
+      const xStr = row.querySelector('[data-field="x"]')?.value;
+      const yStr = row.querySelector('[data-field="y"]')?.value;
+      if (!id || xStr === '' || yStr === '') continue;
+      const x = parseFloat(xStr), y = parseFloat(yStr);
+      if (isNaN(x) || isNaN(y)) continue;
+      const [lat, lon] = xyToLatlon(x, y);
+      const icon = L.divIcon({
+        html: `<div style="padding:2px 5px;background:${color};border:2px solid ${color};border-radius:2px;color:#000d1a;font-family:'Courier New',monospace;font-size:9px;font-weight:700;white-space:nowrap;opacity:.85">${id}</div>`,
+        className:'', iconSize:[null,20], iconAnchor:[0,10],
+      });
+      _scPreviewMarkers[`sc_${id}`] = L.marker([lat,lon],{icon,zIndexOffset:200}).addTo(map);
+    }
+  });
+}
+
+function clearScPreviewMarkers() {
+  for (const k of Object.keys(_scPreviewMarkers)) {
+    map.removeLayer(_scPreviewMarkers[k]); delete _scPreviewMarkers[k];
+  }
+}
+
+// ── 지도 클릭으로 시작 위치 선택 ─────────────────────────────────
+let _pickingRowId = null;
+let _pickClickHandler = null;
+
+function _pickEscHandler(e) { if (e.key === 'Escape') cancelMapPick(); }
+
+function startMapPick(rowId) {
+  if (_pickingRowId) cancelMapPick();
+  _pickingRowId = rowId;
+  const row = document.getElementById(rowId);
+  const unitId = row.querySelector('[data-field="id"]').value || '부대';
+  const side = row.dataset.side;
+  const color = side === 'blufor' ? 'var(--blue)' : 'var(--red)';
+
+  // 모달 뒤로 숨기기 (지도 보이도록)
+  document.getElementById('scenario-modal').style.opacity = '0.08';
+  document.getElementById('scenario-modal').style.pointerEvents = 'none';
+
+  // 안내 배너 표시
+  const banner = document.getElementById('sc-pick-banner');
+  document.getElementById('sc-pick-msg').innerHTML =
+    `📍 지도를 클릭하여 <b style="color:${color}">${unitId}</b> 의 시작 위치를 선택하세요`;
+  banner.style.display = 'flex';
+
+  document.getElementById('map').style.cursor = 'crosshair';
+  document.querySelectorAll('.sc-pick-btn').forEach(b => b.classList.remove('active'));
+  row.querySelector('.sc-pick-btn').classList.add('active');
+
+  _pickClickHandler = function(e) {
+    const {x, y} = latlonToXY(e.latlng.lat, e.latlng.lng);
+    // 범위 클램프
+    const cx = Math.max(0, Math.min(30000, x));
+    const cy = Math.max(0, Math.min(30000, y));
+    const r = document.getElementById(_pickingRowId);
+    if (r) {
+      r.querySelector('[data-field="x"]').value = cx;
+      r.querySelector('[data-field="y"]').value = cy;
+    }
+    cancelMapPick();
+    updateScPreviewMarkers();
+  };
+  map.once('click', _pickClickHandler);
+  document.addEventListener('keydown', _pickEscHandler);
+}
+
+function cancelMapPick() {
+  if (_pickClickHandler) { map.off('click', _pickClickHandler); _pickClickHandler = null; }
+  document.removeEventListener('keydown', _pickEscHandler);
+  _pickingRowId = null;
+
+  const modal = document.getElementById('scenario-modal');
+  modal.style.opacity = '';
+  modal.style.pointerEvents = '';
+  document.getElementById('sc-pick-banner').style.display = 'none';
+  document.getElementById('map').style.cursor = '';
+  document.querySelectorAll('.sc-pick-btn').forEach(b => b.classList.remove('active'));
+}
+
 function openScenarioModal() {
   renderTable('blufor', DEFAULT_BLUFOR);
   renderTable('opfor',  DEFAULT_OPFOR);
   document.getElementById('sc-status').textContent = '';
   document.getElementById('sc-status').className = '';
   document.getElementById('scenario-modal').classList.add('show');
+  updateScPreviewMarkers();
 }
 
 function closeScenarioModal() {
+  cancelMapPick();
+  clearScPreviewMarkers();
   document.getElementById('scenario-modal').classList.remove('show');
 }
 
