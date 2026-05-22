@@ -1,7 +1,12 @@
-"""좌표 변환 유틸리티 — 엔진 내부 미터(m) ↔ 실세계 위경도(WGS84)"""
+"""좌표 변환 유틸리티 — 엔진 내부 미터(m) ↔ 실세계 위경도(WGS84)
+
+작전 지역 기준점: 철원 지역 (DMZ 인근)
+  lat=38.0, lon=127.0 → 엔진 내부 (0, 0)
+  30km × 30km 작전 범위: lat 38.0~38.27, lon 127.0~127.34
+"""
 import math
 
-REF_LAT = 37.0
+REF_LAT = 38.0   # 철원 지역 (DMZ 인근)
 REF_LON = 127.0
 METERS_PER_DEG_LAT = 111000.0
 METERS_PER_DEG_LON = 111000.0 * math.cos(math.radians(REF_LAT))
