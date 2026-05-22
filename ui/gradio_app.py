@@ -104,6 +104,9 @@ _harness_controller = None
 _detection_queue: _queue.Queue = _queue.Queue()
 _auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
 
+# 자동 재계획 진행 상태 (UI 폴링용)
+_auto_plan_status: dict = {"active": False, "message": "", "started_at": 0.0}
+
 
 # ── UI 상태 영속성 ────────────────────────────────────────────
 import json as _json_mod
@@ -537,6 +540,12 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
     logger.info(f"[자동임무계획] {log_tag} — running={eng.running}")
 
+    # UI 팝업용 상태 플래그 설정
+    import time as _t_status
+    _auto_plan_status["active"] = True
+    _auto_plan_status["message"] = log_tag
+    _auto_plan_status["started_at"] = _t_status.time()
+
     # 진행 중인 공중지원(pending/active)이 완료될 때까지 대기한 후 정지
     # 직접사격·간접사격은 틱 내 즉시 처리되므로 대기 불필요
     was_running = eng.running
@@ -697,6 +706,9 @@ def _execute_auto_attack_plan(event_type: str, *args):
     except Exception as _ex:
         logger.error(f"[자동임무계획] 오류: {_ex}", exc_info=True)
     finally:
+        # UI 팝업 상태 해제
+        _auto_plan_status["active"] = False
+        _auto_plan_status["message"] = ""
         # 재계획 완료 후 탐지 트리거 초기화 → 다음 OPFOR 탐지/이벤트가 다시 발동 가능
         try:
             eng.clear_detection_triggers()

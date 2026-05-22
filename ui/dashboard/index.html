@@ -160,6 +160,20 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .leaflet-popup-tip{background:rgba(10,14,20,.95)!important}
 .leaflet-popup-content{font-family:'Noto Sans KR',sans-serif!important;font-size:12px!important;margin:8px 12px!important}
 
+/* ── 자동 재계획 배너 ────────────────────────────────────────────── */
+#autoplan-banner{position:fixed;top:0;left:0;right:0;z-index:8000;
+  background:linear-gradient(90deg,#1a2e00,#2a4400,#1a2e00);
+  border-bottom:2px solid var(--amber);
+  padding:0 20px;height:0;overflow:hidden;
+  display:flex;align-items:center;gap:12px;
+  transition:height .3s ease,opacity .3s ease;opacity:0}
+#autoplan-banner.show{height:42px;opacity:1}
+#autoplan-spinner{width:16px;height:16px;border:2px solid #3a4400;border-top-color:var(--amber);
+  border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0}
+#autoplan-text{font-size:12px;font-weight:500;color:var(--amber);flex:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#autoplan-sub{font-size:10px;color:#8a9060;white-space:nowrap}
+
 /* ── 시나리오 설정 모달 ──────────────────────────────────────────── */
 #scenario-modal{position:fixed;inset:0;background:rgba(6,9,15,.88);z-index:9500;
   display:none;align-items:center;justify-content:center}
@@ -329,6 +343,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
       </div>
     </div>
   </div>
+</div>
+
+<!-- 자동 재계획 배너 -->
+<div id="autoplan-banner">
+  <div id="autoplan-spinner"></div>
+  <span id="autoplan-text">이벤트에 의한 임무계획 수정 중...</span>
+  <span id="autoplan-sub">LLM 판단 중 · 완료 시 자동 해제</span>
 </div>
 
 <!-- 시나리오 설정 모달 -->
@@ -752,6 +773,48 @@ async function poll() {
 
 setInterval(poll, 2000);
 poll();
+
+// ── 자동 재계획 배너 폴링 ──────────────────────────────────────────
+const EVENT_LABELS = {
+  '신규 탐지':      '🔍 신규 적 탐지 — 임무계획 수정 중',
+  'CP 임계값':      '⚠️ 전투력 저하 — 임무계획 수정 중',
+  '공중지원 피격':  '💥 공중지원 피격 — 임무계획 수정 중',
+};
+
+let _autoplanActive = false;
+
+async function pollAutoPlan() {
+  try {
+    const r = await fetch('/api/auto_plan_status');
+    const d = await r.json();
+    const banner = document.getElementById('autoplan-banner');
+    const textEl = document.getElementById('autoplan-text');
+
+    if (d.active) {
+      // 트리거 종류에 따라 라벨 선택
+      let label = '🤖 이벤트에 의한 임무계획 수정 중...';
+      for (const [key, val] of Object.entries(EVENT_LABELS)) {
+        if ((d.message || '').includes(key)) { label = val; break; }
+      }
+      textEl.textContent = label;
+      banner.classList.add('show');
+      if (!_autoplanActive) {
+        addChatMessage('sys', `🔄 ${label}`);
+        _autoplanActive = true;
+      }
+    } else {
+      banner.classList.remove('show');
+      if (_autoplanActive) {
+        addChatMessage('sys', '✅ LLM 임무계획 수정 완료');
+        _autoplanActive = false;
+        await poll(); await fetchEvents();
+      }
+    }
+  } catch(_) {}
+}
+
+setInterval(pollAutoPlan, 1500);
+pollAutoPlan();
 
 // ── 시뮬레이션 제어 ─────────────────────────────────────────────
 async function toggleStartStop() {

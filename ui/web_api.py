@@ -390,6 +390,17 @@ if _FASTAPI_OK:
             return JSONResponse({"error": "잡을 찾을 수 없습니다"}, status_code=404)
         return JSONResponse(job)
 
+    @app.get("/api/auto_plan_status")
+    async def api_auto_plan_status():
+        try:
+            s = _ga()._auto_plan_status
+            return JSONResponse({
+                "active":  s.get("active", False),
+                "message": s.get("message", ""),
+            })
+        except Exception:
+            return JSONResponse({"active": False, "message": ""})
+
     @app.get("/api/scenario/unit_types")
     async def api_scenario_unit_types():
         try:
