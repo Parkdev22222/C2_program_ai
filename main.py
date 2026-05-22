@@ -235,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ui
     ui_p = subparsers.add_parser("ui", help="HTML 대시보드 UI 실행 (FastAPI + Leaflet)")
     ui_p.add_argument("--host", default="0.0.0.0")
-    ui_p.add_argument("--port", type=int, default=7861)
+    ui_p.add_argument("--port", type=int, default=7860)
     ui_p.add_argument("--skip-strategy", action="store_true", help="EXAONE Deep 로딩 건너뜀")
     ui_p.add_argument("--skip-vision-preload", action="store_true", help="비전 모델 사전 로딩 건너뜀")
 
