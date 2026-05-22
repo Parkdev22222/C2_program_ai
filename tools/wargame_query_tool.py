@@ -6,6 +6,7 @@ WargameEngine SQLite DB를 통해 전장 상황을 조회합니다.
 import logging
 import re as _re
 from smolagents import tool
+from tools.coord_utils import xy_to_latlon
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,9 @@ def get_wargame_situation() -> dict:
             "tick": int,
             "blufor_units": [
                 {
-                  "unit_id", "unit_type", "x_m", "y_m",
+                  "unit_id", "unit_type",
+                  "lat": float, "lon": float,   # WGS84 위경도 (주 좌표)
+                  "x_m": int, "y_m": int,        # 내부 미터 (하위호환)
                   "combat_power_pct", "status", "current_action",
                   "be_attacked": bool,            # 최근 5틱 내 피격 여부
                   "enemy_attack_method": str|null  # "직사격"|"간접사격"|"공중폭격"|복합
@@ -121,7 +124,8 @@ def get_wargame_situation() -> dict:
             ],
             "opfor_intel": [
                 { "unit_id", "detection_status",
-                  "known_x_m", "known_y_m",
+                  "known_lat": float, "known_lon": float,  # WGS84 위경도 (주 좌표)
+                  "known_x_m": int, "known_y_m": int,       # 내부 미터 (하위호환)
                   "unit_type",       # 탐지 전: "미확인"
                   "combat_power",    # 탐지 전: null
                   "detected_by" }, ...
@@ -147,10 +151,14 @@ def get_wargame_situation() -> dict:
         attack_status = _build_attack_status(current_tick, blufor_ids)
 
         # BLUFOR 아군 실제 정보
-        blufor_units = [
-            {
+        blufor_units = []
+        for u in blufor_raw:
+            lat, lon = xy_to_latlon(u["x"], u["y"])
+            blufor_units.append({
                 "unit_id":            u["id"],
                 "unit_type":          u.get("unit_type", ""),
+                "lat":                lat,
+                "lon":                lon,
                 "x_m":                int(u["x"]),
                 "y_m":                int(u["y"]),
                 "combat_power_pct":   round(u["combat_power"], 1),
@@ -158,24 +166,24 @@ def get_wargame_situation() -> dict:
                 "current_action":     u.get("current_action", "hold"),
                 "be_attacked":        attack_status[u["id"]]["be_attacked"],
                 "enemy_attack_method": attack_status[u["id"]]["enemy_attack_method"],
-            }
-            for u in blufor_raw
-        ]
+            })
 
         # OPFOR 인텔 필터 적용
         blufor_intel_entries = state.get("intelligence", {}).get("BLUFOR", [])
-        opfor_intel = [
-            {
+        opfor_intel = []
+        for e in blufor_intel_entries:
+            known_lat, known_lon = xy_to_latlon(e["known_x"], e["known_y"])
+            opfor_intel.append({
                 "unit_id":          e["unit_id"],
                 "detection_status": e["status"],
-                "known_x_m":      int(e["known_x"]),
-                "known_y_m":      int(e["known_y"]),
+                "known_lat":        known_lat,
+                "known_lon":        known_lon,
+                "known_x_m":        int(e["known_x"]),
+                "known_y_m":        int(e["known_y"]),
                 "unit_type":        e["unit_type"] or "미확인",
                 "combat_power":     e["combat_power"],
                 "detected_by":      e["detected_by"],
-            }
-            for e in blufor_intel_entries
-        ]
+            })
 
         blufor_alive = [u for u in blufor_units if u["status"] != "destroyed"]
         opfor_detected = [e for e in opfor_intel if e["detection_status"] == "detected"]
@@ -222,8 +230,8 @@ def get_intelligence_report(side: str = "BLUFOR") -> dict:
                 {
                     "unit_id": str,
                     "status": "detected" | "approximate" | "lost",
-                    "known_x_m": int,
-                    "known_y_m": int,
+                    "known_lat": float, "known_lon": float,  # WGS84 위경도 (주 좌표)
+                    "known_x_m": int, "known_y_m": int,       # 내부 미터 (하위호환)
                     "unit_type": str,           # 탐지 전: "미확인"
                     "combat_power": float | None,  # 탐지 전: null
                     "detected_by": str | None,
@@ -236,6 +244,18 @@ def get_intelligence_report(side: str = "BLUFOR") -> dict:
         return {"status": "engine_not_ready", "message": "워게임 엔진이 초기화되지 않았습니다."}
     try:
         report = _wargame_engine.get_intelligence_report(side)
+        # Convert enemy_intel coordinates to lat/lon
+        for entry in report.get("enemy_intel", []):
+            kx = entry.get("known_x_m", entry.get("known_x", 0))
+            ky = entry.get("known_y_m", entry.get("known_y", 0))
+            known_lat, known_lon = xy_to_latlon(kx, ky)
+            entry["known_lat"] = known_lat
+            entry["known_lon"] = known_lon
+            # Ensure known_x_m / known_y_m aliases exist
+            if "known_x_m" not in entry and "known_x" in entry:
+                entry["known_x_m"] = int(entry["known_x"])
+            if "known_y_m" not in entry and "known_y" in entry:
+                entry["known_y_m"] = int(entry["known_y"])
         return {"status": "success", **report}
     except Exception as e:
         logger.error(f"get_intelligence_report error: {e}", exc_info=True)
@@ -253,8 +273,8 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
     Returns:
         {
             "status": "success" | "not_found" | "engine_not_ready",
-            "unit": { unit_id, side, unit_type, x_m, y_m, combat_power_pct, status, current_action },
-            "history": [ {tick, game_time, x_m, y_m, combat_power_pct, status}, ... ]
+            "unit": { unit_id, side, unit_type, lat, lon, x_m, y_m, combat_power_pct, status, current_action },
+            "history": [ {tick, game_time, lat, lon, x_m, y_m, combat_power_pct, status}, ... ]
         }
     """
     if _wargame_engine is None:
@@ -271,10 +291,13 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
                 return {"status": "not_found", "message": f"부대 '{unit_id}'를 찾을 수 없습니다."}
             unit_row = {**u_data, "unit_id": u_data["id"]}
 
+        u_lat, u_lon = xy_to_latlon(unit_row["x"], unit_row["y"])
         unit_info = {
             "unit_id": unit_row.get("unit_id", unit_row.get("id", "")),
             "side": unit_row["side"],
             "unit_type": unit_row.get("unit_type", ""),
+            "lat": u_lat,
+            "lon": u_lon,
             "x_m": int(unit_row["x"]),
             "y_m": int(unit_row["y"]),
             "combat_power_pct": round(unit_row["combat_power"], 1),
@@ -283,17 +306,19 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
         }
 
         history_rows = _wargame_engine.db.get_unit_history(unit_id, limit=20)
-        history = [
-            {
+        history = []
+        for r in history_rows:
+            h_lat, h_lon = xy_to_latlon(r["x"], r["y"])
+            history.append({
                 "tick": r["tick"],
                 "game_time": round(r["game_time"], 1),
+                "lat": h_lat,
+                "lon": h_lon,
                 "x_m": int(r["x"]),
                 "y_m": int(r["y"]),
                 "combat_power_pct": round(r["combat_power"], 1),
                 "status": r["status"],
-            }
-            for r in history_rows
-        ]
+            })
 
         return {"status": "success", "unit": unit_info, "history": history}
     except Exception as e:

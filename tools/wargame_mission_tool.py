@@ -5,6 +5,7 @@ import json
 import logging
 import math
 from smolagents import tool
+from tools.coord_utils import is_latlon_coords, waypoints_latlon_to_xy, latlon_to_xy
 
 logger = logging.getLogger(__name__)
 
@@ -181,13 +182,47 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
         skipped = [mp["company_id"] for mp in mission_plans
                    if mp.get("company_id", "") not in valid_ids]
 
+        # ── waypoint 좌표 자동 감지: lat/lon → 미터 변환 ──────────────
+        plan = dict(plan)
+        converted_mission_plans = []
+        for mp in mission_plans:
+            mp = dict(mp)
+            wps = mp.get("waypoints", [])
+            if wps and is_latlon_coords(wps):
+                mp["waypoints"] = waypoints_latlon_to_xy(wps)
+                logger.info(
+                    f"[좌표변환] {mp.get('company_id','?')} waypoints 위경도→미터 변환 완료"
+                )
+            converted_mission_plans.append(mp)
+        plan["mission_plans"] = converted_mission_plans
+
+        # air_support target 좌표도 lat/lon이면 미터로 변환
+        if plan.get("air_support_plans"):
+            converted_air = []
+            for asp in plan["air_support_plans"]:
+                asp = dict(asp)
+                target = asp.get("target", [])
+                if len(target) == 2:
+                    t0, t1 = float(target[0]), float(target[1])
+                    # lat 범위(소수) 판별
+                    if -90.0 <= t0 <= 90.0 and t0 != round(t0):
+                        x_m, y_m = latlon_to_xy(t0, t1)
+                        asp["target"] = [x_m, y_m]
+                        logger.info(
+                            f"[좌표변환] {asp.get('call_sign','?')} target 위경도→미터 변환"
+                        )
+                converted_air.append(asp)
+            plan["air_support_plans"] = converted_air
+
+        # Re-read mission_plans after conversion (for skipped check below)
+        mission_plans = plan.get("mission_plans", [])
+
         # ── 공중지원 목표 좌표 강제 교정 (탐지 OPFOR 정확 좌표로 스냅) ──
         air_snap_log, air_snap_errors = [], []
         if plan.get("air_support_plans"):
             snapped_air, air_snap_log, air_snap_errors = _snap_air_targets_to_opfor(
                 plan["air_support_plans"]
             )
-            plan = dict(plan)
             plan["air_support_plans"] = snapped_air
             for msg in air_snap_log:
                 logger.info(f"[공중지원 좌표교정] {msg}")
