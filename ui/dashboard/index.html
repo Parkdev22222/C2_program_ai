@@ -120,6 +120,23 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .unit-mk .uid{font-size:9px;font-weight:700}
 .unit-mk .ucp{font-size:9px}
 
+/* ── 전력 현황 패널 ──────────────────────────────────────────── */
+#force-panel{flex-shrink:0;padding:8px 12px 6px;border-bottom:1px solid var(--border)}
+.force-side{margin-bottom:8px}
+.force-side:last-child{margin-bottom:0}
+.force-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.force-label .side-name{font-size:10px;font-weight:700;letter-spacing:.8px}
+.force-label .side-stat{font-size:10px;font-family:'Courier New',monospace;color:var(--dim)}
+.force-bar-wrap{background:#0a0e14;border-radius:2px;height:6px;margin-bottom:6px;overflow:hidden;border:1px solid #1e2d3d}
+.force-bar{height:100%;border-radius:2px;transition:width .5s ease}
+.unit-row{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.unit-row .un{font-family:'Courier New',monospace;font-size:9px;color:var(--dim);min-width:46px;white-space:nowrap}
+.unit-row .ub-wrap{flex:1;background:#0a0e14;border-radius:1px;height:5px;overflow:hidden;border:1px solid #1e2d3d}
+.unit-row .ub{height:100%;border-radius:1px;transition:width .4s ease}
+.unit-row .uv{font-family:'Courier New',monospace;font-size:9px;min-width:32px;text-align:right;white-space:nowrap}
+.unit-row .ubadge{font-size:8px;min-width:14px;text-align:center}
+.force-divider{border:none;border-top:1px solid var(--border);margin:6px 0}
+
 /* ── 스크롤바 ─────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:var(--bg)}
@@ -171,8 +188,27 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <button id="btn-eval" class="sb-btn btn-warn" onclick="startMission('evaluate')">🧠 전술 평가 &amp; 학습</button>
       </div>
 
-      <div class="sb-section" style="flex-shrink:0">
+      <div id="force-panel" class="sb-section">
         <div class="sb-title">📊 전력 현황</div>
+        <div id="force-content">
+          <div class="force-side">
+            <div class="force-label">
+              <span class="side-name" style="color:var(--blue)">BLUFOR (아군)</span>
+              <span class="side-stat" id="bf-stat">-/-</span>
+            </div>
+            <div class="force-bar-wrap"><div id="bf-bar" class="force-bar" style="width:0%;background:var(--blue)"></div></div>
+            <div id="bf-units"></div>
+          </div>
+          <hr class="force-divider">
+          <div class="force-side">
+            <div class="force-label">
+              <span class="side-name" style="color:var(--red)">OPFOR (적군) 인텔</span>
+              <span class="side-stat" id="op-stat">-/-</span>
+            </div>
+            <div class="force-bar-wrap"><div id="op-bar" class="force-bar" style="width:0%;background:var(--red)"></div></div>
+            <div id="op-units"></div>
+          </div>
+        </div>
       </div>
       <div id="status-box">로딩 중...</div>
     </div>
@@ -440,6 +476,73 @@ function makeIntelPopup(e) {
     추정위치: <span style="font-family:monospace;font-size:11px">lat=${e.lat.toFixed(4)}, lon=${e.lon.toFixed(4)}</span>`;
 }
 
+// ── 전력 현황 패널 ───────────────────────────────────────────────
+function cpColor(cp) {
+  if (cp >= 70) return 'var(--green)';
+  if (cp >= 40) return 'var(--amber)';
+  return 'var(--red)';
+}
+
+function updateForcePanel(state) {
+  const units   = state.units || [];
+  const intel   = (state.intelligence?.BLUFOR) || [];
+
+  // ── BLUFOR ────────────────────────────────────────────
+  const blufor  = units.filter(u => u.side === 'BLUFOR');
+  const bfAlive = blufor.filter(u => u.status !== 'destroyed');
+  const bfAvg   = bfAlive.length
+    ? bfAlive.reduce((s, u) => s + u.combat_power, 0) / bfAlive.length
+    : 0;
+
+  document.getElementById('bf-stat').textContent =
+    `${bfAlive.length}/${blufor.length} | ${bfAvg.toFixed(0)}%`;
+  document.getElementById('bf-bar').style.cssText =
+    `width:${bfAvg.toFixed(1)}%;background:${cpColor(bfAvg)}`;
+
+  const bfHtml = blufor.map(u => {
+    const dead = u.status === 'destroyed';
+    const cp   = dead ? 0 : u.combat_power;
+    const statusIcon = {active:'●', degraded:'◑', suppressed:'○', destroyed:'✕'}[u.status] || '●';
+    const statusClr  = {active:'var(--green)', degraded:'var(--amber)', suppressed:'var(--amber)', destroyed:'#555'}[u.status] || 'var(--dim)';
+    const barClr = dead ? '#333' : cpColor(cp);
+    return `<div class="unit-row">
+      <span class="un" style="color:${dead?'#444':'var(--blue)'}">${u.id}</span>
+      <div class="ub-wrap"><div class="ub" style="width:${cp.toFixed(1)}%;background:${barClr}"></div></div>
+      <span class="uv" style="color:${barClr}">${dead ? '전멸' : cp.toFixed(0)+'%'}</span>
+      <span class="ubadge" style="color:${statusClr}">${statusIcon}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('bf-units').innerHTML = bfHtml;
+
+  // ── OPFOR 인텔 ────────────────────────────────────────
+  const opDetected = intel.filter(e => e.status === 'detected');
+  const opAvg = opDetected.length
+    ? opDetected.reduce((s, e) => s + (e.combat_power || 0), 0) / opDetected.length
+    : 0;
+  const totalIntel = intel.length;
+
+  document.getElementById('op-stat').textContent =
+    `탐지 ${opDetected.length}/${totalIntel} | ${opDetected.length ? opAvg.toFixed(0)+'%' : '???'}`;
+  document.getElementById('op-bar').style.cssText =
+    `width:${opAvg.toFixed(1)}%;background:${cpColor(opAvg)}`;
+
+  const opHtml = intel.map(e => {
+    const statusIcon = {detected:'●', approximate:'~', lost:'?'}[e.status] || '?';
+    const statusClr  = {detected:'var(--red)', approximate:'var(--amber)', lost:'#555'}[e.status] || '#555';
+    const cp = e.status === 'detected' ? e.combat_power : null;
+    const barW = cp !== null ? cp.toFixed(1) : '0';
+    const barClr = cp !== null ? cpColor(cp) : '#222';
+    const valTxt = cp !== null ? cp.toFixed(0)+'%' : (e.status === 'lost' ? '상실' : '???');
+    return `<div class="unit-row">
+      <span class="un" style="color:${e.status==='lost'?'#444':'var(--red)'}">${e.unit_id}</span>
+      <div class="ub-wrap"><div class="ub" style="width:${barW}%;background:${barClr}"></div></div>
+      <span class="uv" style="color:${cp!==null?barClr:'#555'}">${valTxt}</span>
+      <span class="ubadge" style="color:${statusClr}">${statusIcon}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('op-units').innerHTML = opHtml;
+}
+
 // ── 헤더/상태 업데이트 ────────────────────────────────────────────
 function updateHeader(state) {
   document.getElementById('game-time').textContent = state.game_time_str || '00:00:00';
@@ -506,6 +609,7 @@ async function poll() {
     const state = await r.json();
     updateMap(state);
     updateHeader(state);
+    updateForcePanel(state);
     _isRunning = state.running;
     _pollCount++;
     if (_pollCount % 2 === 0) { fetchStatusText(); fetchEvents(); }
