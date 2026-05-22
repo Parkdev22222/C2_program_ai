@@ -396,6 +396,64 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
     return _wg_engine
 
 
+def _get_recon_unit_ids() -> list:
+    """현재 워게임에서 BLUFOR 정찰부대 ID 목록 반환."""
+    eng = _wg_ensure_engine()
+    if eng is None:
+        return ["Delta"]
+    try:
+        state = eng.get_state()
+        ids = [u["id"] for u in state.get("units", [])
+               if u.get("side") == "BLUFOR" and u.get("unit_type") == "정찰"]
+        return ids if ids else ["Delta"]
+    except Exception:
+        return ["Delta"]
+
+
+def wargame_apply_custom_scenario(scenario_config: dict) -> dict:
+    """사용자 정의 시나리오 적용 — 부대 구성·배치 변경 후 엔진 리셋."""
+    global _wg_engine, _wg_planner, _wg_last_plan
+    if not _WARGAME_OK:
+        return {"ok": False, "error": "워게임 초기화 실패"}
+    try:
+        from wargame.scenario import setup_custom_scenario
+        from tools.mission_plan_validator import update_valid_company_ids
+
+        blufor_defs = scenario_config.get("blufor", [])
+        opfor_defs  = scenario_config.get("opfor", [])
+
+        if not blufor_defs:
+            return {"ok": False, "error": "BLUFOR 부대가 없습니다."}
+        if not opfor_defs:
+            return {"ok": False, "error": "OPFOR 부대가 없습니다."}
+
+        # validator 업데이트
+        update_valid_company_ids({bd["id"] for bd in blufor_defs})
+
+        units = setup_custom_scenario(blufor_defs, opfor_defs)
+
+        if _wg_engine is not None:
+            _wg_engine.reset(units)
+        else:
+            _wg_engine = WargameEngine(units)
+            _wg_register_engine(_wg_engine)
+
+        if _wg_planner is None:
+            _wg_planner = MissionPlanner()
+
+        _wg_engine.on_new_opfor_detection = _detection_enqueue
+        _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
+        _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+        _wg_last_plan = {}
+
+        logger.info("사용자 정의 시나리오 적용 완료: BLUFOR %d개, OPFOR %d개",
+                    len(blufor_defs), len(opfor_defs))
+        return {"ok": True, "blufor": len(blufor_defs), "opfor": len(opfor_defs)}
+    except Exception as e:
+        logger.exception("wargame_apply_custom_scenario 오류")
+        return {"ok": False, "error": str(e)}
+
+
 # ── 자동 탐지 / 전투력 임계값 / 공중지원 피격 → 공격임무계획 수립 ──
 # 큐 이벤트 형식:
 #   ("detection",    enemy_id, unit_type, x, y)
@@ -572,12 +630,14 @@ def _execute_auto_attack_plan(event_type: str, *args):
             attack_rules = execution_rules = learned_rules = ""
 
         learned_suffix = f"\n\n[학습된 규칙]\n{learned_rules}" if learned_rules else ""
+        _recon_ids = _get_recon_unit_ids()
+        _recon_id_str = ", ".join(_recon_ids) if _recon_ids else "정찰부대"
         base_query = build_mission_query(state)
         full_query = (
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
-            f"2. Delta는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
-            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 Delta 경로 생성에 사용.\n\n"
+            f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
+            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n\n"
             + base_query
             + f"\n\n{trigger_desc}\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
@@ -1253,7 +1313,7 @@ def wargame_request_attack_plan(history: List = None):
     Step 7. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
-          정찰부대(Delta) 공격/flank 임무 부여 (recon 임무는 필수 포함)
+          정찰부대(unit_type=정찰) 공격/flank 임무 부여 (recon 임무는 필수 포함)
     """
     global _wg_last_plan
     history = list(history or [])
@@ -1292,11 +1352,13 @@ def wargame_request_attack_plan(history: List = None):
     except Exception:
         attack_rules = execution_rules_atk = learned_rules_atk = ""
     learned_suffix_atk = f"\n\n[학습된 규칙]\n{learned_rules_atk}" if learned_rules_atk else ""
+    _atk_recon_ids = _get_recon_unit_ids()
+    _atk_recon_str = ", ".join(_atk_recon_ids) if _atk_recon_ids else "정찰부대"
     base_query = build_mission_query(state)
     attack_suffix = (
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
         f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
-        f"⚠️ Delta(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
+        f"⚠️ {_atk_recon_str}(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"

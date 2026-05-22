@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 MAP_MAX = 30_000.0
 VALID_COMPANY_IDS = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"}
 VALID_MISSION_TYPES = {"recon", "attack", "defend", "flank", "withdraw", "hold"}
+
+
+def update_valid_company_ids(ids) -> None:
+    """VALID_COMPANY_IDS를 시나리오에 맞게 동적 갱신."""
+    global VALID_COMPANY_IDS
+    VALID_COMPANY_IDS = set(ids)
 VALID_SUPPORT_TYPES = {"cas", "strike", "artillery", "helicopter"}
 WRITE_TOOLS = {"apply_wargame_mission_plan", "apply_wargame_air_support"}
 

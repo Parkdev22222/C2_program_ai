@@ -183,6 +183,18 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ScenarioUnitDef(BaseModel):
+    id: str
+    unit_type: str
+    x: Optional[float] = None
+    y: Optional[float] = None
+
+
+class ScenarioApplyRequest(BaseModel):
+    blufor: List[ScenarioUnitDef]
+    opfor: List[ScenarioUnitDef]
+
+
 # ── 엔드포인트 ───────────────────────────────────────────────────────────────
 if _FASTAPI_OK:
 
@@ -377,6 +389,37 @@ if _FASTAPI_OK:
         if job is None:
             return JSONResponse({"error": "잡을 찾을 수 없습니다"}, status_code=404)
         return JSONResponse(job)
+
+    @app.get("/api/scenario/unit_types")
+    async def api_scenario_unit_types():
+        try:
+            from wargame.scenario import UNIT_TYPE_SPECS
+            return JSONResponse({
+                "unit_types": list(UNIT_TYPE_SPECS.keys()),
+                "specs": {k: {"firepower_index": v["firepower_index"], "max_speed": v["max_speed"]}
+                          for k, v in UNIT_TYPE_SPECS.items()},
+                "blufor_zone": {"x_min": 2000, "x_max": 13000, "y_min": 1500, "y_max": 12000},
+                "opfor_zone":  {"x_min": 17000, "x_max": 28000, "y_min": 17000, "y_max": 28500},
+            })
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.post("/api/scenario/apply")
+    async def api_scenario_apply(req: ScenarioApplyRequest):
+        try:
+            config = {
+                "blufor": [{"id": u.id, "unit_type": u.unit_type,
+                             "x": u.x, "y": u.y} for u in req.blufor],
+                "opfor":  [{"id": u.id, "unit_type": u.unit_type,
+                             "x": u.x, "y": u.y} for u in req.opfor],
+            }
+            result = _ga().wargame_apply_custom_scenario(config)
+            if result.get("ok"):
+                return JSONResponse(result)
+            return JSONResponse(result, status_code=400)
+        except Exception as e:
+            logger.exception("api_scenario_apply 오류")
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 # ── 서버 시작 ────────────────────────────────────────────────────────────────

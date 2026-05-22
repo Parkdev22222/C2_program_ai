@@ -122,6 +122,85 @@ def setup_bn_vs_bn() -> list:
     ]
 
 
+# 부대 유형별 스탯 (setup_custom_scenario에서 사용)
+UNIT_TYPE_SPECS: dict = {
+    "기계화보병": {"firepower_index": 100.0, "max_speed": 2.5},
+    "전차":       {"firepower_index": 160.0, "max_speed": 2.0},
+    "정찰":       {"firepower_index":  45.0, "max_speed": 4.5},
+    "대전차":     {"firepower_index":  90.0, "max_speed": 2.2},
+    "자주포":     {"firepower_index": 130.0, "max_speed": 1.8},
+}
+
+# 시나리오별 색상 팔레트
+_BLUFOR_COLORS = ["#1E88E5", "#42A5F5", "#00BCD4", "#80DEEA", "#B3E5FC", "#26C6DA", "#4DD0E1", "#29B6F6"]
+_OPFOR_COLORS  = ["#E53935", "#EF5350", "#FF7043", "#FFAB91", "#FFCCBC", "#FF8A65", "#FF5722", "#F44336"]
+
+
+def setup_custom_scenario(blufor_defs: list, opfor_defs: list) -> list:
+    """
+    사용자 정의 시나리오 생성.
+
+    Args:
+        blufor_defs: [{"id": "Alpha", "unit_type": "기계화보병", "x": None, "y": None}, ...]
+                     x, y가 None이면 BLUFOR 구역 내 랜덤 배치
+        opfor_defs:  [{"id": "Red1",  "unit_type": "전차",       "x": None, "y": None}, ...]
+                     x, y가 None이면 OPFOR 구역 내 랜덤 배치
+
+    Returns:
+        list[Unit]
+    """
+    units: list = []
+    default_specs = UNIT_TYPE_SPECS["기계화보병"]
+
+    blufor_placed: list = []
+    for i, bd in enumerate(blufor_defs):
+        specs = UNIT_TYPE_SPECS.get(bd.get("unit_type", "기계화보병"), default_specs)
+        x = bd.get("x")
+        y = bd.get("y")
+        if x is None or y is None:
+            x, y = _pick_pos(_BLUFOR_ZONE, blufor_placed)
+        blufor_placed.append((float(x), float(y)))
+        units.append(Unit(
+            id=bd["id"],
+            side="BLUFOR",
+            unit_type=bd.get("unit_type", "기계화보병"),
+            x=float(x),
+            y=float(y),
+            combat_power=100.0,
+            firepower_index=specs["firepower_index"],
+            max_speed=specs["max_speed"],
+            status="active",
+            waypoints=[],
+            current_action="hold",
+            color=_BLUFOR_COLORS[i % len(_BLUFOR_COLORS)],
+        ))
+
+    opfor_placed: list = []
+    for i, od in enumerate(opfor_defs):
+        specs = UNIT_TYPE_SPECS.get(od.get("unit_type", "기계화보병"), default_specs)
+        x = od.get("x")
+        y = od.get("y")
+        if x is None or y is None:
+            x, y = _pick_pos(_OPFOR_ZONE, opfor_placed)
+        opfor_placed.append((float(x), float(y)))
+        units.append(Unit(
+            id=od["id"],
+            side="OPFOR",
+            unit_type=od.get("unit_type", "기계화보병"),
+            x=float(x),
+            y=float(y),
+            combat_power=100.0,
+            firepower_index=specs["firepower_index"],
+            max_speed=specs["max_speed"],
+            status="active",
+            waypoints=[],
+            current_action="hold",
+            color=_OPFOR_COLORS[i % len(_OPFOR_COLORS)],
+        ))
+
+    return units
+
+
 def setup_bn_vs_bn_blufor_random() -> list:
     """
     BN vs BN — BLUFOR만 진영 구역 내 랜덤 초기 배치, OPFOR는 고정 학익진.

@@ -159,6 +159,50 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .leaflet-popup-content-wrapper{background:rgba(10,14,20,.95)!important;border:1px solid var(--border)!important;color:var(--text)!important;border-radius:4px!important}
 .leaflet-popup-tip{background:rgba(10,14,20,.95)!important}
 .leaflet-popup-content{font-family:'Noto Sans KR',sans-serif!important;font-size:12px!important;margin:8px 12px!important}
+
+/* ── 시나리오 설정 모달 ──────────────────────────────────────────── */
+#scenario-modal{position:fixed;inset:0;background:rgba(6,9,15,.88);z-index:9500;
+  display:none;align-items:center;justify-content:center}
+#scenario-modal.show{display:flex}
+#scenario-box{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+  width:min(860px,96vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+#scenario-box .sc-header{display:flex;align-items:center;padding:12px 16px;
+  border-bottom:1px solid var(--border);gap:12px}
+#scenario-box .sc-header h2{font-size:14px;font-weight:700;color:var(--amber);flex:1}
+.sc-close{background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:2px 6px;
+  border-radius:3px;line-height:1}
+.sc-close:hover{color:var(--text);background:#1e2d3d}
+#scenario-body{overflow-y:auto;padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.sc-side-title{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+  margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.sc-side-title.blu{color:var(--blue)}
+.sc-side-title.red{color:var(--red)}
+.sc-unit-table{width:100%;border-collapse:collapse;font-size:11px}
+.sc-unit-table th{color:var(--dim);font-weight:500;padding:3px 4px;text-align:left;
+  border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.sc-unit-table td{padding:3px 4px;vertical-align:middle}
+.sc-unit-table input[type=text]{background:#080d14;border:1px solid var(--border);color:var(--text);
+  border-radius:2px;padding:2px 5px;font-size:11px;width:100%;font-family:'Courier New',monospace}
+.sc-unit-table input[type=text]:focus{outline:none;border-color:var(--blue)}
+.sc-unit-table input[type=number]{background:#080d14;border:1px solid var(--border);color:var(--text);
+  border-radius:2px;padding:2px 5px;font-size:11px;width:64px;font-family:'Courier New',monospace}
+.sc-unit-table input[type=number]:focus{outline:none;border-color:var(--blue)}
+.sc-unit-table select{background:#080d14;border:1px solid var(--border);color:var(--text);
+  border-radius:2px;padding:2px 4px;font-size:11px;width:100%;font-family:'Noto Sans KR',sans-serif}
+.sc-unit-table select:focus{outline:none;border-color:var(--blue)}
+.sc-del-btn{background:none;border:none;color:#555;cursor:pointer;font-size:13px;padding:1px 4px;
+  border-radius:2px;line-height:1}
+.sc-del-btn:hover{color:var(--red);background:#2a0a0a}
+.sc-add-btn{margin-top:6px;background:#080d14;border:1px solid var(--border);color:var(--dim);
+  border-radius:3px;padding:4px 10px;font-size:11px;cursor:pointer;width:100%;text-align:left}
+.sc-add-btn:hover{border-color:var(--blue);color:var(--blue)}
+.sc-footer{display:flex;align-items:center;gap:10px;padding:10px 16px;
+  border-top:1px solid var(--border);flex-shrink:0}
+.sc-footer .sc-hint{flex:1;font-size:10px;color:var(--dim);line-height:1.4}
+#sc-status{font-size:11px;min-width:160px;text-align:right}
+#sc-status.ok{color:var(--green)}
+#sc-status.err{color:var(--red)}
+.sc-coord-hint{font-size:9px;color:var(--dim);margin-top:2px}
 </style>
 </head>
 <body>
@@ -196,6 +240,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <button id="btn-recon" class="sb-btn btn-secondary" onclick="startMission('recon')">🔍 정찰 임무계획</button>
         <button id="btn-attack" class="sb-btn btn-primary" onclick="startMission('attack')">⚔️ 공격 임무계획</button>
         <button id="btn-eval" class="sb-btn btn-warn" onclick="startMission('evaluate')">🧠 전술 평가 &amp; 학습</button>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-title">⚙️ 시나리오 설정</div>
+        <button class="sb-btn btn-secondary" onclick="openScenarioModal()">⚙️ 부대 구성 설정</button>
       </div>
 
       <div id="force-panel" class="sb-section">
@@ -278,6 +327,50 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <div class="rp-title">📟 전투 이벤트 로그</div>
         <div id="log-box">이벤트 없음</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 시나리오 설정 모달 -->
+<div id="scenario-modal">
+  <div id="scenario-box">
+    <div class="sc-header">
+      <h2>⚙️ 시나리오 부대 구성 설정</h2>
+      <button class="sc-close" onclick="closeScenarioModal()" title="닫기">✕</button>
+    </div>
+    <div id="scenario-body">
+      <!-- BLUFOR -->
+      <div>
+        <div class="sc-side-title blu">■ BLUFOR 아군 부대</div>
+        <table class="sc-unit-table" id="blufor-table">
+          <thead><tr>
+            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th></th>
+          </tr></thead>
+          <tbody id="blufor-tbody"></tbody>
+        </table>
+        <div class="sc-coord-hint">X/Y 비워두면 아군 구역 내 랜덤 배치 (x 2,000~13,000 / y 1,500~12,000)</div>
+        <button class="sc-add-btn" onclick="addUnit('blufor')">+ 아군 부대 추가</button>
+      </div>
+      <!-- OPFOR -->
+      <div>
+        <div class="sc-side-title red">■ OPFOR 적군 부대</div>
+        <table class="sc-unit-table" id="opfor-table">
+          <thead><tr>
+            <th>부대 ID</th><th>유형</th><th>X (m)</th><th>Y (m)</th><th></th>
+          </tr></thead>
+          <tbody id="opfor-tbody"></tbody>
+        </table>
+        <div class="sc-coord-hint">X/Y 비워두면 적군 구역 내 랜덤 배치 (x 17,000~28,000 / y 17,000~28,500)</div>
+        <button class="sc-add-btn" onclick="addUnit('opfor')">+ 적군 부대 추가</button>
+      </div>
+    </div>
+    <div class="sc-footer">
+      <div class="sc-hint">
+        적용 시 시뮬레이션이 초기화됩니다.<br>
+        부대 유형별 화력: 전차 160 | 자주포 130 | 기계화보병 100 | 대전차 90 | 정찰 45
+      </div>
+      <span id="sc-status"></span>
+      <button class="sb-btn btn-primary" style="width:auto;padding:6px 18px;margin:0" onclick="applyScenario()">적용 &amp; 초기화</button>
     </div>
   </div>
 </div>
@@ -806,6 +899,151 @@ async function sendChat() {
 addChatMessage('sys', '🗺 C2 지휘통제 AI 대시보드 시작됨\n시뮬레이션을 시작하거나 임무계획을 요청하세요.');
 fetchStatusText();
 fetchEvents();
+
+// ── 시나리오 설정 모달 ──────────────────────────────────────────
+const UNIT_TYPES = ['기계화보병', '전차', '정찰', '대전차', '자주포'];
+
+// 기본 5v5 시나리오
+const DEFAULT_BLUFOR = [
+  {id:'Alpha',   unit_type:'기계화보병', x:9000,  y:4500},
+  {id:'Bravo',   unit_type:'기계화보병', x:9000,  y:7500},
+  {id:'Charlie', unit_type:'전차',       x:7000,  y:6000},
+  {id:'Delta',   unit_type:'정찰',       x:11500, y:3500},
+  {id:'Echo',    unit_type:'대전차',     x:11500, y:8500},
+];
+const DEFAULT_OPFOR = [
+  {id:'Red1', unit_type:'기계화보병', x:21000, y:19500},
+  {id:'Red2', unit_type:'기계화보병', x:21000, y:22500},
+  {id:'Red3', unit_type:'전차',       x:23000, y:21000},
+  {id:'Red4', unit_type:'정찰',       x:19500, y:17500},
+  {id:'Red5', unit_type:'자주포',     x:25000, y:21000},
+];
+
+let _scCounter = 0;
+
+function makeTypeOptions(selected) {
+  return UNIT_TYPES.map(t =>
+    `<option value="${t}"${t === selected ? ' selected' : ''}>${t}</option>`
+  ).join('');
+}
+
+function makeUnitRow(side, u) {
+  const key = ++_scCounter;
+  return `<tr id="scrow-${key}">
+    <td><input type="text" value="${u.id||''}" placeholder="예: Alpha" style="width:68px" data-field="id"></td>
+    <td><select data-field="unit_type">${makeTypeOptions(u.unit_type||'기계화보병')}</select></td>
+    <td><input type="number" value="${u.x != null ? u.x : ''}" placeholder="랜덤" data-field="x"></td>
+    <td><input type="number" value="${u.y != null ? u.y : ''}" placeholder="랜덤" data-field="y"></td>
+    <td><button class="sc-del-btn" onclick="delRow('scrow-${key}')">✕</button></td>
+  </tr>`;
+}
+
+function renderTable(side, units) {
+  document.getElementById(`${side}-tbody`).innerHTML =
+    units.map(u => makeUnitRow(side, u)).join('');
+}
+
+function addUnit(side) {
+  const defaultId = side === 'blufor'
+    ? `Unit${document.getElementById('blufor-tbody').children.length + 1}`
+    : `Red${document.getElementById('opfor-tbody').children.length + 1}`;
+  const tbody = document.getElementById(`${side}-tbody`);
+  const tmp = document.createElement('tbody');
+  tmp.innerHTML = makeUnitRow(side, {id: defaultId, unit_type: '기계화보병', x: null, y: null});
+  tbody.appendChild(tmp.firstElementChild);
+}
+
+function delRow(rowId) {
+  const el = document.getElementById(rowId);
+  if (el) el.remove();
+}
+
+function readTableRows(side) {
+  const rows = document.getElementById(`${side}-tbody`).querySelectorAll('tr');
+  const result = [];
+  for (const row of rows) {
+    const get = f => row.querySelector(`[data-field="${f}"]`);
+    const id   = get('id')?.value.trim();
+    const type = get('unit_type')?.value;
+    const xVal = get('x')?.value.trim();
+    const yVal = get('y')?.value.trim();
+    if (!id) continue;
+    result.push({
+      id,
+      unit_type: type || '기계화보병',
+      x: xVal !== '' ? parseFloat(xVal) : null,
+      y: yVal !== '' ? parseFloat(yVal) : null,
+    });
+  }
+  return result;
+}
+
+function openScenarioModal() {
+  renderTable('blufor', DEFAULT_BLUFOR);
+  renderTable('opfor',  DEFAULT_OPFOR);
+  document.getElementById('sc-status').textContent = '';
+  document.getElementById('sc-status').className = '';
+  document.getElementById('scenario-modal').classList.add('show');
+}
+
+function closeScenarioModal() {
+  document.getElementById('scenario-modal').classList.remove('show');
+}
+
+document.getElementById('scenario-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('scenario-modal')) closeScenarioModal();
+});
+
+async function applyScenario() {
+  const blufor = readTableRows('blufor');
+  const opfor  = readTableRows('opfor');
+  const statusEl = document.getElementById('sc-status');
+
+  if (blufor.length === 0) { statusEl.textContent = '❌ BLUFOR 부대가 없습니다'; statusEl.className='err'; return; }
+  if (opfor.length === 0)  { statusEl.textContent = '❌ OPFOR 부대가 없습니다';  statusEl.className='err'; return; }
+
+  // ID 중복 체크
+  const allIds = [...blufor, ...opfor].map(u => u.id);
+  const dupIds = allIds.filter((id, i) => allIds.indexOf(id) !== i);
+  if (dupIds.length > 0) {
+    statusEl.textContent = `❌ 중복 ID: ${dupIds.join(', ')}`;
+    statusEl.className = 'err'; return;
+  }
+
+  statusEl.textContent = '적용 중...'; statusEl.className = '';
+
+  try {
+    const r = await fetch('/api/scenario/apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({blufor, opfor}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      statusEl.textContent = `✅ 적용 완료 (BLUFOR ${d.blufor}개 / OPFOR ${d.opfor}개)`;
+      statusEl.className = 'ok';
+      // 지도 클리어 후 갱신
+      for (const id of Object.keys(unitMarkers)) { map.removeLayer(unitMarkers[id]); delete unitMarkers[id]; }
+      for (const id of Object.keys(unitWpLines)) { map.removeLayer(unitWpLines[id]); delete unitWpLines[id]; }
+      for (const id of Object.keys(intelMarkers)) {
+        if (intelMarkers[id].marker)   map.removeLayer(intelMarkers[id].marker);
+        if (intelMarkers[id].uncircle) map.removeLayer(intelMarkers[id].uncircle);
+        delete intelMarkers[id];
+      }
+      document.getElementById('plan-box').textContent = '임무계획 없음';
+      document.getElementById('log-box').textContent = '이벤트 없음';
+      addChatMessage('sys', `⚙️ 시나리오 변경 적용 완료 — BLUFOR ${d.blufor}개, OPFOR ${d.opfor}개`);
+      await poll(); await fetchStatusText(); await fetchEvents();
+      setTimeout(closeScenarioModal, 1200);
+    } else {
+      statusEl.textContent = `❌ ${d.error || '적용 실패'}`;
+      statusEl.className = 'err';
+    }
+  } catch(e) {
+    statusEl.textContent = `❌ 오류: ${e.message}`;
+    statusEl.className = 'err';
+  }
+}
 </script>
 </body>
 </html>
