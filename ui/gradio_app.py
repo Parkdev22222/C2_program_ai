@@ -1760,29 +1760,189 @@ def harness_get_rules():
     return "\n\n".join(parts) if parts else "학습된 규칙 없음"
 
 
+_MSIS_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+
+:root {
+    --bg: #0a0e14;
+    --panel: #111820;
+    --panel-border: #1e2d3d;
+    --green: #00ff88;
+    --amber: #ffb300;
+    --red: #ff4040;
+    --blue: #40aaff;
+    --text: #e4eef8;
+    --dim: #9db8c8;
+}
+
+body, .gradio-container {
+    background: var(--bg) !important;
+    font-family: 'Noto Sans KR', sans-serif !important;
+    color: var(--text) !important;
+    max-width: 100% !important;
+}
+
+/* Header */
+.c2-header {
+    background: linear-gradient(135deg, #060c18 0%, #0d1e35 60%, #060c18 100%);
+    border-bottom: 1px solid #1e3a5f;
+    padding: 12px 20px 8px;
+    margin-bottom: 0;
+}
+.c2-header h1 { color: var(--blue) !important; font-size: 1.3em !important; letter-spacing: 1.5px; margin: 0 !important; }
+.c2-header p  { color: var(--dim) !important; font-size: 12px !important; margin: 2px 0 0 !important; }
+
+/* Tabs */
+.tabs > .tab-nav { background: #0c1420 !important; border-bottom: 1px solid var(--panel-border) !important; }
+.tab-nav button { color: var(--dim) !important; font-family: 'Noto Sans KR', sans-serif !important; font-size: 13px !important; padding: 8px 16px !important; }
+.tab-nav button.selected { color: var(--green) !important; border-bottom: 2px solid var(--green) !important; background: transparent !important; }
+
+/* Panel boxes */
+.gr-box, .gr-panel, .block { background: var(--panel) !important; border: 1px solid var(--panel-border) !important; border-radius: 3px !important; }
+
+/* Textareas & inputs */
+textarea, input[type="text"], input[type="number"] {
+    background: #080d14 !important;
+    color: var(--text) !important;
+    border: 1px solid var(--panel-border) !important;
+    border-radius: 3px !important;
+    font-family: 'Noto Sans KR', sans-serif !important;
+    font-size: 13px !important;
+}
+textarea:focus, input:focus { border-color: var(--blue) !important; outline: none !important; }
+
+/* Status textbox: monospace */
+#wg_status textarea {
+    font-family: 'Courier New', monospace !important;
+    font-size: 11px !important;
+    color: #a8c8e0 !important;
+    background: #06090f !important;
+    line-height: 1.55 !important;
+}
+
+/* Event log */
+#wg_event_log textarea {
+    font-family: 'Courier New', monospace !important;
+    font-size: 11px !important;
+    color: #8aacbe !important;
+    background: #06090f !important;
+    line-height: 1.5 !important;
+}
+
+/* Plan box */
+#wg_plan_box textarea {
+    font-family: 'Courier New', monospace !important;
+    font-size: 11px !important;
+    color: #b0d4e8 !important;
+    background: #06090f !important;
+}
+
+/* Primary buttons — green */
+button.primary, .primary > button {
+    background: #0a2e1e !important;
+    border: 1px solid var(--green) !important;
+    color: var(--green) !important;
+    font-family: 'Noto Sans KR', sans-serif !important;
+    font-size: 13px !important;
+    letter-spacing: 0.3px !important;
+    border-radius: 3px !important;
+    transition: background 0.15s !important;
+}
+button.primary:hover, .primary > button:hover { background: #143d28 !important; }
+
+/* Secondary buttons — blue */
+button.secondary, .secondary > button {
+    background: #0d1e30 !important;
+    border: 1px solid var(--blue) !important;
+    color: var(--blue) !important;
+    font-family: 'Noto Sans KR', sans-serif !important;
+    font-size: 13px !important;
+    border-radius: 3px !important;
+    transition: background 0.15s !important;
+}
+button.secondary:hover, .secondary > button:hover { background: #162840 !important; }
+
+/* Labels */
+label span, .label-wrap span { color: var(--dim) !important; font-size: 11px !important; letter-spacing: 0.4px !important; text-transform: uppercase !important; }
+
+/* Markdown */
+.prose h1, .prose h2, .prose h3, .prose h4 { color: var(--text) !important; }
+.prose p, .prose li { color: var(--dim) !important; font-size: 13px !important; }
+.prose strong { color: var(--text) !important; }
+.prose code { background: #0d1520 !important; color: var(--amber) !important; border: 1px solid var(--panel-border) !important; }
+
+/* Chatbot */
+.chatbot { background: var(--panel) !important; }
+.chatbot .message.user { background: #0d1e35 !important; border-left: 3px solid var(--blue) !important; color: var(--text) !important; }
+.chatbot .message.bot  { background: #0a1620 !important; border-left: 3px solid var(--green) !important; color: var(--text) !important; }
+
+/* Sidebar section headers */
+.sidebar-section {
+    border-top: 1px solid var(--panel-border);
+    padding-top: 10px;
+    margin-top: 10px;
+}
+.sidebar-section-title {
+    color: var(--amber) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1.5px !important;
+    text-transform: uppercase !important;
+    margin-bottom: 6px !important;
+}
+
+/* Pulse animation for running state */
+@keyframes pulse-glow {
+    0%   { box-shadow: 0 0 4px var(--green); }
+    50%  { box-shadow: 0 0 10px var(--green); }
+    100% { box-shadow: 0 0 4px var(--green); }
+}
+
+/* Thin scrollbars */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+* { scrollbar-width: thin; scrollbar-color: var(--panel-border) var(--bg); }
+
+/* Slider */
+input[type="range"] { accent-color: var(--blue) !important; }
+
+/* Dropdown */
+select, .gr-dropdown { background: #080d14 !important; color: var(--text) !important; border: 1px solid var(--panel-border) !important; }
+
+/* Checkbox group */
+.gr-checkbox-group { background: transparent !important; }
+input[type="checkbox"] { accent-color: var(--green) !important; }
+"""
+
+
 def create_app(agent=None) -> gr.Blocks:
     global _agent
     _agent = agent
     ui_cfg = _load_ui_config()
-    with gr.Blocks(title=ui_cfg.get("title", "C2 군사 전략 AI"), theme=gr.themes.Base(primary_hue="slate", secondary_hue="gray")) as app:
-        gr.Markdown(f"""
-# {ui_cfg.get('title', 'C2 군사 전략 AI - EXAONE4 + EXAONE Deep')}
-{ui_cfg.get('description', '')}
-
-**듀얼 모델 아키텍처:**
-- **EXAONE4**: 영상 분석, 상황 판단, 최종 응답 생성
-- **EXAONE Deep**: 전략/전술 전문 추천 (EXAONE4의 상황 분석을 바탕으로 호출됨)
+    with gr.Blocks(
+        title=ui_cfg.get("title", "C2 지휘통제 AI"),
+        theme=gr.themes.Base(primary_hue="slate", secondary_hue="slate", neutral_hue="slate"),
+        css=_MSIS_CSS,
+    ) as app:
+        # ── Header ─────────────────────────────────────────────────────
+        gr.HTML(f"""
+        <div class="c2-header">
+            <h1>⚔ C2 지휘통제 AI — {ui_cfg.get('title', 'EXAONE4 + EXAONE Deep')}</h1>
+            <p>{ui_cfg.get('description', '듀얼 모델 아키텍처 | EXAONE4: 상황 분석 · 응답 생성 &nbsp;|&nbsp; EXAONE Deep: 전략/전술 자문')}</p>
+        </div>
         """)
         with gr.Tabs():
           with gr.Tab("🎖️ AI 에이전트"):
             with gr.Row():
               with gr.Column(scale=1):
-                gr.Markdown("## 영상 분석")
-                gr.Markdown("#### 직접 업로드")
+                gr.Markdown("### 영상 분석")
+                gr.Markdown("##### 직접 업로드")
                 video_upload = gr.File(label="군사 영상 업로드 (mp4, avi, mov)", file_types=[".mp4", ".avi", ".mov", ".mkv"])
                 collection_input = gr.Textbox(label="콜렉션명", value="default", placeholder="콜렉션 이름 입력")
                 analyze_btn = gr.Button("영상 분석 시작", variant="primary")
-                gr.Markdown("#### 예시 영상")
+                gr.Markdown("##### 예시 영상")
                 sample_dropdown = gr.Dropdown(label="예시 영상 선택", choices=_get_sample_video_choices(), value=None, interactive=True)
                 with gr.Row():
                     sample_refresh_btn = gr.Button("목록 새로고침", scale=1)
@@ -1795,7 +1955,7 @@ def create_app(agent=None) -> gr.Blocks:
                 memory_status_btn = gr.Button("메모리 상태 확인")
                 memory_status_box = gr.Textbox(label="EXAONE4 상황 분석 메모리", lines=5, interactive=False)
               with gr.Column(scale=2):
-                gr.Markdown("## AI 에이전트 채팅")
+                gr.Markdown("### AI 에이전트 채팅")
                 gr.Markdown("영상 분석 및 전략/전술 관련 질문을 입력하세요. 전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.")
                 chatbot = gr.Chatbot(label="대화", height=500, show_copy_button=True)
                 with gr.Row():
@@ -1811,36 +1971,38 @@ def create_app(agent=None) -> gr.Blocks:
             if not _WARGAME_OK:
                 gr.Markdown(f"⚠️ 워게임 모듈 로드 실패: `{_wg_err}`")
             else:
-                gr.Markdown("## 파이썬 워게임 시뮬레이터\nLLM이 JSON 임무계획을 생성하면 각 중대가 자동으로 기동·교전합니다.")
-                with gr.Row():
+                # ── 3-column MSIS layout ──────────────────────────────
+                with gr.Row(equal_height=False):
+                    # ── LEFT: Control Sidebar ─────────────────────────
+                    with gr.Column(scale=1, min_width=220):
+                        gr.HTML('<div class="sidebar-section-title" style="margin-top:6px">▶ 시뮬레이션 제어</div>')
+                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
+                        wg_reset_btn     = gr.Button("⏹ 초기화", variant="secondary")
+                        wg_timescale     = gr.Slider(minimum=0.1, maximum=600, value=60, step=0.1,
+                                                     label="시간 배율 (1초 = X 게임초)")
+                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm", variant="secondary")
+                        gr.HTML('<div class="sidebar-section-title sidebar-section">📋 임무계획</div>')
+                        wg_recon_btn  = gr.Button("🔍 정찰 임무계획", variant="secondary")
+                        wg_attack_btn = gr.Button("⚔️ 공격 임무계획", variant="primary")
+                        wg_eval_btn   = gr.Button("🧠 전술 평가 & 학습", variant="secondary", size="sm")
+                        gr.HTML('<div class="sidebar-section-title sidebar-section">📊 부대 전력 현황</div>')
+                        wg_status = gr.Textbox(label="", lines=14, interactive=False, elem_id="wg_status")
+                    # ── CENTER: Battle Map ────────────────────────────
                     with gr.Column(scale=3):
                         wg_map = gr.Plot(label="전장 지도", show_label=False)
+                        wg_damage_chart = gr.Plot(label="피해 현황", show_label=False, elem_id="wg_damage_chart")
+                    # ── RIGHT: Intelligence / Chat Panel ─────────────
                     with gr.Column(scale=2):
-                        gr.Markdown("### 전술 AI 채팅")
-                        wg_chatbot = gr.Chatbot(label="", height=220, show_copy_button=True, bubble_full_width=False)
+                        gr.HTML('<div class="sidebar-section-title" style="margin-top:6px">💬 전술 AI 채팅</div>')
+                        wg_chatbot = gr.Chatbot(label="", height=280, show_copy_button=True, bubble_full_width=False)
                         with gr.Row():
-                            wg_chat_input = gr.Textbox(label="", placeholder="워게임 상황 분석, 전술 조언, 임무계획 수정 등 질문하세요...", lines=2, scale=5)
+                            wg_chat_input    = gr.Textbox(label="", placeholder="전장 상황 분석, 전술 조언, 임무계획 문의...", lines=2, scale=5)
                             wg_chat_send_btn = gr.Button("전송", variant="primary", scale=1)
                         wg_chat_clear_btn = gr.Button("대화 초기화", variant="secondary", size="sm")
-                with gr.Row():
-                    wg_damage_chart = gr.Plot(label="피해 현황", show_label=False, elem_id="wg_damage_chart")
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 시뮬레이션 제어")
-                        wg_startstop_btn = gr.Button("▶ 시뮬레이션 시작", variant="primary")
-                        wg_reset_btn = gr.Button("⏹ 초기화", variant="secondary")
-                        wg_timescale = gr.Slider(minimum=0.1, maximum=600, value=60, step=0.1, label="시간 배율 (실제 1초 = X 게임 초)")
-                        wg_apply_scale_btn = gr.Button("배율 적용", size="sm")
-                        gr.Markdown("### 임무계획")
-                        wg_recon_btn = gr.Button("🔍 정찰 임무계획", variant="secondary")
-                        wg_attack_btn = gr.Button("⚔️ 공격 임무계획", variant="primary")
-                        wg_eval_btn = gr.Button("🧠 전술 평가 & 규칙 학습", variant="secondary", size="sm")
-                        gr.Markdown("### 부대 전력 현황")
-                        wg_status = gr.Textbox(label="", lines=5, interactive=False, elem_id="wg_status")
-                    with gr.Column(scale=2):
-                        wg_plan_box = gr.Textbox(label="LLM 생성 임무계획 (JSON)", lines=8, interactive=False, value="")
-                    with gr.Column(scale=2):
-                        wg_event_log = gr.Textbox(label="전투 이벤트 로그", lines=8, interactive=False)
+                        gr.HTML('<div class="sidebar-section-title sidebar-section">📄 LLM 임무계획 (JSON)</div>')
+                        wg_plan_box = gr.Textbox(label="", lines=8, interactive=False, value="", elem_id="wg_plan_box")
+                        gr.HTML('<div class="sidebar-section-title sidebar-section">📟 전투 이벤트 로그</div>')
+                        wg_event_log = gr.Textbox(label="", lines=6, interactive=False, elem_id="wg_event_log")
                 wg_timer = gr.Timer(value=2)
           with gr.Tab("🔬 하네스 학습"):
             gr.Markdown("## 자율 전술 학습\n워게임을 반복 실행하여 전술 규칙을 자동으로 학습합니다.")
