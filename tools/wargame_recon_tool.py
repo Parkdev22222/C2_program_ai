@@ -11,6 +11,7 @@ import logging
 from typing import List
 
 from smolagents import tool
+from tools.coord_utils import xy_to_latlon, waypoints_xy_to_latlon
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,7 @@ def assess_recon_need() -> dict:
                 {
                     "unit_id":    e["unit_id"],
                     "status":     e["status"],
+                    **dict(zip(("known_lat", "known_lon"), xy_to_latlon(e["known_x"], e["known_y"]))),
                     "known_x_m": int(e["known_x"]),
                     "known_y_m": int(e["known_y"]),
                 }
@@ -310,6 +312,7 @@ def assess_recon_need() -> dict:
                 {
                     "unit_id":          u["id"],
                     "status":           u["status"],
+                    **dict(zip(("lat", "lon"), xy_to_latlon(u["x"], u["y"]))),
                     "x_m":              int(u["x"]),
                     "y_m":              int(u["y"]),
                     "combat_power_pct": round(u["combat_power"], 1),
@@ -404,7 +407,8 @@ def recommend_recon_routes() -> dict:
         for ru, chunk in zip(recon_units, chunks):
             if not chunk:
                 continue
-            wps = _build_combined_recon_waypoints(ru["x"], ru["y"], chunk)
+            wps_m = _build_combined_recon_waypoints(ru["x"], ru["y"], chunk)
+            wps_latlon = waypoints_xy_to_latlon(wps_m)
             target_ids = ", ".join(t["unit_id"] for t in chunk)
             if screen_mode:
                 objective = f"탐지 부대 측방 관측·추적: {target_ids}"
@@ -413,7 +417,7 @@ def recommend_recon_routes() -> dict:
             assignments.append({
                 "company_id":     ru["id"],
                 "mission_type":   "recon",
-                "waypoints":      wps,
+                "waypoints":      wps_latlon,
                 "objective":      objective,
                 "target_unit_ids": [t["unit_id"] for t in chunk],
             })

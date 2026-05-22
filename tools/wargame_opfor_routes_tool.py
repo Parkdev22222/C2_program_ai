@@ -14,6 +14,7 @@ import logging
 from typing import List, Tuple
 
 from smolagents import tool
+from tools.coord_utils import xy_to_latlon, waypoints_xy_to_latlon
 
 logger = logging.getLogger(__name__)
 
@@ -279,23 +280,31 @@ def predict_opfor_routes() -> dict:
                 ("left_flank",  -math.pi / 4),    # -45°
             ]
 
+            opfor_lat, opfor_lon = xy_to_latlon(ox, oy)
+            target_lat, target_lon = xy_to_latlon(tx, ty)
+
             routes = []
             for route_type, flank_rad in route_configs:
-                wps = _terrain_approach_route(ox, oy, tx, ty, flank_rad, n_mid=4)
-                threat = _route_threat_level(wps, ox, oy, tx, ty)
-                chokepoints = _find_key_chokepoints(wps)
-                notes = _terrain_notes_for_route(wps)
+                wps_m = _terrain_approach_route(ox, oy, tx, ty, flank_rad, n_mid=4)
+                threat = _route_threat_level(wps_m, ox, oy, tx, ty)
+                chokepoints_m = _find_key_chokepoints(wps_m)
+                notes = _terrain_notes_for_route(wps_m)
+
+                wps_latlon = waypoints_xy_to_latlon(wps_m)
+                chokepoints_latlon = waypoints_xy_to_latlon(chokepoints_m)
 
                 routes.append({
-                    "route_type":     route_type,
-                    "threat_level":   threat,
-                    "waypoints":      wps,
-                    "key_chokepoints": chokepoints,
-                    "terrain_notes":  notes,
+                    "route_type":          route_type,
+                    "threat_level":        threat,
+                    "waypoints":           wps_latlon,
+                    "waypoints_m":         wps_m,          # 내부 미터 (하위호환, route interdict 계산용)
+                    "key_chokepoints":     chokepoints_latlon,
+                    "key_chokepoints_m":   chokepoints_m,  # 내부 미터 (하위호환)
+                    "terrain_notes":       notes,
                 })
 
-                # 차단 우선순위 집계
-                for cp in chokepoints:
+                # 차단 우선순위 집계 (미터 좌표로 집계)
+                for cp in chokepoints_m:
                     key = (cp[0], cp[1])
                     if key not in all_chokepoints:
                         all_chokepoints[key] = {
@@ -307,12 +316,16 @@ def predict_opfor_routes() -> dict:
                         all_chokepoints[key]["opfor_unit_ids"].append(opfor_id)
 
             predicted_routes.append({
-                "opfor_unit_id":   opfor_id,
-                "opfor_unit_type": opfor_type,
-                "opfor_pos":       [int(ox), int(oy)],
-                "target_blufor_id":  target["id"],
-                "target_blufor_pos": [int(tx), int(ty)],
-                "routes":          routes,
+                "opfor_unit_id":      opfor_id,
+                "opfor_unit_type":    opfor_type,
+                "opfor_lat":          opfor_lat,
+                "opfor_lon":          opfor_lon,
+                "opfor_pos":          [int(ox), int(oy)],   # 내부 미터 (하위호환)
+                "target_blufor_id":   target["id"],
+                "target_blufor_lat":  target_lat,
+                "target_blufor_lon":  target_lon,
+                "target_blufor_pos":  [int(tx), int(ty)],   # 내부 미터 (하위호환)
+                "routes":             routes,
             })
 
         # ── 차단 우선순위 정렬 ──────────────────────────────────────
@@ -320,8 +333,11 @@ def predict_opfor_routes() -> dict:
         for (cx, cy), info in all_chokepoints.items():
             elev = _elevation(cx, cy)
             cov  = _cover(cx, cy)
+            cp_lat, cp_lon = xy_to_latlon(cx, cy)
             interdict_priority.append({
-                "chokepoint":          [int(cx), int(cy)],
+                "chokepoint_lat":      cp_lat,
+                "chokepoint_lon":      cp_lon,
+                "chokepoint":          [int(cx), int(cy)],  # 내부 미터 (하위호환)
                 "elevation_m":         round(elev, 1),
                 "cover":               round(cov, 3),
                 "intercepting_routes": info["intercepting_routes"],

@@ -59,6 +59,11 @@ def is_latlon_coords(waypoints: list) -> bool:
     if not waypoints:
         return False
     wp = waypoints[0]
+    if isinstance(wp, dict):
+        # lat/lon 키가 있으면 위경도
+        if "lat" in wp or "latitude" in wp or "lon" in wp or "longitude" in wp:
+            return True
+        return False
     if isinstance(wp, (list, tuple)) and len(wp) == 2:
         v = float(wp[0])
         return -90.0 <= v <= 90.0 and v != round(v)  # 정수가 아닌 소수이면 lat/lon

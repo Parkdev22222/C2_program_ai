@@ -10,6 +10,7 @@ import math
 import logging
 from typing import List, Tuple
 from smolagents import tool
+from tools.coord_utils import xy_to_latlon
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +270,9 @@ def _route_interdict_bonus(
         for route in route_entry.get("routes", []):
             threat = route.get("threat_level", "low")
             threat_mult = {"high": 1.5, "medium": 1.0, "low": 0.5}.get(threat, 1.0)
-            for wp in route.get("waypoints", [])[:-1]:  # 마지막(목표) 제외
+            # waypoints_m 우선 사용 (미터 좌표), 없으면 waypoints fallback
+            wps = route.get("waypoints_m", route.get("waypoints", []))
+            for wp in wps[:-1]:  # 마지막(목표) 제외
                 dist = math.hypot(cx - wp[0], cy - wp[1])
                 if dist <= INTERDICT_RANGE:
                     # LOS 품질 반영
@@ -277,8 +280,9 @@ def _route_interdict_bonus(
                     if los >= 0.4:
                         bonus += 3.0 * threat_mult * los
 
-            # 핵심 차단 포인트 추가 보너스
-            for cp in route.get("key_chokepoints", []):
+            # 핵심 차단 포인트 추가 보너스 (key_chokepoints_m 우선 사용)
+            cps = route.get("key_chokepoints_m", route.get("key_chokepoints", []))
+            for cp in cps:
                 dist = math.hypot(cx - cp[0], cy - cp[1])
                 if dist <= INTERDICT_RANGE:
                     los = _line_of_sight_quality(cx, cy, cp[0], cp[1])
@@ -455,7 +459,10 @@ def get_optimal_attack_positions(
                     route_bonus = _route_interdict_bonus(cx, cy, predicted_routes)
                     total_score = score + route_bonus
 
+                    pos_lat, pos_lon = xy_to_latlon(cx, cy)
                     candidates.append({
+                        "lat":   pos_lat,
+                        "lon":   pos_lon,
                         "x_m":   int(cx),
                         "y_m":   int(cy),
                         "score": round(total_score, 1),
@@ -495,15 +502,18 @@ def get_optimal_attack_positions(
             )
             summary = (
                 f"{target_entry['unit_id']}({target_unit_type}) 공략: "
-                f"최적 위치 ({best['x_m']}m, {best['y_m']}m) "
+                f"최적 위치 (lat={best['lat']}, lon={best['lon']}) "
                 f"고도{best['elevation_m']:.0f}m / {elev_note} / "
                 f"권고 수단: {best_method} / 종합점수 {best['score']:.0f}점"
             )
 
+            tgt_lat, tgt_lon = xy_to_latlon(ox, oy)
             recommendations.append({
                 "target": {
                     "unit_id":         target_entry["unit_id"],
                     "unit_type":       target_unit_type,
+                    "lat":             tgt_lat,
+                    "lon":             tgt_lon,
                     "x_m":             int(ox),
                     "y_m":             int(oy),
                     "elevation_m":     round(target_elev, 1),

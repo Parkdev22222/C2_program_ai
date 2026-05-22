@@ -29,8 +29,12 @@ try:
     from pydantic import BaseModel, Field, validator
 
     class Waypoint(BaseModel):
-        x: float = Field(ge=0, le=MAP_MAX)
-        y: float = Field(ge=0, le=MAP_MAX)
+        """위경도(WGS84) 또는 내부 미터 좌표를 모두 허용하는 경유지 모델.
+        lat/lon 형식: lat=-90~90, lon=-180~180 (소수점 값)
+        미터 형식:    x=0~30000, y=0~30000 (정수 또는 소수)
+        """
+        x: float = Field(ge=-180, le=MAP_MAX)   # lon 또는 x_m 모두 허용
+        y: float = Field(ge=-90, le=MAP_MAX)    # lat 또는 y_m 모두 허용
 
     class MissionPlanItem(BaseModel):
         company_id: str
@@ -52,7 +56,7 @@ try:
 
         @validator("waypoints", pre=True)
         def _coerce_waypoints(cls, v):
-            # [x, y] 리스트 형식을 {"x": x, "y": y} 딕셔너리로 자동 변환
+            # [lat/lon 또는 x, y] 리스트 형식을 {"x": x, "y": y} 딕셔너리로 자동 변환
             coerced = []
             for wp in v:
                 if isinstance(wp, (list, tuple)) and len(wp) == 2:
@@ -79,10 +83,8 @@ try:
         @validator("target")
         def _check_target(cls, v):
             if len(v) != 2:
-                raise ValueError("target은 [x, y] 2개 좌표여야 합니다.")
-            x, y = v
-            if not (0 <= x <= MAP_MAX and 0 <= y <= MAP_MAX):
-                raise ValueError(f"target 좌표 {v}가 맵 범위(0~{MAP_MAX})를 벗어납니다.")
+                raise ValueError("target은 [lat, lon] 또는 [x, y] 2개 좌표여야 합니다.")
+            # lat/lon 또는 미터 좌표 모두 허용 (변환은 apply 단계에서 수행)
             return v
 
     class MissionPlanRequest(BaseModel):
@@ -231,11 +233,15 @@ def validate_mission_plan(plan: Any) -> dict:
             if isinstance(wp, (list, tuple)) and len(wp) == 2:
                 x, y = wp
             elif isinstance(wp, dict):
-                x, y = wp.get("x", 0), wp.get("y", 0)
+                x, y = wp.get("x", wp.get("lon", 0)), wp.get("y", wp.get("lat", 0))
             else:
                 errors.append(f"{cid} waypoint[{i}] 형식 오류: {wp}")
                 continue
-            if not (0 <= float(x) <= MAP_MAX and 0 <= float(y) <= MAP_MAX):
+            fx, fy = float(x), float(y)
+            # 위경도 형식 (lat: -90~90 소수, lon: -180~180 소수) 또는 미터 형식 (0~30000) 허용
+            is_latlon = (-90.0 <= fy <= 90.0 and -180.0 <= fx <= 180.0
+                         and (fy != round(fy) or fx != round(fx)))
+            if not is_latlon and not (0 <= fx <= MAP_MAX and 0 <= fy <= MAP_MAX):
                 errors.append(f"{cid} waypoint[{i}] 좌표 범위 초과: ({x}, {y})")
 
         if mtype == "recon":
@@ -259,7 +265,11 @@ def validate_mission_plan(plan: Any) -> dict:
             errors.append(f"공중지원 target 형식 오류: {target}")
         else:
             tx, ty = target
-            if not (0 <= float(tx) <= MAP_MAX and 0 <= float(ty) <= MAP_MAX):
+            ftx, fty = float(tx), float(ty)
+            # 위경도 형식 또는 미터 형식 모두 허용 (변환은 apply 단계에서 수행)
+            is_latlon_tgt = (-90.0 <= fty <= 90.0 and -180.0 <= ftx <= 180.0
+                             and (fty != round(fty) or ftx != round(ftx)))
+            if not is_latlon_tgt and not (0 <= ftx <= MAP_MAX and 0 <= fty <= MAP_MAX):
                 errors.append(f"공중지원 target 좌표 범위 초과: {target}")
 
         if radius <= 0 or radius > 10_000:

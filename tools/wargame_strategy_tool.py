@@ -8,6 +8,7 @@ import logging
 import math
 from typing import List, Tuple
 from smolagents import tool
+from tools.coord_utils import xy_to_latlon, waypoints_xy_to_latlon
 
 logger = logging.getLogger(__name__)
 
@@ -188,13 +189,19 @@ def get_wargame_tactical_recommendation() -> dict:
                 adv, mult, reason = _get_matchup(
                     bu.get("unit_type", ""), best_target.get("unit_type", "")
                 )
+                bu_lat, bu_lon = xy_to_latlon(bu["x"], bu["y"])
+                tgt_lat, tgt_lon = xy_to_latlon(best_target["x"], best_target["y"])
                 matchups.append({
                     "blufor_unit":           bu["id"],
                     "blufor_type":           bu.get("unit_type", ""),
                     "blufor_cp":             round(bu["combat_power"], 1),
+                    "blufor_lat":            bu_lat,
+                    "blufor_lon":            bu_lon,
                     "recommended_target":    best_target["id"],
                     "target_type":           best_target.get("unit_type", ""),
                     "target_cp":             round(best_target["combat_power"], 1),
+                    "target_lat":            tgt_lat,
+                    "target_lon":            tgt_lon,
                     "advantage":             adv,
                     "firepower_multiplier":  mult,
                     "distance_m":            int(math.hypot(
@@ -219,21 +226,25 @@ def get_wargame_tactical_recommendation() -> dict:
                 continue
 
             # 경로 생성 (중간 경유지 3개)
-            waypoints = _terrain_route(
+            waypoints_m = _terrain_route(
                 bu["x"], bu["y"], target["x"], target["y"], n_mid=3
             )
+            waypoints_latlon = waypoints_xy_to_latlon(waypoints_m)
 
             # 경유지 지형 요약
             terrain_notes = "경유지 고도: " + " → ".join(
-                _elevation_info(wp[0], wp[1]) for wp in waypoints[:-1]
+                _elevation_info(wp[0], wp[1]) for wp in waypoints_m[:-1]
             )
 
+            from_lat, from_lon = xy_to_latlon(bu["x"], bu["y"])
             routes.append({
                 "unit_id":      bu["id"],
                 "unit_type":    bu.get("unit_type", ""),
-                "from":         [int(bu["x"]), int(bu["y"])],
+                "from_lat":     from_lat,
+                "from_lon":     from_lon,
+                "from":         [int(bu["x"]), int(bu["y"])],   # 내부 미터 (하위호환)
                 "to_target":    target_id,
-                "waypoints":    waypoints,
+                "waypoints":    waypoints_latlon,
                 "terrain_notes": terrain_notes,
             })
 

@@ -28,6 +28,14 @@ except Exception as _wg_err:
     _WARGAME_OK = False
     _wg_err = str(_wg_err)
 
+try:
+    from tools.coord_utils import xy_to_latlon as _xy_to_latlon
+    _COORD_OK = True
+except Exception:
+    _COORD_OK = False
+    def _xy_to_latlon(x, y):
+        return (y / 111000.0 + 37.0, x / 88645.0 + 127.0)
+
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
@@ -389,9 +397,10 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
     if event_type == "detection":
         enemy_id, unit_type, x, y = args
+        det_lat, det_lon = _xy_to_latlon(x, y)
         trigger_desc = (
             f"⚠️ [자동 탐지 트리거] {enemy_id}({unit_type}) 새로 탐지 "
-            f"— 위치({x/1000:.1f}km, {y/1000:.1f}km)\n"
+            f"— 위치(lat={det_lat:.4f}, lon={det_lon:.4f})\n"
             f"위 위치는 참고용이며, 실제 임무계획은 반드시 아래 툴 호출 결과를 기반으로 수립하라.\n"
             f"예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지."
         )
@@ -399,7 +408,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"새로 탐지된 {enemy_id}와 기존 기동 중인 BLUFOR 부대 현황을 고려하여, "
             f"어느 부대를 재배정하고 어느 부대는 기존 임무를 유지할지 조언해주세요."
         )
-        log_tag = f"신규 탐지: {enemy_id}({unit_type}) @ ({x/1000:.1f}km, {y/1000:.1f}km)"
+        log_tag = f"신규 탐지: {enemy_id}({unit_type}) @ (lat={det_lat:.4f}, lon={det_lon:.4f})"
     elif event_type == "cp_threshold":
         unit_id, unit_type, threshold_pct, current_cp = args
         trigger_desc = (
@@ -858,10 +867,12 @@ def _wg_status_text(state: dict) -> str:
             bar = "█" * int(cp / 10) + "░" * (10 - int(cp / 10))
             lines.append(f"  {e['unit_id']:7s}({utype:6s}) [{bar}] {cp:5.1f}%  [{det_ko}]")
         elif det == "approximate":
-            lines.append(f"  ?{e['unit_id']:6s}(미확인) {'?'*10}  ?????  [{det_ko}] ({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km 추정)")
+            approx_lat, approx_lon = _xy_to_latlon(e["known_x"], e["known_y"])
+            lines.append(f"  ?{e['unit_id']:6s}(미확인) {'?'*10}  ?????  [{det_ko}] (lat={approx_lat:.4f},lon={approx_lon:.4f} 추정)")
         else:
             utype = e.get("unit_type") or "미확인"
-            lines.append(f"  ({e['unit_id']:6s})({utype:6s}) {'░'*10}  ?????  [{det_ko}] 최종({e['known_x']/1000:.1f}km,{e['known_y']/1000:.1f}km)")
+            lost_lat, lost_lon = _xy_to_latlon(e["known_x"], e["known_y"])
+            lines.append(f"  ({e['unit_id']:6s})({utype:6s}) {'░'*10}  ?????  [{det_ko}] 최종(lat={lost_lat:.4f},lon={lost_lon:.4f})")
     return "\n".join(lines)
 
 
@@ -878,7 +889,8 @@ def _build_opfor_alert(state: dict) -> str:
     lines.append("\n**적군 현황:**")
     for u in opfor:
         action_ko = {"attack":"공격","flank":"측방기동","withdraw":"후퇴","hold":"대기","defend":"방어","move":"이동"}.get(u["current_action"], u["current_action"])
-        lines.append(f"  • {u['id']}({get_unit_type(u['id'])}): ({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) CP={u['combat_power']:.0f}% [{action_ko}]")
+        u_lat, u_lon = _xy_to_latlon(u["x"], u["y"])
+        lines.append(f"  • {u['id']}({get_unit_type(u['id'])}): (lat={u_lat:.4f},lon={u_lon:.4f}) CP={u['combat_power']:.0f}% [{action_ko}]")
     if blufor and opfor:
         bl_cx = sum(u["x"] for u in blufor) / len(blufor)
         bl_cy = sum(u["y"] for u in blufor) / len(blufor)
@@ -898,7 +910,8 @@ def _build_situation_query(state: dict) -> str:
     lines = [f"[워게임 상황 분석] 게임시간: {state['game_time_str']}"]
     for u in state["units"]:
         s = "전투불능" if u["status"] == "destroyed" else f"CP={u['combat_power']:.0f}%"
-        lines.append(f"  {u['side']} {u['id']}({get_unit_type(u['id'])}): ({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {s} 행동={u['current_action']}")
+        u_lat, u_lon = _xy_to_latlon(u["x"], u["y"])
+        lines.append(f"  {u['side']} {u['id']}({get_unit_type(u['id'])}): (lat={u_lat:.4f},lon={u_lon:.4f}) {s} 행동={u['current_action']}")
     lines.append("\n현재 전장 상황을 분석하고, OPFOR의 의도와 BLUFOR 즉각 대응 방안을 3가지 간결하게 제시해줘.")
     return "\n".join(lines)
 
@@ -1345,7 +1358,10 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     context = ""
     if eng is not None:
         state = eng.get_state()
-        context = (f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n" + "\n".join(f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% 위치=({u['x']/1000:.1f}km,{u['y']/1000:.1f}km) {u['status']}" for u in state["units"]) + "\n\n")
+        def _fmt_unit(u):
+            lat, lon = _xy_to_latlon(u["x"], u["y"])
+            return f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% 위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}"
+        context = (f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n" + "\n".join(_fmt_unit(u) for u in state["units"]) + "\n\n")
     history.append((message, "처리 중..."))
     if agent is None:
         history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")

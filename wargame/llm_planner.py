@@ -65,16 +65,28 @@ def _sample_elevation_map(state: dict) -> str:
 
     lines = []
 
+    try:
+        from tools.coord_utils import xy_to_latlon as _xy_to_latlon
+    except Exception:
+        _xy_to_latlon = None
+
     # 부대 위치 고도 (한 줄씩)
     for u in state.get("units", []):
         if u["status"] == "destroyed":
             continue
         elev  = _terrain.elevation(u["x"], u["y"])
         cover = _terrain.cover_factor(u["x"], u["y"])
-        lines.append(
-            f"{u['id']}({int(u['x'])},{int(u['y'])}) "
-            f"→{elev:.0f}m 엄폐{cover:.2f}"
-        )
+        if _xy_to_latlon:
+            lat, lon = _xy_to_latlon(u["x"], u["y"])
+            lines.append(
+                f"{u['id']}(lat={lat},lon={lon}) "
+                f"→{elev:.0f}m 엄폐{cover:.2f}"
+            )
+        else:
+            lines.append(
+                f"{u['id']}({int(u['x'])},{int(u['y'])}) "
+                f"→{elev:.0f}m 엄폐{cover:.2f}"
+            )
 
     # 접촉 예상 구역 3×3 샘플
     blufor = [u for u in state["units"] if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
@@ -90,7 +102,11 @@ def _sample_elevation_map(state: dict) -> str:
                 ys = cy - span + r * span
                 xs = max(0, min(29999, xs))
                 ys = max(0, min(29999, ys))
-                grid.append(f"({int(xs)},{int(ys)})={_terrain.elevation(xs,ys):.0f}m")
+                if _xy_to_latlon:
+                    g_lat, g_lon = _xy_to_latlon(xs, ys)
+                    grid.append(f"(lat={g_lat},lon={g_lon})={_terrain.elevation(xs,ys):.0f}m")
+                else:
+                    grid.append(f"({int(xs)},{int(ys)})={_terrain.elevation(xs,ys):.0f}m")
         lines.append("접촉구역:" + " ".join(grid))
 
         # TOP2 고지
@@ -101,9 +117,15 @@ def _sample_elevation_map(state: dict) -> str:
                 ys = max(0, min(29999, cy - span*1.5 + r * span*3/7))
                 high.append((_terrain.elevation(xs, ys), xs, ys))
         high.sort(reverse=True)
-        lines.append("고지TOP2:" + " ".join(
-            f"({int(xs)},{int(ys)})={e:.0f}m" for e, xs, ys in high[:2]
-        ))
+        if _xy_to_latlon:
+            lines.append("고지TOP2:" + " ".join(
+                f"(lat={_xy_to_latlon(xs,ys)[0]},lon={_xy_to_latlon(xs,ys)[1]})={e:.0f}m"
+                for e, xs, ys in high[:2]
+            ))
+        else:
+            lines.append("고지TOP2:" + " ".join(
+                f"({int(xs)},{int(ys)})={e:.0f}m" for e, xs, ys in high[:2]
+            ))
 
     return "\n".join(lines)
 
@@ -174,8 +196,10 @@ def build_mission_query(state: dict) -> str:
 8. apply_wargame_mission_plan(plan_json=<JSON문자열>, dry_run=False)
    → 워게임 즉시 적용
 
-[지형고도] 좌표=미터(m) 정수, x=동쪽, y=북쪽, 범위 0~30000
-⚠️ waypoints·target 좌표는 반드시 미터(m) 정수로 표기 (예: [9000,8000], 절대 [9,8] 사용 금지)
+[지형고도] 좌표=위경도(WGS84), lat=북위(37.0~37.27), lon=동경(127.0~127.34)
+⚠️ waypoints·target 좌표는 반드시 위경도(WGS84) 소수점 6자리로 표기
+   예: [37.081081, 127.101248] → 이는 내부 미터 기준 (9000,9000)에 해당
+   절대 미터 정수([9000,8000]) 또는 단순 정수([9,8]) 사용 금지
 {elev_section}
 
 [출력 형식 예시] ← 형식만 참고. 좌표·ID는 placeholder이므로 절대 그대로 사용 금지
@@ -185,22 +209,22 @@ def build_mission_query(state: dict) -> str:
 [공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
 ⚠️ [공중지원·포격 목표 좌표 강제 규칙]
    air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서
-   조회한 탐지된(detected) OPFOR 부대의 x_m, y_m 값을 그대로 사용해야 합니다.
+   조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
-   예: Red1 위치가 (12500, 8300) 이면 → "target": [12500, 8300]
-[규칙] 좌표는 반드시 미터(m) 정수 (9000이지 9가 아님), WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
+   예: Red1 위치가 known_lat=37.074775, known_lon=127.141013 이면 → "target": [37.074775, 127.141013]
+[규칙] 좌표는 반드시 위경도(WGS84) 소수점 6자리, WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
 ⚠️ [Delta 정찰부대 규칙]
    • Delta는 반드시 mission_type="recon"으로 mission_plans에 포함 (공격/돌격 임무 절대 금지)
-   • Delta의 waypoints는 반드시 recommend_recon_routes() 결과의 mission_plans[0]["waypoints"]를 그대로 사용
+   • Delta의 waypoints는 반드시 recommend_recon_routes() 결과의 mission_plans[0]["waypoints"]를 그대로 사용 (이미 위경도 형식)
    • recon_result["status"]가 "no_recon_units"인 경우에만 Delta를 mission_plans에서 제외
 최종 JSON 출력(설명금지):
 ```json
 {{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
 "mission_plans":[
-  {{"company_id":"Delta","mission_type":"recon","waypoints":[[미터정수x,미터정수y]],"objective":"측방 관측·추적 또는 미탐지 부대 확인"}},
-  {{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[미터정수x,미터정수y]],"objective":"목표"}}
+  {{"company_id":"Delta","mission_type":"recon","waypoints":[[위도소수,경도소수]],"objective":"측방 관측·추적 또는 미탐지 부대 확인"}},
+  {{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[위도소수,경도소수]],"objective":"목표"}}
 ],
-"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[미터정수tx,미터정수ty],"radius":반경m정수,"delay":지연초정수}}]}}
+"air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[위도소수,경도소수],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""
     return query
 
