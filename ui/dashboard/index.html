@@ -40,8 +40,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 #air-info{font-size:11px;color:var(--dim);text-align:right;line-height:1.6}
 
 /* ── 사이드바 ─────────────────────────────────────────────────── */
-#sidebar{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
-.sb-section{padding:10px 12px;border-bottom:1px solid var(--border)}
+#sidebar{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+.sb-section{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .sb-title{font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--amber);text-transform:uppercase;margin-bottom:8px}
 .sb-btn{display:block;width:100%;padding:7px 10px;margin-bottom:6px;border:1px solid;border-radius:3px;
   font-family:'Noto Sans KR',sans-serif;font-size:12px;font-weight:500;cursor:pointer;text-align:center;transition:all .15s}
@@ -59,8 +59,34 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .slider-row label{font-size:10px;color:var(--dim);white-space:nowrap;min-width:38px}
 .slider-row input[type=range]{flex:1;accent-color:var(--blue)}
 .slider-row span{font-size:10px;color:var(--text);min-width:32px;text-align:right;font-family:'Courier New',monospace}
-#status-box{flex:1;overflow-y:auto;padding:8px 10px;font-family:'Courier New',monospace;font-size:10.5px;
-  color:#8ec4d8;line-height:1.6;background:#06090f;white-space:pre-wrap;word-break:break-all}
+#status-box{display:none}
+
+/* ── 전력 현황 막대그래프 ──────────────────────────────────────── */
+.fp-side{margin-bottom:10px}
+.fp-side:last-child{margin-bottom:0}
+.fp-header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.fp-side-name{font-size:11px;font-weight:700;letter-spacing:.5px}
+.fp-side-stat{font-family:'Courier New',monospace;font-size:10px;color:var(--dim)}
+/* 전체 전력 총합 바 */
+.fp-total-track{background:#0a0e14;border:1px solid #1e2d3d;border-radius:3px;height:16px;
+  position:relative;overflow:hidden;margin-bottom:8px}
+.fp-total-fill{height:100%;border-radius:2px;transition:width .6s ease;position:relative}
+.fp-total-fill::after{content:attr(data-pct);position:absolute;right:5px;top:50%;transform:translateY(-50%);
+  font-family:'Courier New',monospace;font-size:10px;font-weight:700;color:rgba(0,0,0,.85);white-space:nowrap}
+/* 개별 부대 바 */
+.fp-unit{display:grid;grid-template-columns:52px 1fr 34px 14px;align-items:center;gap:5px;margin-bottom:5px}
+.fp-unit-id{font-family:'Courier New',monospace;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fp-unit-track{background:#0a0e14;border:1px solid #1a2535;border-radius:2px;height:10px;overflow:hidden}
+.fp-unit-fill{height:100%;border-radius:2px;transition:width .5s ease}
+.fp-unit-val{font-family:'Courier New',monospace;font-size:10px;text-align:right;white-space:nowrap}
+.fp-unit-icon{font-size:9px;text-align:center}
+.fp-divider{border:none;border-top:1px solid var(--border);margin:8px 0}
+/* 전력비 비교 바 */
+.fp-ratio-wrap{margin-top:6px}
+.fp-ratio-label{font-size:9px;color:var(--dim);margin-bottom:3px;text-align:center}
+.fp-ratio-track{background:#0a0e14;border:1px solid #1e2d3d;border-radius:3px;height:10px;overflow:hidden;display:flex}
+.fp-ratio-blu{background:var(--blue);transition:width .6s ease;height:100%}
+.fp-ratio-op{background:var(--red);transition:width .6s ease;height:100%}
 
 /* ── 지도 ─────────────────────────────────────────────────────── */
 #map-container{position:relative;overflow:hidden}
@@ -120,22 +146,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .unit-mk .uid{font-size:9px;font-weight:700}
 .unit-mk .ucp{font-size:9px}
 
-/* ── 전력 현황 패널 ──────────────────────────────────────────── */
-#force-panel{flex-shrink:0;padding:8px 12px 6px;border-bottom:1px solid var(--border)}
-.force-side{margin-bottom:8px}
-.force-side:last-child{margin-bottom:0}
-.force-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
-.force-label .side-name{font-size:10px;font-weight:700;letter-spacing:.8px}
-.force-label .side-stat{font-size:10px;font-family:'Courier New',monospace;color:var(--dim)}
-.force-bar-wrap{background:#0a0e14;border-radius:2px;height:6px;margin-bottom:6px;overflow:hidden;border:1px solid #1e2d3d}
-.force-bar{height:100%;border-radius:2px;transition:width .5s ease}
-.unit-row{display:flex;align-items:center;gap:5px;margin-bottom:3px}
-.unit-row .un{font-family:'Courier New',monospace;font-size:9px;color:var(--dim);min-width:46px;white-space:nowrap}
-.unit-row .ub-wrap{flex:1;background:#0a0e14;border-radius:1px;height:5px;overflow:hidden;border:1px solid #1e2d3d}
-.unit-row .ub{height:100%;border-radius:1px;transition:width .4s ease}
-.unit-row .uv{font-family:'Courier New',monospace;font-size:9px;min-width:32px;text-align:right;white-space:nowrap}
-.unit-row .ubadge{font-size:8px;min-width:14px;text-align:center}
-.force-divider{border:none;border-top:1px solid var(--border);margin:6px 0}
 
 /* ── 스크롤바 ─────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:4px;height:4px}
@@ -190,23 +200,41 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 
       <div id="force-panel" class="sb-section">
         <div class="sb-title">📊 전력 현황</div>
-        <div id="force-content">
-          <div class="force-side">
-            <div class="force-label">
-              <span class="side-name" style="color:var(--blue)">BLUFOR (아군)</span>
-              <span class="side-stat" id="bf-stat">-/-</span>
-            </div>
-            <div class="force-bar-wrap"><div id="bf-bar" class="force-bar" style="width:0%;background:var(--blue)"></div></div>
-            <div id="bf-units"></div>
+
+        <!-- BLUFOR -->
+        <div class="fp-side">
+          <div class="fp-header">
+            <span class="fp-side-name" style="color:var(--blue)">■ BLUFOR 아군</span>
+            <span class="fp-side-stat" id="bf-stat" style="color:var(--blue)">- / -</span>
           </div>
-          <hr class="force-divider">
-          <div class="force-side">
-            <div class="force-label">
-              <span class="side-name" style="color:var(--red)">OPFOR (적군) 인텔</span>
-              <span class="side-stat" id="op-stat">-/-</span>
-            </div>
-            <div class="force-bar-wrap"><div id="op-bar" class="force-bar" style="width:0%;background:var(--red)"></div></div>
-            <div id="op-units"></div>
+          <div class="fp-total-track">
+            <div id="bf-total-fill" class="fp-total-fill" style="width:0%;background:var(--blue)" data-pct=""></div>
+          </div>
+          <div id="bf-units"></div>
+        </div>
+
+        <hr class="fp-divider">
+
+        <!-- OPFOR -->
+        <div class="fp-side">
+          <div class="fp-header">
+            <span class="fp-side-name" style="color:var(--red)">■ OPFOR 적군</span>
+            <span class="fp-side-stat" id="op-stat" style="color:var(--red)">- / -</span>
+          </div>
+          <div class="fp-total-track">
+            <div id="op-total-fill" class="fp-total-fill" style="width:0%;background:var(--red)" data-pct=""></div>
+          </div>
+          <div id="op-units"></div>
+        </div>
+
+        <hr class="fp-divider">
+
+        <!-- 전력비 -->
+        <div class="fp-ratio-wrap">
+          <div class="fp-ratio-label">아군 ↔ 적군 전력비</div>
+          <div class="fp-ratio-track">
+            <div id="ratio-blu" class="fp-ratio-blu" style="width:50%"></div>
+            <div id="ratio-op"  class="fp-ratio-op"  style="width:50%"></div>
           </div>
         </div>
       </div>
@@ -476,71 +504,84 @@ function makeIntelPopup(e) {
     추정위치: <span style="font-family:monospace;font-size:11px">lat=${e.lat.toFixed(4)}, lon=${e.lon.toFixed(4)}</span>`;
 }
 
-// ── 전력 현황 패널 ───────────────────────────────────────────────
+// ── 전력 현황 막대그래프 ────────────────────────────────────────
 function cpColor(cp) {
-  if (cp >= 70) return 'var(--green)';
-  if (cp >= 40) return 'var(--amber)';
-  return 'var(--red)';
+  if (cp >= 70) return '#00ff88';
+  if (cp >= 40) return '#ffb300';
+  return '#ff4040';
 }
 
 function updateForcePanel(state) {
-  const units   = state.units || [];
-  const intel   = (state.intelligence?.BLUFOR) || [];
+  const units = state.units || [];
+  const intel = (state.intelligence && state.intelligence.BLUFOR) || [];
 
-  // ── BLUFOR ────────────────────────────────────────────
+  // ── BLUFOR ────────────────────────────────────────────────────
   const blufor  = units.filter(u => u.side === 'BLUFOR');
   const bfAlive = blufor.filter(u => u.status !== 'destroyed');
+  const bfTotal = blufor.length;
   const bfAvg   = bfAlive.length
-    ? bfAlive.reduce((s, u) => s + u.combat_power, 0) / bfAlive.length
-    : 0;
+    ? bfAlive.reduce((s, u) => s + u.combat_power, 0) / bfAlive.length : 0;
+  const bfClr   = cpColor(bfAvg);
 
   document.getElementById('bf-stat').textContent =
-    `${bfAlive.length}/${blufor.length} | ${bfAvg.toFixed(0)}%`;
-  document.getElementById('bf-bar').style.cssText =
-    `width:${bfAvg.toFixed(1)}%;background:${cpColor(bfAvg)}`;
+    `${bfAlive.length}/${bfTotal}  ${bfAvg.toFixed(0)}%`;
+  const bfFill = document.getElementById('bf-total-fill');
+  bfFill.style.width   = bfAvg.toFixed(1) + '%';
+  bfFill.style.background = bfClr;
+  bfFill.setAttribute('data-pct', bfAvg.toFixed(0) + '%');
 
-  const bfHtml = blufor.map(u => {
+  document.getElementById('bf-units').innerHTML = blufor.map(u => {
     const dead = u.status === 'destroyed';
     const cp   = dead ? 0 : u.combat_power;
-    const statusIcon = {active:'●', degraded:'◑', suppressed:'○', destroyed:'✕'}[u.status] || '●';
-    const statusClr  = {active:'var(--green)', degraded:'var(--amber)', suppressed:'var(--amber)', destroyed:'#555'}[u.status] || 'var(--dim)';
-    const barClr = dead ? '#333' : cpColor(cp);
-    return `<div class="unit-row">
-      <span class="un" style="color:${dead?'#444':'var(--blue)'}">${u.id}</span>
-      <div class="ub-wrap"><div class="ub" style="width:${cp.toFixed(1)}%;background:${barClr}"></div></div>
-      <span class="uv" style="color:${barClr}">${dead ? '전멸' : cp.toFixed(0)+'%'}</span>
-      <span class="ubadge" style="color:${statusClr}">${statusIcon}</span>
+    const clr  = dead ? '#333' : cpColor(cp);
+    const idClr = dead ? '#444' : '#40aaff';
+    const icons = {active:'●',degraded:'◑',suppressed:'○',destroyed:'✕'};
+    const iclr  = {active:'#00ff88',degraded:'#ffb300',suppressed:'#ffb300',destroyed:'#444'};
+    return `<div class="fp-unit">
+      <span class="fp-unit-id" style="color:${idClr}" title="${u.unit_type}">${u.id}</span>
+      <div class="fp-unit-track"><div class="fp-unit-fill" style="width:${cp.toFixed(1)}%;background:${clr}"></div></div>
+      <span class="fp-unit-val" style="color:${clr}">${dead?'전멸':cp.toFixed(0)+'%'}</span>
+      <span class="fp-unit-icon" style="color:${iclr[u.status]||'#888'}">${icons[u.status]||'●'}</span>
     </div>`;
   }).join('');
-  document.getElementById('bf-units').innerHTML = bfHtml;
 
-  // ── OPFOR 인텔 ────────────────────────────────────────
-  const opDetected = intel.filter(e => e.status === 'detected');
-  const opAvg = opDetected.length
-    ? opDetected.reduce((s, e) => s + (e.combat_power || 0), 0) / opDetected.length
-    : 0;
-  const totalIntel = intel.length;
+  // ── OPFOR 인텔 ────────────────────────────────────────────────
+  const opDetected  = intel.filter(e => e.status === 'detected');
+  const opDetAvg    = opDetected.length
+    ? opDetected.reduce((s, e) => s + (e.combat_power || 0), 0) / opDetected.length : 0;
+  const opClr = opDetected.length ? cpColor(opDetAvg) : '#555';
 
   document.getElementById('op-stat').textContent =
-    `탐지 ${opDetected.length}/${totalIntel} | ${opDetected.length ? opAvg.toFixed(0)+'%' : '???'}`;
-  document.getElementById('op-bar').style.cssText =
-    `width:${opAvg.toFixed(1)}%;background:${cpColor(opAvg)}`;
+    `탐지 ${opDetected.length}/${intel.length}  ${opDetected.length ? opDetAvg.toFixed(0)+'%' : '???'}`;
+  const opFill = document.getElementById('op-total-fill');
+  opFill.style.width = (opDetected.length ? opDetAvg : 0).toFixed(1) + '%';
+  opFill.style.background = opClr;
+  opFill.setAttribute('data-pct', opDetected.length ? opDetAvg.toFixed(0)+'%' : '???');
 
-  const opHtml = intel.map(e => {
-    const statusIcon = {detected:'●', approximate:'~', lost:'?'}[e.status] || '?';
-    const statusClr  = {detected:'var(--red)', approximate:'var(--amber)', lost:'#555'}[e.status] || '#555';
-    const cp = e.status === 'detected' ? e.combat_power : null;
-    const barW = cp !== null ? cp.toFixed(1) : '0';
-    const barClr = cp !== null ? cpColor(cp) : '#222';
-    const valTxt = cp !== null ? cp.toFixed(0)+'%' : (e.status === 'lost' ? '상실' : '???');
-    return `<div class="unit-row">
-      <span class="un" style="color:${e.status==='lost'?'#444':'var(--red)'}">${e.unit_id}</span>
-      <div class="ub-wrap"><div class="ub" style="width:${barW}%;background:${barClr}"></div></div>
-      <span class="uv" style="color:${cp!==null?barClr:'#555'}">${valTxt}</span>
-      <span class="ubadge" style="color:${statusClr}">${statusIcon}</span>
+  document.getElementById('op-units').innerHTML = intel.map(e => {
+    const isDetected = e.status === 'detected';
+    const isApprox   = e.status === 'approximate';
+    const isLost     = e.status === 'lost';
+    const cp    = isDetected ? (e.combat_power || 0) : 0;
+    const clr   = isDetected ? cpColor(cp) : (isApprox ? '#ffb300' : '#333');
+    const idClr = isLost ? '#444' : '#ff4040';
+    const valTxt = isDetected ? cp.toFixed(0)+'%' : (isApprox ? '???' : '상실');
+    const icon  = isDetected ? '●' : (isApprox ? '~' : '?');
+    const iclr  = isDetected ? '#ff4040' : (isApprox ? '#ffb300' : '#444');
+    return `<div class="fp-unit">
+      <span class="fp-unit-id" style="color:${idClr}" title="${e.unit_type||''}">${e.unit_id}</span>
+      <div class="fp-unit-track"><div class="fp-unit-fill" style="width:${isDetected?cp.toFixed(1):0}%;background:${clr}"></div></div>
+      <span class="fp-unit-val" style="color:${clr}">${valTxt}</span>
+      <span class="fp-unit-icon" style="color:${iclr}">${icon}</span>
     </div>`;
   }).join('');
-  document.getElementById('op-units').innerHTML = opHtml;
+
+  // ── 전력비 ────────────────────────────────────────────────────
+  const total = bfAvg + opDetAvg;
+  const bluPct = total > 0 ? (bfAvg / total * 100) : 50;
+  const opPct  = 100 - bluPct;
+  document.getElementById('ratio-blu').style.width = bluPct.toFixed(1) + '%';
+  document.getElementById('ratio-op').style.width  = opPct.toFixed(1)  + '%';
 }
 
 // ── 헤더/상태 업데이트 ────────────────────────────────────────────
