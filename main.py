@@ -8,7 +8,7 @@ C2 군사 전략 AI - 메인 진입점
   → EXAONE4의 상황 분석 결과를 기반으로 전략/전술 권고 생성
 
 사용 예시:
-  python main.py ui                          # Gradio UI 실행
+  python main.py ui                          # HTML 대시보드 UI 실행 (기본 포트 7861)
   python main.py analyze --video path.mp4   # 영상 분석
   python main.py query --query "적 기갑 전술 추천"
   python main.py check-env                  # 환경 확인
@@ -80,8 +80,8 @@ def init_agent(exaone4_model=None, strategy_model=None) -> "BattlefieldAgent":
 # ─────────────────────────────────────────────
 
 def cmd_ui(args):
-    """Gradio 웹 인터페이스를 실행합니다."""
-    logger.info("UI 모드 시작")
+    """HTML 대시보드 UI (FastAPI + Leaflet)를 실행합니다."""
+    logger.info("UI 모드 시작 — http://%s:%d", args.host, args.port)
 
     exaone4_model, strategy_model = preload_models(skip_strategy=args.skip_strategy)
     agent = init_agent(exaone4_model, strategy_model)
@@ -93,13 +93,8 @@ def cmd_ui(args):
         except Exception as e:
             logger.warning(f"비전 모델 사전 로딩 실패 (영상 업로드 시 로딩됨): {e}")
 
-    from ui.gradio_app import launch_app
-    launch_app(
-        agent=agent,
-        server_name=args.host,
-        server_port=args.port,
-        share=args.share,
-    )
+    from ui.web_api import start_server
+    start_server(agent=agent, host=args.host, port=args.port)
 
 
 # ─────────────────────────────────────────────
@@ -238,10 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     # ui
-    ui_p = subparsers.add_parser("ui", help="Gradio UI 실행")
+    ui_p = subparsers.add_parser("ui", help="HTML 대시보드 UI 실행 (FastAPI + Leaflet)")
     ui_p.add_argument("--host", default="0.0.0.0")
-    ui_p.add_argument("--port", type=int, default=7860)
-    ui_p.add_argument("--share", action="store_true")
+    ui_p.add_argument("--port", type=int, default=7861)
     ui_p.add_argument("--skip-strategy", action="store_true", help="EXAONE Deep 로딩 건너뜀")
     ui_p.add_argument("--skip-vision-preload", action="store_true", help="비전 모델 사전 로딩 건너뜀")
 
