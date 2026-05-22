@@ -87,6 +87,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .fp-ratio-track{background:#0a0e14;border:1px solid #1e2d3d;border-radius:3px;height:10px;overflow:hidden;display:flex}
 .fp-ratio-blu{background:var(--blue);transition:width .6s ease;height:100%}
 .fp-ratio-op{background:var(--red);transition:width .6s ease;height:100%}
+/* 전력 패널 내부 스크롤 (부대 수 많을 때 대비) */
+#force-panel{max-height:42vh;overflow-y:auto;overflow-x:hidden}
 
 /* ── 지도 ─────────────────────────────────────────────────────── */
 #map-container{position:relative;overflow:hidden}
@@ -254,11 +256,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <button id="btn-recon" class="sb-btn btn-secondary" onclick="startMission('recon')">🔍 정찰 임무계획</button>
         <button id="btn-attack" class="sb-btn btn-primary" onclick="startMission('attack')">⚔️ 공격 임무계획</button>
         <button id="btn-eval" class="sb-btn btn-warn" onclick="startMission('evaluate')">🧠 전술 평가 &amp; 학습</button>
-      </div>
-
-      <div class="sb-section">
-        <div class="sb-title">⚙️ 시나리오 설정</div>
-        <button class="sb-btn btn-secondary" onclick="openScenarioModal()">⚙️ 부대 구성 설정</button>
+        <button class="sb-btn btn-secondary" onclick="openScenarioModal()" style="margin-top:4px;border-style:dashed">⚙️ 시나리오 설정</button>
       </div>
 
       <div id="force-panel" class="sb-section">
