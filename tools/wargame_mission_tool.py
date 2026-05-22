@@ -68,7 +68,12 @@ def _snap_air_targets_to_opfor(air_plans: list) -> tuple:
             snapped.append(asp)
             continue
 
-        tx, ty = float(raw_target[0]), float(raw_target[1])
+        t0, t1 = float(raw_target[0]), float(raw_target[1])
+        # lat/lon 형식이면 먼저 미터로 변환
+        if -90.0 <= t0 <= 90.0 and t0 != round(t0):
+            t0, t1 = latlon_to_xy(t0, t1)
+            asp["target"] = [t0, t1]
+        tx, ty = t0, t1
 
         # 가장 가까운 탐지 OPFOR 찾기
         nearest = min(

@@ -29,14 +29,54 @@ except Exception as _wg_err:
     _wg_err = str(_wg_err)
 
 try:
-    from tools.coord_utils import xy_to_latlon as _xy_to_latlon
+    from tools.coord_utils import (
+        xy_to_latlon as _xy_to_latlon,
+        is_latlon_coords as _is_latlon_coords,
+        waypoints_latlon_to_xy as _waypoints_latlon_to_xy,
+        latlon_to_xy as _latlon_to_xy,
+    )
     _COORD_OK = True
 except Exception:
     _COORD_OK = False
     def _xy_to_latlon(x, y):
-        return (y / 111000.0 + 37.0, x / 88645.0 + 127.0)
+        return (y / 111000.0 + 38.0, x / 88645.0 + 127.0)
+    def _is_latlon_coords(wps):
+        if not wps: return False
+        v = wps[0][0] if isinstance(wps[0], (list, tuple)) else 0
+        return -90.0 <= float(v) <= 90.0 and float(v) != round(float(v))
+    def _waypoints_latlon_to_xy(wps):
+        return wps
+    def _latlon_to_xy(lat, lon):
+        return int((lon - 127.0) * 88645), int((lat - 38.0) * 111000)
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_latlon_plan_to_meters(plan: dict) -> dict:
+    """임무계획의 위경도 waypoints/target을 내부 미터 좌표로 변환."""
+    plan = dict(plan)
+    converted_mps = []
+    for mp in plan.get("mission_plans", []):
+        mp = dict(mp)
+        wps = mp.get("waypoints", [])
+        if wps and _is_latlon_coords(wps):
+            mp["waypoints"] = _waypoints_latlon_to_xy(wps)
+            logger.info(f"[좌표변환] {mp.get('company_id','?')} waypoints 위경도→미터 변환")
+        converted_mps.append(mp)
+    plan["mission_plans"] = converted_mps
+    converted_air = []
+    for asp in plan.get("air_support_plans", []):
+        asp = dict(asp)
+        target = asp.get("target", [])
+        if len(target) == 2:
+            t0, t1 = float(target[0]), float(target[1])
+            if -90.0 <= t0 <= 90.0 and t0 != round(t0):
+                x_m, y_m = _latlon_to_xy(t0, t1)
+                asp["target"] = [x_m, y_m]
+                logger.info(f"[좌표변환] {asp.get('call_sign','?')} target 위경도→미터 변환")
+        converted_air.append(asp)
+    plan["air_support_plans"] = converted_air
+    return plan
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 SAMPLES_DIR = Path(__file__).parent.parent / "samples"
@@ -567,8 +607,9 @@ def _execute_auto_attack_plan(event_type: str, *args):
                         raise RuntimeError("agent timeout")
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
-                    # 에이전트가 JSON을 반환한 경우 → 직접 적용
+                    # 에이전트가 JSON을 반환한 경우 → 위경도→미터 변환 후 직접 적용
                     try:
+                        plan = _convert_latlon_plan_to_meters(plan)
                         eng.apply_mission_plan(plan)
                         if plan.get("air_support_plans"):
                             eng.apply_air_support_plan(plan)
@@ -1134,6 +1175,7 @@ def wargame_request_recon_plan(history: List = None):
                 recon_result = recommend_recon_routes()
                 if recon_result.get("status") == "success":
                     plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
+                    plan_dict = _convert_latlon_plan_to_meters(plan_dict)
                     eng.apply_mission_plan(plan_dict)
                     applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
                 elif recon_result.get("status") == "no_recon_units":
@@ -1151,6 +1193,7 @@ def wargame_request_recon_plan(history: List = None):
                 return history, "", fig, damage_fig, status, log_text, ""
             if recon_result.get("status") == "success":
                 plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
+                plan_dict = _convert_latlon_plan_to_meters(plan_dict)
                 eng.apply_mission_plan(plan_dict)
                 applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
         if applied_plan is None:
@@ -1280,8 +1323,9 @@ def wargame_request_attack_plan(history: List = None):
                     raw = agent.agent.run(full_query, reset=True)
                     plan = _wg_planner._parse_json(str(raw))
                     if plan and "mission_plans" in plan:
-                        # 에이전트가 JSON 반환 → 직접 적용 (툴로 이미 적용했을 수도 있으나 중복 적용 허용)
+                        # 에이전트가 JSON 반환 → 위경도→미터 변환 후 직접 적용
                         try:
+                            plan = _convert_latlon_plan_to_meters(plan)
                             eng.apply_mission_plan(plan)
                             if plan.get("air_support_plans"):
                                 eng.apply_air_support_plan(plan)
