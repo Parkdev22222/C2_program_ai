@@ -1125,14 +1125,14 @@ def wargame_request_recon_plan(history: List = None):
         f"   → 탐지 상실(lost) 또는 개략위치(approximate) OPFOR 식별\n"
         f"2. recommend_recon_routes()\n"
         f"   → 정찰부대(unit_type=정찰) 기준 교전 회피 경로 자동 생성\n"
-        f"   → 반환값: apply_json(적용용 JSON), summary(경로 요약), mission_plans\n"
+        f"   → 반환값: apply_json(엔진 적용용 JSON — 미터 좌표), summary, mission_plans(위경도 표시용)\n"
+        f"   ※ apply_json은 이미 엔진 내부 미터 좌표로 작성되어 있음 — 좌표 수정 금지\n"
         f"3. recon_advisor_tool(recon_routes_json=<apply_json>, recon_summary=<summary>)  [선택]\n"
         f"   → EXAONE Deep에게 경로 전술 검토 요청 → 개선 의견 수신\n"
-        f"4. 최종 정찰 임무계획 JSON 생성\n"
-        f"   → Step 2 경로 + Step 3 조언 종합, unit_type=정찰 부대만 포함\n"
-        f"5. apply_wargame_mission_plan(plan_json=<최종JSON>, dry_run=False)\n"
-        f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
-        f"6. 응답에 최종 임무계획 JSON 블록 출력\n\n"
+        f"4. apply_wargame_mission_plan(plan_json=<apply_json>, dry_run=False)\n"
+        f"   → Step 2의 apply_json을 그대로 사용 (좌표 수정 금지, dry_run=True 절대 금지)\n"
+        f"   → 워게임 엔진에 즉시 적용\n"
+        f"5. 응답에 apply_json의 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
@@ -1154,6 +1154,14 @@ def wargame_request_recon_plan(history: List = None):
     import json as _json, re as _re
     agent_response_text = ""
     applied_plan = None
+    # 정찰 경로를 미리 생성 — apply_json은 미터 좌표로 작성되어 있음
+    _base_recon_result = recommend_recon_routes()
+    if _base_recon_result.get("status") == "no_recon_units":
+        msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
+        history[-1] = (history[-1][0], msg)
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
+    _base_apply_json = _base_recon_result.get("apply_json", "")
     try:
         if agent is not None:
             try:
@@ -1166,36 +1174,29 @@ def wargame_request_recon_plan(history: List = None):
                 try:
                     parsed = _json.loads(block)
                     if "mission_plans" in parsed:
-                        applied_plan = parsed  # 표시용 — 적용은 agent가 tool로 처리
+                        applied_plan = parsed  # 표시용
                         break
                 except _json.JSONDecodeError:
                     pass
-            if applied_plan is None:
-                logger.warning("Agent response has no parseable mission plan JSON; applying via fallback")
-                recon_result = recommend_recon_routes()
-                if recon_result.get("status") == "success":
-                    plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
-                    plan_dict = _convert_latlon_plan_to_meters(plan_dict)
-                    eng.apply_mission_plan(plan_dict)
-                    applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
-                elif recon_result.get("status") == "no_recon_units":
-                    msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-                    history[-1] = (history[-1][0], msg)
-                    fig, damage_fig, status, log_text = wargame_refresh()
-                    return history, "", fig, damage_fig, status, log_text, ""
+
+            # 에이전트가 tool로 적용했더라도 gradio에서도 안전망으로 적용.
+            # apply_json은 미터 좌표이므로 변환 불필요. 이중 적용해도 무해.
+            if _base_recon_result.get("status") == "success" and _base_apply_json:
+                try:
+                    _base_plan_dict = _json.loads(_base_apply_json) if isinstance(_base_apply_json, str) else _base_apply_json
+                    eng.apply_mission_plan(_base_plan_dict)
+                    logger.info("[정찰임무] 안전망: 미터 좌표 apply_json 직접 적용 완료")
+                except Exception as _fe:
+                    logger.warning("[정찰임무] 안전망 적용 실패: %s", _fe)
+                if applied_plan is None:
+                    applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k not in {"target_unit_id", "target_unit_ids"}} for p in _base_recon_result["mission_plans"]]}
         else:
             agent_response_text = "에이전트 미초기화 — 규칙 기반으로 정찰 경로를 생성합니다."
-            recon_result = recommend_recon_routes()
-            if recon_result.get("status") == "no_recon_units":
-                msg = f"**⚠️ 사용 가능한 정찰부대가 없습니다.**\n\n{assessment.get('reason', '')}"
-                history[-1] = (history[-1][0], msg)
-                fig, damage_fig, status, log_text = wargame_refresh()
-                return history, "", fig, damage_fig, status, log_text, ""
-            if recon_result.get("status") == "success":
-                plan_dict = _json.loads(recon_result["apply_json"]) if isinstance(recon_result["apply_json"], str) else recon_result["apply_json"]
-                plan_dict = _convert_latlon_plan_to_meters(plan_dict)
+            if _base_recon_result.get("status") == "success":
+                # apply_json은 미터 좌표로 작성되어 있으므로 변환 없이 직접 적용
+                plan_dict = _json.loads(_base_apply_json) if isinstance(_base_apply_json, str) else _base_apply_json
                 eng.apply_mission_plan(plan_dict)
-                applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k != "target_unit_id"} for p in recon_result["mission_plans"]]}
+                applied_plan = {"mission_plans": [{k: v for k, v in p.items() if k not in {"target_unit_id", "target_unit_ids"}} for p in _base_recon_result["mission_plans"]]}
         if applied_plan is None:
             history[-1] = (history[-1][0], "정찰 임무계획 생성 실패: 적용 가능한 계획이 없습니다.")
             fig, damage_fig, status, log_text = wargame_refresh()

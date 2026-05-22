@@ -344,12 +344,12 @@ def recommend_recon_routes() -> dict:
                 {
                     "company_id":    str,   // 정찰부대 ID
                     "mission_type":  "recon",
-                    "waypoints":     [[x, y], ...],  // 좌표 단위: m
+                    "waypoints":     [[lat, lon], ...],  // 위경도 (표시용)
                     "objective":     str,
                     "target_unit_id": str
                 }, ...
             ],
-            "apply_json": str,   // apply_wargame_mission_plan()에 바로 전달 가능한 JSON
+            "apply_json": str,   // apply_wargame_mission_plan()에 바로 전달 가능한 JSON (미터 좌표)
             "summary":   str
         }
     """
@@ -404,6 +404,11 @@ def recommend_recon_routes() -> dict:
         for i, t in enumerate(targets):
             chunks[i % n_ru].append(t)
 
+        # assignments_m: apply_json용 미터 좌표 (변환 없이 엔진에 직접 전달)
+        # assignments: mission_plans 표시용 위경도 좌표 (LLM 가독성)
+        assignments = []
+        assignments_m = []
+
         for ru, chunk in zip(recon_units, chunks):
             if not chunk:
                 continue
@@ -415,21 +420,22 @@ def recommend_recon_routes() -> dict:
             else:
                 objective = f"OPFOR 위치 정밀확인: {target_ids}"
             assignments.append({
-                "company_id":     ru["id"],
-                "mission_type":   "recon",
-                "waypoints":      wps_latlon,
-                "objective":      objective,
+                "company_id":      ru["id"],
+                "mission_type":    "recon",
+                "waypoints":       wps_latlon,   # 위경도 (표시용)
+                "objective":       objective,
                 "target_unit_ids": [t["unit_id"] for t in chunk],
             })
+            assignments_m.append({
+                "company_id":  ru["id"],
+                "mission_type": "recon",
+                "waypoints":   wps_m,            # 미터 (직접 적용용)
+                "objective":   objective,
+            })
 
-        # apply_wargame_mission_plan 호환 JSON (내부 메타 필드 제외)
-        _exclude = {"target_unit_id", "target_unit_ids"}
-        apply_payload = {
-            "mission_plans": [
-                {k: v for k, v in a.items() if k not in _exclude}
-                for a in assignments
-            ]
-        }
+        # apply_json: 미터 좌표로 직접 apply_wargame_mission_plan에 전달 가능
+        # (위경도 변환 오류 완전 배제)
+        apply_payload = {"mission_plans": assignments_m}
         apply_json = json.dumps(apply_payload, ensure_ascii=False)
 
         ru_status = {ru["id"]: ru["status"] for ru in recon_units}
