@@ -417,6 +417,7 @@ class WargameEngine:
                     "last_detected_tick": -1,
                     "detected_by":        None,
                     "ticks_since_lost":   0,
+                    "ever_detected":      False,
                 }
 
     def _update_intelligence(self):
@@ -501,6 +502,7 @@ class WargameEngine:
                         "last_detected_tick": self.tick,
                         "detected_by":        detected_by.id,
                         "ticks_since_lost":   0,
+                        "ever_detected":      True,
                     })
                     if prev_status != "detected":
                         self.db.log_event(
@@ -521,7 +523,21 @@ class WargameEngine:
                             except Exception as _cb_err:
                                 logger.error(f"on_new_opfor_detection 콜백 오류: {_cb_err}")
                 else:
-                    if entry["status"] == "detected":
+                    if entry.get("ever_detected"):
+                        # 한 번이라도 탐지된 부대: 탐지 상실 없이 Dead Reckoning으로 위치 추정 유지
+                        vx, vy = self._unit_velocity.get(enemy.id, (0.0, 0.0))
+                        entry["known_x"] = max(0.0, min(29_999.0,
+                            entry["known_x"] + vx * dt))
+                        entry["known_y"] = max(0.0, min(29_999.0,
+                            entry["known_y"] + vy * dt))
+                        tsl = entry.get("ticks_since_lost", 0)
+                        if tsl > 0:  # 시야 이탈 후 시간 경과에 따라 미약한 위치 오차 누적
+                            noise = min(tsl * _DR_NOISE_PER_TICK * 0.3, 800.0)
+                            entry["known_x"] += random.uniform(-noise, noise)
+                            entry["known_y"] += random.uniform(-noise, noise)
+                        entry["ticks_since_lost"] = tsl + 1
+                        entry["status"] = "detected"  # 탐지 상태 유지
+                    elif entry["status"] == "detected":
                         entry["status"] = "lost"
                         entry["ticks_since_lost"] = 0
                         self.db.log_event(
