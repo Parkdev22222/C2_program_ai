@@ -687,39 +687,44 @@ function updateForcePanel(state) {
     </div>`;
   }).join('');
 
-  // ── OPFOR 인텔 ────────────────────────────────────────────────
-  const opDetected  = intel.filter(e => e.status === 'detected');
-  const opDetAvg    = opDetected.length
-    ? opDetected.reduce((s, e) => s + (e.combat_power || 0), 0) / opDetected.length : 0;
-  const opClr = opDetected.length ? cpColor(opDetAvg) : '#555';
+  // ── OPFOR (심판 시점 — 실제 전력) ───────────────────────────
+  const opforAll  = units.filter(u => u.side === 'OPFOR');
+  const opAlive   = opforAll.filter(u => u.status !== 'destroyed');
+  const opAvg     = opAlive.length
+    ? opAlive.reduce((s, u) => s + u.combat_power, 0) / opAlive.length : 0;
+  const opClr     = opAlive.length ? cpColor(opAvg) : '#555';
+
+  // 탐지 현황 오버레이용
+  const intelMap   = Object.fromEntries(intel.map(e => [e.unit_id, e]));
+  const opDetCount = intel.filter(e => e.status === 'detected').length;
 
   document.getElementById('op-stat').textContent =
-    `탐지 ${opDetected.length}/${intel.length}  ${opDetected.length ? opDetAvg.toFixed(0)+'%' : '???'}`;
+    `탐지 ${opDetCount}/${opforAll.length}  ${opAvg.toFixed(0)}%`;
   const opFill = document.getElementById('op-total-fill');
-  opFill.style.width = (opDetected.length ? opDetAvg : 0).toFixed(1) + '%';
+  opFill.style.width      = opAvg.toFixed(1) + '%';
   opFill.style.background = opClr;
-  opFill.setAttribute('data-pct', opDetected.length ? opDetAvg.toFixed(0)+'%' : '???');
+  opFill.setAttribute('data-pct', opAvg.toFixed(0) + '%');
 
-  document.getElementById('op-units').innerHTML = intel.map(e => {
-    const isDetected = e.status === 'detected';
-    const isApprox   = e.status === 'approximate';
-    const isLost     = e.status === 'lost';
-    const cp    = isDetected ? (e.combat_power || 0) : 0;
-    const clr   = isDetected ? cpColor(cp) : (isApprox ? '#ffb300' : '#333');
-    const idClr = isLost ? '#444' : '#ff4040';
-    const valTxt = isDetected ? cp.toFixed(0)+'%' : (isApprox ? '???' : '상실');
-    const icon  = isDetected ? '●' : (isApprox ? '~' : '?');
-    const iclr  = isDetected ? '#ff4040' : (isApprox ? '#ffb300' : '#444');
+  document.getElementById('op-units').innerHTML = opforAll.map(u => {
+    const dead     = u.status === 'destroyed';
+    const cp       = dead ? 0 : u.combat_power;
+    const clr      = dead ? '#333' : cpColor(cp);
+    const idClr    = dead ? '#444' : '#ff4040';
+    const eIntel   = intelMap[u.id];
+    const detSt    = eIntel ? eIntel.status : 'lost';
+    const detIcon  = detSt === 'detected' ? '●' : (detSt === 'approximate' ? '~' : '?');
+    const detIclr  = detSt === 'detected' ? '#ff4040' : (detSt === 'approximate' ? '#ffb300' : '#555');
+    const statusIcons = {active:'●',degraded:'◑',suppressed:'○',destroyed:'✕'};
     return `<div class="fp-unit">
-      <span class="fp-unit-id" style="color:${idClr}" title="${e.unit_type||''}">${e.unit_id}</span>
-      <div class="fp-unit-track"><div class="fp-unit-fill" style="width:${isDetected?cp.toFixed(1):0}%;background:${clr}"></div></div>
-      <span class="fp-unit-val" style="color:${clr}">${valTxt}</span>
-      <span class="fp-unit-icon" style="color:${iclr}">${icon}</span>
+      <span class="fp-unit-id" style="color:${idClr}" title="${u.unit_type||''}">${u.id}</span>
+      <div class="fp-unit-track"><div class="fp-unit-fill" style="width:${cp.toFixed(1)}%;background:${clr}"></div></div>
+      <span class="fp-unit-val" style="color:${clr}">${dead?'전멸':cp.toFixed(0)+'%'}</span>
+      <span class="fp-unit-icon" style="color:${detIclr}" title="탐지상태:${detSt}">${detIcon}</span>
     </div>`;
   }).join('');
 
   // ── 전력비 ────────────────────────────────────────────────────
-  const total = bfAvg + opDetAvg;
+  const total = bfAvg + opAvg;
   const bluPct = total > 0 ? (bfAvg / total * 100) : 50;
   const opPct  = 100 - bluPct;
   document.getElementById('ratio-blu').style.width = bluPct.toFixed(1) + '%';
