@@ -570,11 +570,8 @@ def _execute_auto_attack_plan(event_type: str, *args):
             logger.info(f"[자동임무계획] 공중지원 완료 대기 {_waited:.1f}s 후 일시정지")
         eng.stop()
         logger.info(f"[자동임무계획] 시뮬레이션 일시정지 완료 — running={eng.running}")
-        try:
-            from tools.wargame_mission_tool import set_resume_on_apply
-            set_resume_on_apply(True)
-        except Exception:
-            pass
+        # set_resume_on_apply 사용 안 함 — LLM 툴 호출 시 엔진이 중간에 재시작되어
+        # "배너 표시 중인데 시뮬레이션 돌아가는" 문제 발생. finally에서 일괄 재시작.
     else:
         logger.info("[자동임무계획] 시뮬레이션이 이미 정지 상태")
 
