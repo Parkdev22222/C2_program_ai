@@ -471,7 +471,7 @@ def start_server(agent=None, host: str = "0.0.0.0", port: int = 7861):
         logger.warning("엔진 초기화 오류: %s", e)
 
     logger.info("C2 웹 대시보드 서버 시작: http://%s:%d", host, port)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
 
 
 if __name__ == "__main__":
