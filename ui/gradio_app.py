@@ -664,16 +664,29 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
         if agent is not None:
             try:
-                import concurrent.futures as _cf
+                import threading as _thr
                 _AGENT_TIMEOUT = 900  # 자동 재계획 최대 대기 시간 (초)
-                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-                    _fut = _ex.submit(lambda: agent.agent.run(full_query, reset=True))
+                _raw_holder: list = [None]
+                _err_holder: list = [None]
+                _done_evt = _thr.Event()
+
+                def _run_agent_thread():
                     try:
-                        raw = _fut.result(timeout=_AGENT_TIMEOUT)
-                    except _cf.TimeoutError:
-                        logger.warning(f"[자동임무계획] 에이전트 타임아웃 ({_AGENT_TIMEOUT}s) → 규칙 기반 폴백")
-                        _fut.cancel()
-                        raise RuntimeError("agent timeout")
+                        _raw_holder[0] = agent.agent.run(full_query, reset=True)
+                    except Exception as _te:
+                        _err_holder[0] = _te
+                    finally:
+                        _done_evt.set()
+
+                _agent_t = _thr.Thread(target=_run_agent_thread, daemon=True, name="auto-plan-agent")
+                _agent_t.start()
+                _finished = _done_evt.wait(timeout=_AGENT_TIMEOUT)
+                if not _finished:
+                    logger.warning(f"[자동임무계획] 에이전트 타임아웃 ({_AGENT_TIMEOUT}s) → 규칙 기반 폴백")
+                    raise RuntimeError("agent timeout")
+                if _err_holder[0]:
+                    raise _err_holder[0]
+                raw = _raw_holder[0]
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
                     # 에이전트가 JSON을 반환한 경우 → 위경도→미터 변환 후 직접 적용
