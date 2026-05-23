@@ -140,6 +140,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 @keyframes spin{to{transform:rotate(360deg)}}
 #loading-msg{color:var(--green);font-size:14px;letter-spacing:.5px}
 #loading-sub{color:var(--dim);font-size:11px}
+#loading-dismiss{margin-top:8px;background:none;border:1px solid var(--border);color:var(--dim);
+  cursor:pointer;font-size:11px;padding:4px 14px;border-radius:3px}
+#loading-dismiss:hover{border-color:var(--amber);color:var(--amber)}
 
 /* ── 유닛 마커 (Leaflet divIcon) ────────────────────────────────── */
 .unit-mk{display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -413,6 +416,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
   <div id="loading-spinner"></div>
   <div id="loading-msg">처리 중...</div>
   <div id="loading-sub">LLM이 임무계획 수립 중입니다. 수분 소요될 수 있습니다.</div>
+  <button id="loading-dismiss" onclick="hideLoading()" title="창을 닫습니다 (백그라운드에서 계속 처리됩니다)">✕ 닫기 (백그라운드 처리 계속)</button>
 </div>
 
 <script>
@@ -924,8 +928,34 @@ async function startMission(type) {
 }
 
 function pollJob(jobId, label) {
+  const startTime = Date.now();
+  const MAX_WAIT_MS = 5 * 60 * 1000; // 5분 타임아웃
   const check = async () => {
     try {
+      // 타임아웃: 5분 초과 시 오버레이 강제 해제 (백그라운드에서 계속 처리)
+      if (Date.now() - startTime > MAX_WAIT_MS) {
+        hideLoading();
+        addChatMessage('sys', `⏰ ${label} 계획 수립 중 (백그라운드 처리 중 — 완료 시 자동 갱신)`);
+        // 백그라운드 폴링 계속 (오버레이 없이)
+        const bgCheck = async () => {
+          try {
+            const r2 = await fetch(`/api/job/${jobId}`);
+            const j2 = await r2.json();
+            if (j2.status === 'done') {
+              const res = j2.result || {};
+              if (res.plan_text) document.getElementById('plan-box').textContent = res.plan_text;
+              addChatMessage('bot', `✅ ${label} 완료\n\n${res.message || ''}`);
+              await poll(); await fetchStatusText(); await fetchEvents();
+            } else if (j2.status === 'error') {
+              addChatMessage('err', `❌ ${label} 오류: ${(j2.log||[]).slice(-2).join('\n')}`);
+            } else {
+              setTimeout(bgCheck, 5000);
+            }
+          } catch(_) {}
+        };
+        setTimeout(bgCheck, 5000);
+        return;
+      }
       const r = await fetch(`/api/job/${jobId}`);
       const job = await r.json();
       if (job.status === 'done') {
