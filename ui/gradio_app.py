@@ -662,7 +662,17 @@ def _execute_auto_attack_plan(event_type: str, *args):
         if agent is not None:
             try:
                 import threading as _thr
+                import time as _t_session
                 _AGENT_TIMEOUT = 900  # 자동 재계획 최대 대기 시간 (초)
+                _session_start = _t_session.time()
+
+                # 이 세션 시작 전 apply 기록 초기화
+                try:
+                    from tools.wargame_mission_tool import reset_apply_tracker
+                    reset_apply_tracker()
+                except Exception:
+                    pass
+
                 _raw_holder: list = [None]
                 _err_holder: list = [None]
                 _done_evt = _thr.Event()
@@ -684,6 +694,14 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 if _err_holder[0]:
                     raise _err_holder[0]
                 raw = _raw_holder[0]
+
+                # 툴 호출로 이미 적용됐는지 타임스탬프로 판단
+                try:
+                    from tools.wargame_mission_tool import was_plan_applied_since
+                    _tool_applied = was_plan_applied_since(_session_start)
+                except Exception:
+                    _tool_applied = False
+
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
                     # 에이전트가 JSON을 반환한 경우 → 위경도→미터 변환 후 직접 적용
@@ -696,12 +714,11 @@ def _execute_auto_attack_plan(event_type: str, *args):
                                     f"— {len(plan['mission_plans'])}개 중대 재배정")
                     except Exception as _ae:
                         logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
-                elif (isinstance(raw, dict) and raw.get("status") == "success") or \
-                     (isinstance(raw, str) and '"status": "success"' in raw):
+                elif _tool_applied:
                     # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
                     logger.info("[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요")
                 else:
-                    logger.warning(f"[자동임무계획] JSON 파싱 실패 (raw={str(raw)[:120]}) → 규칙 기반 폴백")
+                    logger.warning(f"[자동임무계획] 에이전트 미적용 → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
                     eng.apply_mission_plan(plan)
             except Exception as _e:

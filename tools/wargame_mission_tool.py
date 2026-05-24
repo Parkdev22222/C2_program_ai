@@ -10,9 +10,8 @@ from tools.coord_utils import is_latlon_coords, waypoints_latlon_to_xy, latlon_t
 logger = logging.getLogger(__name__)
 
 _wargame_engine = None
-# UI 버튼이 임무계획 수립을 위해 시뮬레이션을 정지한 경우 True.
-# apply_wargame_mission_plan(dry_run=False) 성공 시 자동으로 재개한다.
 _resume_on_apply: bool = False
+_last_apply_time: float = 0.0  # apply_wargame_mission_plan 마지막 호출 시각
 
 
 def register_wargame_engine(engine):
@@ -21,9 +20,19 @@ def register_wargame_engine(engine):
 
 
 def set_resume_on_apply(flag: bool) -> None:
-    """UI 버튼 핸들러가 시뮬레이션을 일시정지했을 때 True로 설정."""
     global _resume_on_apply
     _resume_on_apply = flag
+
+
+def reset_apply_tracker() -> None:
+    """자동 재계획 세션 시작 시 호출 — 이전 apply 기록 초기화."""
+    global _last_apply_time
+    _last_apply_time = 0.0
+
+
+def was_plan_applied_since(since: float) -> bool:
+    """since 이후 apply_wargame_mission_plan이 실제로 호출됐는지 확인."""
+    return _last_apply_time > since
 
 
 # ── 공중지원 목표 좌표 스냅 헬퍼 ────────────────────────────────────
@@ -241,6 +250,11 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             clear_pending_plan()
         except Exception:
             pass
+
+        # 적용 시각 기록 (자동 재계획에서 폴백 여부 판단에 사용)
+        import time as _t_apply
+        global _last_apply_time
+        _last_apply_time = _t_apply.time()
 
         # 임무계획 버튼이 시뮬레이션을 정지한 경우 여기서 재개
         global _resume_on_apply
