@@ -577,6 +577,8 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
     if _wg_planner is None:
         logger.warning("[자동임무계획] planner 없음 → 재개")
+        _auto_plan_status["active"] = False
+        _auto_plan_status["message"] = ""
         if was_running:
             eng.start()
         return
@@ -732,6 +734,13 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
     except Exception as _ex:
         logger.error(f"[자동임무계획] 오류: {_ex}", exc_info=True)
+        try:
+            state = eng.get_state()
+            plan = _wg_planner._rule_based(state)
+            eng.apply_mission_plan(plan)
+            logger.info("[자동임무계획] 오류 후 규칙 기반 폴백 적용")
+        except Exception as _fb_ex:
+            logger.error(f"[자동임무계획] 폴백도 실패: {_fb_ex}")
     finally:
         # UI 팝업 상태 해제
         _auto_plan_status["active"] = False
