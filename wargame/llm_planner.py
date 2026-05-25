@@ -336,7 +336,44 @@ class MissionPlanner:
                 "objective": f"OPFOR 격멸 ({int(op_cx)},{int(op_cy)})"
             })
 
+        # ── 규칙 기반 공중지원 계획 ──────────────────────────────────────
+        # 공중지원 잔여 횟수 확인
+        air_use   = state.get("air_use_count", {})
+        air_limit = state.get("air_use_limit", 5)
+        remaining = max(0, air_limit - air_use.get("BLUFOR", 0))
+
+        air_support_plans = []
+        if remaining > 0:
+            # detected 적 인텔만 추출, 전투력 높은 순(위협 우선) 정렬
+            detected = [
+                e for e in state.get("intelligence", {}).get("BLUFOR", [])
+                if e.get("status") == "detected"
+            ]
+            detected.sort(key=lambda e: e.get("combat_power") or 0, reverse=True)
+
+            call_signs = ["EAGLE-1", "EAGLE-2", "EAGLE-3", "VIPER-1", "VIPER-2"]
+            for idx, enemy in enumerate(detected[:remaining]):
+                cs = call_signs[idx] if idx < len(call_signs) else f"STRIKE-{idx + 1}"
+                unit_type = enemy.get("unit_type", "")
+                # 기갑(전차·장갑차) → helicopter, 그 외 → cas
+                if any(kw in unit_type for kw in ("전차", "tank", "장갑", "armor")):
+                    s_type, radius, delay = "helicopter", 1000, 60
+                else:
+                    s_type, radius, delay = "cas", 1500, 60
+                air_support_plans.append({
+                    "call_sign":    cs,
+                    "support_type": s_type,
+                    "target":       [int(enemy["known_x"]), int(enemy["known_y"])],
+                    "radius":       radius,
+                    "delay":        delay,
+                })
+
+        reasoning = f"[규칙 기반] OPFOR 집결점 ({int(op_cx)},{int(op_cy)}) 공격."
+        if air_support_plans:
+            reasoning += f" 탐지 OPFOR {len(air_support_plans)}개에 공중지원 할당."
+
         return {
-            "reasoning": f"[규칙 기반] OPFOR 집결점 ({int(op_cx)},{int(op_cy)}) 공격.",
-            "mission_plans": plans,
+            "reasoning":        reasoning,
+            "mission_plans":    plans,
+            "air_support_plans": air_support_plans,
         }

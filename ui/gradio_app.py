@@ -763,13 +763,22 @@ def _execute_auto_attack_plan(event_type: str, *args):
                     logger.warning(f"[자동임무계획] 에이전트 미적용 → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
                     eng.apply_mission_plan(plan)
+                    if plan.get("air_support_plans"):
+                        eng.apply_air_support_plan(plan)
+                        logger.info(f"[자동임무계획] 규칙 기반 공중지원 {len(plan['air_support_plans'])}회 적용")
             except Exception as _e:
                 logger.warning(f"[자동임무계획] 에이전트 실행 실패: {_e} → 규칙 기반 폴백")
                 plan = _wg_planner._rule_based(state)
                 eng.apply_mission_plan(plan)
+                if plan.get("air_support_plans"):
+                    eng.apply_air_support_plan(plan)
+                    logger.info(f"[자동임무계획] 규칙 기반 공중지원 {len(plan['air_support_plans'])}회 적용")
         else:
             plan = _wg_planner._rule_based(state)
             eng.apply_mission_plan(plan)
+            if plan.get("air_support_plans"):
+                eng.apply_air_support_plan(plan)
+                logger.info(f"[자동임무계획] 규칙 기반 공중지원 {len(plan['air_support_plans'])}회 적용")
             logger.info("[자동임무계획] 규칙 기반 계획 적용")
 
     except Exception as _ex:
@@ -778,6 +787,9 @@ def _execute_auto_attack_plan(event_type: str, *args):
             state = eng.get_state()
             plan = _wg_planner._rule_based(state)
             eng.apply_mission_plan(plan)
+            if plan.get("air_support_plans"):
+                eng.apply_air_support_plan(plan)
+                logger.info(f"[자동임무계획] 규칙 기반 공중지원 {len(plan['air_support_plans'])}회 적용")
             logger.info("[자동임무계획] 오류 후 규칙 기반 폴백 적용")
         except Exception as _fb_ex:
             logger.error(f"[자동임무계획] 폴백도 실패: {_fb_ex}")
