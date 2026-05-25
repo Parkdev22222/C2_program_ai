@@ -492,6 +492,17 @@ def get_optimal_attack_positions(
                     "recommended_units": units,
                 })
 
+            # ── 탐지 신뢰도 계수 (위치 불확실 시 우선순위 감소) ────
+            det_status = target_entry["status"]
+            if det_status == "detected":
+                confidence = 1.0
+                attack_priority = "높음"
+                position_note = ""
+            else:  # approximate
+                confidence = 0.5
+                attack_priority = "낮음 (위치 불확실 — 정찰 후 재평가 권고)"
+                position_note = " ⚠️ 추정 위치 기반 — 실제 위치 오차 있음"
+
             # ── 요약 문자열 ──────────────────────────────────────
             best = optimal_positions[0]
             best_method = best["attack_methods"][0]["method"] if best["attack_methods"] else "직접 공격"
@@ -505,6 +516,7 @@ def get_optimal_attack_positions(
                 f"최적 위치 (lat={best['lat']}, lon={best['lon']}) "
                 f"고도{best['elevation_m']:.0f}m / {elev_note} / "
                 f"권고 수단: {best_method} / 종합점수 {best['score']:.0f}점"
+                f"{position_note}"
             )
 
             tgt_lat, tgt_lon = xy_to_latlon(ox, oy)
@@ -519,17 +531,20 @@ def get_optimal_attack_positions(
                     "elevation_m":     round(target_elev, 1),
                     "cover":           round(target_cover, 3),
                     "combat_power":    target_entry.get("combat_power"),
-                    "detection_status": target_entry["status"],
+                    "detection_status": det_status,
+                    "attack_priority": attack_priority,
+                    "position_confidence": confidence,
                 },
                 "optimal_positions": optimal_positions,
                 "summary": summary,
+                "_sort_score": (best["score"] if optimal_positions else 0) * confidence,
             })
 
-        # 가장 점수가 높은 타겟 우선 정렬
-        recommendations.sort(
-            key=lambda r: r["optimal_positions"][0]["score"] if r["optimal_positions"] else 0,
-            reverse=True,
-        )
+        # 탐지 신뢰도가 반영된 점수 기준 정렬
+        # detected(×1.0) > approximate(×0.5) — 위치 불확실 타겟은 후순위
+        recommendations.sort(key=lambda r: r["_sort_score"], reverse=True)
+        for r in recommendations:
+            del r["_sort_score"]
 
         return {
             "status": "success",
