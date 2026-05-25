@@ -665,6 +665,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
             f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
             f"4. get_wargame_situation() 호출 금지 — 전장 상황이 아래 [현재 전장 상황]에 이미 제공됨.\n"
+            f"5. apply_wargame_mission_plan(dry_run=False) 호출 후 즉시 final_answer() 호출하고 종료. 추가 툴 호출 절대 금지.\n"
             f"{_sit_block}\n"
             + base_query
             + f"\n\n{trigger_desc}\n\n"
