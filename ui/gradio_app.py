@@ -731,7 +731,24 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 _agent_t.start()
                 _finished = _done_evt.wait(timeout=_AGENT_TIMEOUT)
                 if not _finished:
-                    logger.warning(f"[자동임무계획] 에이전트 타임아웃 ({_AGENT_TIMEOUT}s) → 규칙 기반 폴백")
+                    logger.warning(f"[자동임무계획] 에이전트 타임아웃 ({_AGENT_TIMEOUT}s) → 스레드 중단 시도")
+                    try:
+                        import ctypes as _ctypes
+                        _tid = _agent_t.ident
+                        if _tid is not None:
+                            _res = _ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                                _ctypes.c_ulong(_tid),
+                                _ctypes.py_object(SystemExit),
+                            )
+                            if _res == 1:
+                                logger.info("[자동임무계획] SystemExit 주입 완료 — 스레드 종료 대기 (최대 5s)")
+                                _agent_t.join(timeout=5.0)
+                            elif _res > 1:
+                                _ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                                    _ctypes.c_ulong(_tid), None)
+                                logger.warning("[자동임무계획] PyThreadState_SetAsyncExc 다중 매칭 — 롤백")
+                    except Exception as _kill_err:
+                        logger.debug(f"[자동임무계획] 스레드 중단 실패 (무시): {_kill_err}")
                     raise RuntimeError("agent timeout")
                 if _err_holder[0]:
                     raise _err_holder[0]
