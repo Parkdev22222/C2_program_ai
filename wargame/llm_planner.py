@@ -168,6 +168,7 @@ def build_mission_query(state: dict) -> str:
 
 ⚠️ 필수: 아래 툴을 반드시 순서대로 호출하여 실제 전장 데이터를 수집한 후 임무계획을 수립하라.
 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
+⚠️ 코드 첫 줄에 반드시 `import json` 을 실행하라. json 없이 json.dumps() 호출 시 NameError 발생.
 
 [필수 툴 호출 순서]
 1. (자동 재계획 시 생략 가능) get_wargame_situation()
