@@ -213,7 +213,10 @@ def build_mission_query(state: dict) -> str:
    조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
    예: Red1 위치가 known_lat=37.074775, known_lon=127.141013 이면 → "target": [37.074775, 127.141013]
-[규칙] 좌표는 반드시 위경도(WGS84) 소수점 6자리, WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려, 공중지원은 필요 시만 사용
+[규칙] 좌표는 반드시 위경도(WGS84) 소수점 6자리, WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려
+⚠️ [공중지원 적극 활용 규칙] 교전 초반 위치 확인(detected) 적에게 공중지원 적극 투사
+   - 공중지원 잔여 횟수>0이면 detected OPFOR 1개 이상에 반드시 air_support_plans 할당
+   - cas/strike로 선제 타격 → 적 전투력 조기 약화. artillery는 클러스터 적에, helicopter는 기갑 목표에 우선
 ⚠️ [Delta 정찰부대 규칙]
    • Delta는 반드시 mission_type="recon"으로 mission_plans에 포함 (공격/돌격 임무 절대 금지)
    • Delta의 waypoints는 반드시 recommend_recon_routes() 결과의 mission_plans[0]["waypoints"]를 그대로 사용 (이미 위경도 형식)
