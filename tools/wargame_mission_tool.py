@@ -272,6 +272,11 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
 
         _wargame_engine.apply_mission_plan(plan)
 
+        # 공중지원 계획도 함께 엔진에 등록
+        if plan.get("air_support_plans"):
+            _wargame_engine.apply_air_support_plan(plan)
+            logger.info(f"[공중지원] {len(plan['air_support_plans'])}회 엔진 등록 완료")
+
         try:
             from tools.mission_plan_validator import clear_pending_plan
             clear_pending_plan()
