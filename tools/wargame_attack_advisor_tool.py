@@ -401,6 +401,11 @@ def get_optimal_attack_positions(
             if u["side"] == "BLUFOR" and u["status"] != "destroyed"
         ]
 
+        # 공중지원 잔여 횟수
+        air_use     = state.get("air_use_count", {})
+        air_limit   = state.get("air_use_limit", 5)
+        air_remaining = max(0, air_limit - air_use.get("BLUFOR", 0))
+
         # 현재 교전 상황 컨텍스트 빌드 (전술 메모리 패널티 유사도 계산에 사용)
         opfor_units = [u for u in all_units if u["side"] == "OPFOR" and u["status"] != "destroyed"]
         blufor_cp = sum(u.get("combat_power", 100) for u in blufor_active) / max(len(blufor_active), 1)
@@ -503,6 +508,17 @@ def get_optimal_attack_positions(
                 attack_priority = "낮음 (위치 불확실 — 정찰 후 재평가 권고)"
                 position_note = " ⚠️ 추정 위치 기반 — 실제 위치 오차 있음"
 
+            # ── 공중지원 가용 보너스 ─────────────────────────────
+            # detected 타겟에 공중지원 잔여 횟수가 있으면 우선순위 상향
+            # 잔여 횟수 1개당 +5점, 최대 +20점 (approximate 타겟에는 적용 안 함)
+            air_bonus = 0.0
+            air_support_recommended = False
+            if det_status == "detected" and air_remaining > 0:
+                air_bonus = min(air_remaining * 5.0, 20.0)
+                air_support_recommended = True
+                if attack_priority == "높음":
+                    attack_priority = f"높음 (공중지원 {air_remaining}회 가용 — 선제 타격 권고)"
+
             # ── 요약 문자열 ──────────────────────────────────────
             best = optimal_positions[0]
             best_method = best["attack_methods"][0]["method"] if best["attack_methods"] else "직접 공격"
@@ -511,33 +527,36 @@ def get_optimal_attack_positions(
                 if best["elevation_advantage"] >= 1.10
                 else "고도 불리 — 측방/간접화력 권고"
             )
+            air_note = f" / ✈ 공중지원 {air_remaining}회 가용" if air_support_recommended else ""
             summary = (
                 f"{target_entry['unit_id']}({target_unit_type}) 공략: "
                 f"최적 위치 (lat={best['lat']}, lon={best['lon']}) "
                 f"고도{best['elevation_m']:.0f}m / {elev_note} / "
                 f"권고 수단: {best_method} / 종합점수 {best['score']:.0f}점"
-                f"{position_note}"
+                f"{air_note}{position_note}"
             )
 
             tgt_lat, tgt_lon = xy_to_latlon(ox, oy)
             recommendations.append({
                 "target": {
-                    "unit_id":         target_entry["unit_id"],
-                    "unit_type":       target_unit_type,
-                    "lat":             tgt_lat,
-                    "lon":             tgt_lon,
-                    "x_m":             int(ox),
-                    "y_m":             int(oy),
-                    "elevation_m":     round(target_elev, 1),
-                    "cover":           round(target_cover, 3),
-                    "combat_power":    target_entry.get("combat_power"),
-                    "detection_status": det_status,
-                    "attack_priority": attack_priority,
-                    "position_confidence": confidence,
+                    "unit_id":              target_entry["unit_id"],
+                    "unit_type":            target_unit_type,
+                    "lat":                  tgt_lat,
+                    "lon":                  tgt_lon,
+                    "x_m":                  int(ox),
+                    "y_m":                  int(oy),
+                    "elevation_m":          round(target_elev, 1),
+                    "cover":                round(target_cover, 3),
+                    "combat_power":         target_entry.get("combat_power"),
+                    "detection_status":     det_status,
+                    "attack_priority":      attack_priority,
+                    "position_confidence":  confidence,
+                    "air_support_recommended": air_support_recommended,
+                    "air_support_remaining":   air_remaining,
                 },
                 "optimal_positions": optimal_positions,
                 "summary": summary,
-                "_sort_score": (best["score"] if optimal_positions else 0) * confidence,
+                "_sort_score": (best["score"] if optimal_positions else 0) * confidence + air_bonus,
             })
 
         # 탐지 신뢰도가 반영된 점수 기준 정렬
