@@ -36,8 +36,7 @@ def _build_attack_status(current_tick: int, blufor_ids: set) -> dict:
         return result
 
     try:
-        # 5틱 × 부대당 최대 이벤트 수를 여유있게 확보 (교전 활발해도 윈도우 누락 방지)
-        events = _wargame_engine.db.get_recent_events(n=200)
+        events = _wargame_engine.db.get_recent_events(n=10)
     except Exception:
         return result
 
