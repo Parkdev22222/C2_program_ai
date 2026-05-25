@@ -203,7 +203,11 @@ if _FASTAPI_OK:
         idx = _DASHBOARD_DIR / "index.html"
         if not idx.exists():
             return JSONResponse({"error": "index.html not found"}, status_code=404)
-        return FileResponse(str(idx), media_type="text/html")
+        return FileResponse(
+            str(idx),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/api/state")
     async def api_state():
