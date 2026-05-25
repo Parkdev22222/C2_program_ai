@@ -172,7 +172,7 @@ class StrategyAdvisorTool(Tool):
                         f"- {m['blufor_unit']}({m['blufor_type']}, CP:{m['blufor_cp']}) "
                         f"→ {m['recommended_target']}({m['target_type']}, CP:{m['target_cp']}) "
                         f"[{m['advantage']}] 화력배율x{m['firepower_multiplier']} "
-                        f"거리:{m['distance_km']}km | {m['reason']}"
+                        f"거리:{m['distance_m']/1000:.1f}km | {m['reason']}"
                     )
 
             routes = result.get("movement_routes", [])
