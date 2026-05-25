@@ -30,8 +30,8 @@ _FEW_SHOT_EXAMPLES = """\
   {"company_id":"<BLUFOR_ID_B>","mission_type":"attack","waypoints":[[X4,Y4],[X5,Y5]],"objective":"<OPFOR_ID_2> 정면 압박"}
  ],
  "air_support_plans":[
-  {"call_sign":"<CALLSIGN_1>","support_type":"cas","target":[TX1,TY1],"radius":1500,"delay":60},
-  {"call_sign":"<CALLSIGN_2>","support_type":"strike","target":[TX2,TY2],"radius":400,"delay":120}
+  {"call_sign":"<CALLSIGN_1>","support_type":"cas","target":[TX1,TY1],"radius":1500,"delay":6},
+  {"call_sign":"<CALLSIGN_2>","support_type":"strike","target":[TX2,TY2],"radius":400,"delay":12}
  ]}
 
 [형식예시2] 전력열세·방어+포병지원 (※ 좌표·ID는 placeholder — 실제 툴 결과로 대체)
@@ -207,7 +207,7 @@ def build_mission_query(state: dict) -> str:
 {_FEW_SHOT_EXAMPLES}
 
 {air_limit_line}
-[공중지원유형] cas(근접항공,반경1500m,60s지연) strike(정밀타격,400m,120s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
+[공중지원유형] cas(근접항공,반경1500m,6s지연) strike(정밀타격,400m,12s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
 ⚠️ [공중지원·포격 목표 좌표 강제 규칙]
    air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서
    조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
@@ -359,7 +359,7 @@ class MissionPlanner:
                 if any(kw in unit_type for kw in ("전차", "tank", "장갑", "armor")):
                     s_type, radius, delay = "helicopter", 1000, 60
                 else:
-                    s_type, radius, delay = "cas", 1500, 60
+                    s_type, radius, delay = "cas", 1500, 6
                 air_support_plans.append({
                     "call_sign":    cs,
                     "support_type": s_type,
