@@ -644,11 +644,28 @@ def _execute_auto_attack_plan(event_type: str, *args):
         _recon_ids = _get_recon_unit_ids()
         _recon_id_str = ", ".join(_recon_ids) if _recon_ids else "정찰부대"
         base_query = build_mission_query(state)
+
+        # get_wargame_situation() 결과를 미리 계산해 쿼리에 포함 → LLM Step 1 호출 생략
+        _sit_block = ""
+        try:
+            import json as _sit_j
+            from tools.wargame_query_tool import get_wargame_situation as _get_sit_fn
+            _precomputed_sit = _get_sit_fn()
+            _sit_block = (
+                "\n[현재 전장 상황 — 미리 수집됨]\n"
+                "아래 데이터를 situation 변수로 간주하고 get_wargame_situation() 호출 생략.\n"
+                f"```json\n{_sit_j.dumps(_precomputed_sit, ensure_ascii=False)}\n```\n"
+            )
+        except Exception as _sit_err:
+            logger.debug(f"[자동임무계획] 전장상황 사전 수집 실패 (무시): {_sit_err}")
+
         full_query = (
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
             f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
-            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n\n"
+            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
+            f"4. get_wargame_situation() 호출 금지 — 전장 상황이 아래 [현재 전장 상황]에 이미 제공됨.\n"
+            f"{_sit_block}\n"
             + base_query
             + f"\n\n{trigger_desc}\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"

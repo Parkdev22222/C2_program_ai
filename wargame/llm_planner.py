@@ -170,8 +170,8 @@ def build_mission_query(state: dict) -> str:
 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
 
 [필수 툴 호출 순서]
-1. get_wargame_situation()
-   → BLUFOR·OPFOR 실제 위치·전투력·행동 조회 (이 결과를 situation 변수에 저장)
+1. (자동 재계획 시 생략 가능) get_wargame_situation()
+   → 이미 [현재 전장 상황]으로 제공된 경우 호출 불필요. situation 변수로 그대로 사용.
 2. assess_recon_need()
    → OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
 3. recommend_recon_routes()
