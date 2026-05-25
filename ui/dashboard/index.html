@@ -824,6 +824,7 @@ const EVENT_LABELS = {
 };
 
 let _autoplanActive = false;
+let _manualPlanActive = false;  // 수동 임무계획 버튼 실행 중 여부
 
 async function pollAutoPlan() {
   try {
@@ -845,7 +846,10 @@ async function pollAutoPlan() {
         _autoplanActive = true;
       }
     } else {
-      banner.classList.remove('show');
+      // 수동 계획 중이면 배너 유지 (수동 텍스트 덮어쓰지 않음)
+      if (!_manualPlanActive) {
+        banner.classList.remove('show');
+      }
       if (_autoplanActive) {
         addChatMessage('sys', '✅ LLM 임무계획 수정 완료');
         _autoplanActive = false;
@@ -902,30 +906,41 @@ async function applyTimescale() {
 
 // ── 임무계획 (잡 시스템) ─────────────────────────────────────────
 function showLoading(msg, sub) {
-  document.getElementById('loading-msg').textContent = msg || '처리 중...';
-  document.getElementById('loading-sub').textContent = sub || 'LLM이 임무계획 수립 중입니다. 수분 소요될 수 있습니다.';
-  document.getElementById('loading-overlay').classList.add('show');
+  _manualPlanActive = true;
+  const banner = document.getElementById('autoplan-banner');
+  document.getElementById('autoplan-text').textContent = msg || '처리 중...';
+  document.getElementById('autoplan-sub').textContent = sub || 'LLM 판단 중 · 완료 시 자동 해제';
+  banner.classList.add('show');
   ['btn-recon','btn-attack','btn-eval','btn-start','btn-reset'].forEach(id => {
     const el = document.getElementById(id); if(el) el.disabled = true;
   });
 }
 function hideLoading() {
-  document.getElementById('loading-overlay').classList.remove('show');
+  _manualPlanActive = false;
+  if (!_autoplanActive) {
+    document.getElementById('autoplan-banner').classList.remove('show');
+  }
   ['btn-recon','btn-attack','btn-eval','btn-start','btn-reset'].forEach(id => {
     const el = document.getElementById(id); if(el) el.disabled = false;
   });
 }
 
+const MISSION_LABELS = {
+  recon:    { icon: '🔍', text: '정찰' },
+  attack:   { icon: '⚔️', text: '공격' },
+  evaluate: { icon: '📊', text: '전술 평가' },
+};
+
 async function startMission(type) {
-  const labels = {recon:'정찰', attack:'공격', evaluate:'전술 평가'};
-  showLoading(`${labels[type]||type} 임무계획 수립 중...`);
-  addChatMessage('sys', `🔄 ${labels[type]||type} 임무계획 요청 전송...`);
+  const m = MISSION_LABELS[type] || { icon: '🔄', text: type };
+  showLoading(`${m.icon} ${m.text} 임무계획 수립 중...`);
+  addChatMessage('sys', `🔄 ${m.text} 임무계획 요청 전송...`);
 
   try {
     const r = await fetch(`/api/mission/${type}`, {method: 'POST'});
     const d = await r.json();
     if (!d.job_id) throw new Error('job_id 없음');
-    pollJob(d.job_id, labels[type] || type);
+    pollJob(d.job_id, m.text);
   } catch(e) {
     hideLoading();
     addChatMessage('err', `❌ 요청 실패: ${e.message}`);
