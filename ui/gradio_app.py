@@ -107,6 +107,9 @@ _auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
 # 자동 재계획 진행 상태 (UI 폴링용)
 _auto_plan_status: dict = {"active": False, "message": "", "started_at": 0.0}
 
+# 마지막 재계획이 완료된 시점의 엔진 틱 (30틱 쿨다운용)
+_last_replan_tick: int = -30
+
 
 # ── UI 상태 영속성 ────────────────────────────────────────────
 import json as _json_mod
@@ -780,19 +783,49 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
 
 def _detection_worker():
-    """백그라운드 데몬 스레드 — 탐지 큐를 소비하여 자동 임무계획 수립."""
+    """백그라운드 데몬 스레드 — 탐지 큐를 소비하여 자동 임무계획 수립.
+
+    30틱 쿨다운: 마지막 재계획 완료 후 30틱 이내에 발생한 이벤트는 모두 무시한다.
+    동시 발생 이벤트 배치: 큐에 쌓인 추가 이벤트를 한번에 드레인하여 중복 재계획 방지.
+    """
+    global _last_replan_tick
     while True:
         try:
             event = _detection_queue.get(timeout=2.0)
         except _queue.Empty:
             continue
-        # 동시 계획 방지: 이미 계획 중이면 이벤트 무시 (큐에 쌓인 중복 탐지 무시)
+
+        # 큐에 쌓인 추가 이벤트를 모두 드레인 (30틱 내 복수 이벤트 → 1회 처리)
+        extra_count = 0
+        try:
+            while True:
+                _detection_queue.get_nowait()
+                extra_count += 1
+        except _queue.Empty:
+            pass
+        if extra_count:
+            logger.info(f"[자동임무계획] 동시 발생 이벤트 {extra_count}개 병합 → 1회 재계획 처리")
+
+        # 30틱 쿨다운 확인
+        eng = _wg_engine
+        if eng is not None:
+            ticks_since_last = eng.tick - _last_replan_tick
+            if ticks_since_last < 30:
+                logger.info(
+                    f"[자동임무계획] 30틱 쿨다운 — 마지막 재계획 후 {ticks_since_last}틱 경과, "
+                    f"{event[0]} 이벤트 건너뜀"
+                )
+                continue
+
+        # 동시 계획 방지: 이미 계획 중이면 이벤트 무시
         if not _auto_plan_lock.acquire(blocking=False):
             logger.info(f"[자동임무계획] 계획 수립 중 — {event[0]} 이벤트 건너뜀")
             continue
         try:
             _execute_auto_attack_plan(*event)
         finally:
+            if eng is not None:
+                _last_replan_tick = eng.tick
             _auto_plan_lock.release()
 
 
