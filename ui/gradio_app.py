@@ -675,6 +675,25 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 except Exception:
                     pass
 
+                # 이전 실행(정찰 임무 등)의 Python 네임스페이스 잔류 변수 제거
+                # smolagents CodeAgent.run(reset=True)는 대화 기록만 초기화하고
+                # python_executor.state(로컬 변수 공간)는 초기화하지 않는다.
+                # recon_routes 등 이전 변수가 남아있으면 final_answer()를 즉시 호출해버림.
+                try:
+                    _inner_agent = agent.agent
+                    for _exec_attr in ('python_executor', 'python_interpreter', '_executor'):
+                        _exec = getattr(_inner_agent, _exec_attr, None)
+                        if _exec is not None:
+                            for _state_attr in ('state', '_state', 'local_vars', '_local_vars'):
+                                _ns = getattr(_exec, _state_attr, None)
+                                if isinstance(_ns, dict):
+                                    _ns.clear()
+                                    logger.info(f"[자동임무계획] Python executor namespace cleared ({_exec_attr}.{_state_attr})")
+                                    break
+                            break
+                except Exception as _cls_err:
+                    logger.debug(f"[자동임무계획] namespace clear 실패 (무시): {_cls_err}")
+
                 _raw_holder: list = [None]
                 _err_holder: list = [None]
                 _done_evt = _thr.Event()
@@ -1431,6 +1450,20 @@ def wargame_request_attack_plan(history: List = None):
         if plan is None:
             if agent is not None:
                 try:
+                    # 이전 실행(정찰 등)의 Python namespace 잔류 변수 제거
+                    try:
+                        _inner_agent = agent.agent
+                        for _exec_attr in ('python_executor', 'python_interpreter', '_executor'):
+                            _exec = getattr(_inner_agent, _exec_attr, None)
+                            if _exec is not None:
+                                for _state_attr in ('state', '_state', 'local_vars', '_local_vars'):
+                                    _ns = getattr(_exec, _state_attr, None)
+                                    if isinstance(_ns, dict):
+                                        _ns.clear()
+                                        break
+                                break
+                    except Exception:
+                        pass
                     raw = agent.agent.run(full_query, reset=True)
                     plan = _wg_planner._parse_json(str(raw))
                     if plan and "mission_plans" in plan:
