@@ -253,7 +253,64 @@ class BattlefieldAgent:
         if self._custom_instructions:
             self._append_custom_prompt(agent)
 
+        self._patch_single_tool_guard(agent)
         return agent
+
+    def _patch_single_tool_guard(self, code_agent):
+        """
+        한 코드 블록(스텝)당 도구 호출을 1회로 제한한다.
+
+        두 가지 패치를 적용한다:
+        1) Python executor.__call__ 래핑 → 코드 블록 실행 전 카운터 리셋
+        2) 각 Tool.forward() 래핑 → 2회째 호출 시 RuntimeError 발생
+        """
+        from tools.single_tool_guard import guard as _guard, reset as _guard_reset
+
+        # ── 1) executor 패치: 코드 블록 실행 전 카운터 리셋 ───────────────
+        _patched_exec = False
+        for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
+            _exec = getattr(code_agent, _exec_attr, None)
+            if _exec is None:
+                continue
+            try:
+                _orig_call = _exec.__call__
+
+                def _guarded_exec(code, *a, _orig=_orig_call, **kw):
+                    _guard_reset()
+                    return _orig(code, *a, **kw)
+
+                _exec.__call__ = _guarded_exec
+                logger.info(f"[SingleToolGuard] {_exec_attr}.__call__ 패치 완료")
+                _patched_exec = True
+            except Exception as e:
+                logger.debug(f"[SingleToolGuard] executor 패치 실패 ({_exec_attr}): {e}")
+            break
+
+        if not _patched_exec:
+            logger.warning("[SingleToolGuard] executor 패치 실패 — 카운터 리셋이 동작하지 않을 수 있음")
+
+        # ── 2) Tool.forward() 래핑: 2회째 호출 시 거부 ───────────────────
+        patched_count = 0
+        for tool_obj in self._tools:
+            if not hasattr(tool_obj, "forward"):
+                continue
+            try:
+                _orig_forward = tool_obj.forward
+                _tool_name = getattr(tool_obj, "name", repr(tool_obj))
+
+                def _make_guarded_forward(fn, name):
+                    def _guarded(*args, **kwargs):
+                        _guard(name)
+                        return fn(*args, **kwargs)
+                    _guarded.__name__ = fn.__name__ if hasattr(fn, "__name__") else name
+                    return _guarded
+
+                tool_obj.forward = _make_guarded_forward(_orig_forward, _tool_name)
+                patched_count += 1
+            except Exception as e:
+                logger.debug(f"[SingleToolGuard] tool.forward 패치 실패 ({getattr(tool_obj, 'name', '?')}): {e}")
+
+        logger.info(f"[SingleToolGuard] {patched_count}/{len(self._tools)} 도구 forward() 패치 완료")
 
     def _append_custom_prompt(self, agent):
         try:
