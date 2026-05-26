@@ -651,6 +651,13 @@ def _execute_auto_attack_plan(event_type: str, *args):
             import json as _sit_j
             from tools.wargame_query_tool import get_wargame_situation as _get_sit_fn
             _precomputed_sit = _get_sit_fn()
+            # lat/lon 필드 제거 — 에이전트는 x_m/y_m만 사용하므로 중복 토큰 절약
+            for _u in _precomputed_sit.get("blufor_units", []):
+                _u.pop("lat", None)
+                _u.pop("lon", None)
+            for _e in _precomputed_sit.get("opfor_intel", []):
+                _e.pop("known_lat", None)
+                _e.pop("known_lon", None)
             _sit_block = (
                 "\n[현재 전장 상황 — 미리 수집됨]\n"
                 "아래 데이터를 situation 변수로 간주하고 get_wargame_situation() 호출 생략.\n"
@@ -696,12 +703,23 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 except Exception:
                     pass
 
-                # 이전 실행(정찰 임무 등)의 Python 네임스페이스 잔류 변수 제거
-                # smolagents CodeAgent.run(reset=True)는 대화 기록만 초기화하고
-                # python_executor.state(로컬 변수 공간)는 초기화하지 않는다.
-                # recon_routes 등 이전 변수가 남아있으면 final_answer()를 즉시 호출해버림.
+                # smolagents CodeAgent 메모리(step_logs)와 Python 네임스페이스를 명시적으로 초기화.
+                # reset=True는 대화 기록만 초기화하고, step_logs가 남으면 context가 누적되어
+                # 재계획을 반복할수록 LLM 입력 토큰이 증가 → 점진적 속도 저하의 주원인.
                 try:
                     _inner_agent = agent.agent
+                    # 1) smolagents memory.reset() — step_logs 제거
+                    if hasattr(_inner_agent, "memory") and hasattr(_inner_agent.memory, "reset"):
+                        _inner_agent.memory.reset()
+                        logger.info("[자동임무계획] CodeAgent memory.reset() 완료")
+                    # 2) 구버전 smolagents의 logs / step_logs 리스트 직접 클리어
+                    for _log_attr in ("logs", "step_logs", "_logs"):
+                        _log_obj = getattr(_inner_agent, _log_attr, None)
+                        if isinstance(_log_obj, list):
+                            _log_obj.clear()
+                            logger.info(f"[자동임무계획] {_log_attr} cleared")
+                            break
+                    # 3) Python executor 네임스페이스 클리어
                     for _exec_attr in ('python_executor', 'python_interpreter', '_executor'):
                         _exec = getattr(_inner_agent, _exec_attr, None)
                         if _exec is not None:
@@ -713,7 +731,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                                     break
                             break
                 except Exception as _cls_err:
-                    logger.debug(f"[자동임무계획] namespace clear 실패 (무시): {_cls_err}")
+                    logger.debug(f"[자동임무계획] namespace/memory clear 실패 (무시): {_cls_err}")
 
                 _raw_holder: list = [None]
                 _err_holder: list = [None]
@@ -753,6 +771,13 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 if _err_holder[0]:
                     raise _err_holder[0]
                 raw = _raw_holder[0]
+
+                # 에이전트 실행 완료 후 대형 객체(step_logs, 생성 텍스트) GC 해제
+                try:
+                    import gc as _gc
+                    _gc.collect()
+                except Exception:
+                    pass
 
                 # 툴 호출로 이미 적용됐는지 타임스탬프로 판단
                 try:
