@@ -50,6 +50,7 @@ class StrategyVLLMModel:
         )
 
         # trust_remote_code를 vLLM 엔진에 직접 전달
+        # enforce_eager=True: vLLM v1 엔진 초기화 실패 방지
         self._llm = LLM(
             model=model_id,
             trust_remote_code=True,
@@ -57,6 +58,7 @@ class StrategyVLLMModel:
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
             max_model_len=max_model_len,
+            enforce_eager=True,
             **extra_llm_kwargs,
         )
 

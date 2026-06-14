@@ -81,6 +81,7 @@ class EXAONE4DirectModel:
         )
 
         # quantization="awq" 를 명시적으로 vLLM 엔진에 전달 (핵심 수정)
+        # enforce_eager=True: vLLM v1 엔진 초기화 실패 시 CUDA graph 캡처 건너뜀
         self._llm = LLM(
             model=model_id,
             trust_remote_code=True,
@@ -89,6 +90,7 @@ class EXAONE4DirectModel:
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
             max_model_len=max_model_len,
+            enforce_eager=True,
             **extra_llm_kwargs,
         )
 
