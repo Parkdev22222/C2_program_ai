@@ -1,0 +1,35 @@
+# Colab 전용 최소 설치 목록
+# torch, torchvision, numpy, scipy, Pillow, pyyaml 은 Colab 기본 설치 → 생략
+
+# transformers 4.48+ removed ProcessorMixin (vLLM 0.6.x 호환 버전으로 고정)
+transformers>=4.47.0,<4.48.0
+
+# LLM Inference
+vllm>=0.4.0,<0.7.0
+accelerate
+
+# Agent Framework
+smolagents>=1.0.0
+
+# Web UI
+gradio>=4.0.0
+plotly>=5.0.0
+
+# Embeddings & Search
+faiss-cpu>=1.7.4
+open_clip_torch
+
+# Computer Vision (headless — Colab은 디스플레이 없음)
+opencv-python-headless>=4.8.0
+supervision>=0.20.0
+
+# Graph RAG / Ontology
+rdflib>=6.0.0
+num2words
+
+# PDF Processing
+PyPDF2>=3.0.0
+
+# Utilities
+huggingface-hub>=0.20.0
+anthropic>=0.25.0
