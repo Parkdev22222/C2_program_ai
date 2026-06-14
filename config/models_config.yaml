@@ -49,10 +49,15 @@ agent_model:
   model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
   quantization: "awq"              # vLLM에 명시 전달 필수 (누락 시 FP16 로딩)
   model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
-  tensor_parallel_size: 1          # A100 1장
-  gpu_memory_utilization: 0.30     # 80GB × 0.30 = 24GB 예약 (AWQ 실사용 ~18GB + KV 캐시 6GB)
+  tensor_parallel_size: 1
+  # ── GPU 환경별 설정 ──────────────────────────────────────────
+  # A100 80GB : gpu_memory_utilization: 0.30 / max_model_len: 32768
+  # A100 40GB : gpu_memory_utilization: 0.45 / max_model_len: 12288
+  # Colab L4 22GB: gpu_memory_utilization: 0.55 / max_model_len: 4096  (AWQ 필수)
+  # ────────────────────────────────────────────────────────────
+  gpu_memory_utilization: 0.45     # 조정 필요 시 위 표 참고
   dtype: "float16"
-  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
+  max_model_len: 12288             # KV 에러 시 줄이기 (최소 4096)
   generation:
     temperature: 0.1
     max_tokens: 4096
@@ -63,10 +68,10 @@ agent_model:
 # EXAONE4 AWQ 수정 후: 80GB - 24GB = 56GB 여유 → 7.8B 충분히 로딩 가능
 strategy_model:
   model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
-  tensor_parallel_size: 1          # A100 1장
-  gpu_memory_utilization: 0.35     # 80GB × 0.35 = 28GB 예약 (실사용 ~16GB + KV 캐시 12GB)
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.40
   dtype: "bfloat16"
-  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
+  max_model_len: 12288             # KV 에러 시 줄이기 (최소 4096)
   generation:
     temperature: 0.2
     max_tokens: 8192
