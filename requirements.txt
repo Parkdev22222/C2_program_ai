@@ -1,6 +1,7 @@
 # ─── Core Framework ───────────────────────────────────────────
 torch>=2.0.0
 torchvision
+# transformers 4.48+ removed ProcessorMixin which vLLM 0.6.x requires
 transformers>=4.47.0,<4.48.0
 accelerate
 
@@ -8,25 +9,27 @@ accelerate
 smolagents>=1.0.0
 
 # ─── LLM Inference (EXAONE4 & EXAONE Deep via vLLM) ──────────
+# vLLM 0.7+ requires transformers 4.48+ → keep below 0.7 until migration
 vllm>=0.4.0,<0.7.0
 
 # ─── Computer Vision ──────────────────────────────────────────
-opencv-python>=4.8.0
+# supervision pulls opencv-python; headless declared to prefer server build
+opencv-python-headless>=4.8.0
 Pillow>=10.0.0
 scipy
 supervision>=0.20.0
 
 # ─── Embeddings & Search ─────────────────────────────────────
 faiss-cpu>=1.7.4
-numpy>=1.24.0
-open_clip_torch              # MobileCLIP-S2 로딩에 필요
+numpy>=1.24.0,<2.0.0
+open_clip_torch
 
 # ─── PDF Processing (for RAG) ────────────────────────────────
 PyPDF2>=3.0.0
 
 # ─── Graph RAG / Ontology ─────────────────────────────────────
 rdflib>=6.0.0
-num2words                    # SmolVLM2 processor 필수 의존성
+num2words
 
 # ─── Web UI ───────────────────────────────────────────────────
 gradio>=4.0.0
@@ -35,16 +38,4 @@ plotly>=5.0.0
 # ─── Utilities ────────────────────────────────────────────────
 pyyaml>=6.0
 huggingface-hub>=0.20.0
-anthropic>=0.25.0           # 워게임 LLM 플래너 (Claude API)
-
-# ─── Optional: Map Visualization ──────────────────────────────
-# folium>=0.14.0
-
-# ─── SAM2/SAM3 비디오 추적 (sam3_track_video.py) ───────────────
-# Option A (권장): Meta 공식 sam2 패키지
-#   pip install git+https://github.com/facebookresearch/segment-anything-2.git
-# Option B: sam2 패키지 없이 HF 자동 다운로드
-#   transformers>=4.47.0 으로 Sam2VideoPredictor 포함 (위 패키지 불필요)
-
-# ─── 텍스트 기반 탐지 (Grounding DINO) ─────────────────────────
-# transformers>=4.47.0 으로 AutoModelForZeroShotObjectDetection 포함
+anthropic>=0.25.0
