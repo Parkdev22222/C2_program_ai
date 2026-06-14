@@ -1,16 +1,16 @@
 # ─── Core Framework ───────────────────────────────────────────
 torch>=2.0.0
 torchvision
-# transformers 4.48+ removed ProcessorMixin which vLLM 0.6.x requires
-transformers>=4.47.0,<4.48.0
+# EXAONE4 architecture requires transformers 4.48+
+# vLLM 0.7+ fixed the ProcessorMixin import (no longer requires <4.48)
+transformers>=4.48.0
 accelerate
 
 # ─── smolagents (Agent Framework) ────────────────────────────
 smolagents>=1.0.0
 
 # ─── LLM Inference (EXAONE4 & EXAONE Deep via vLLM) ──────────
-# vLLM 0.7+ requires transformers 4.48+ → keep below 0.7 until migration
-vllm>=0.4.0,<0.7.0
+vllm>=0.7.0
 
 # ─── Computer Vision ──────────────────────────────────────────
 # supervision pulls opencv-python; headless declared to prefer server build

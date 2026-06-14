@@ -1,11 +1,12 @@
 # Colab 전용 최소 설치 목록
 # torch, torchvision, numpy, scipy, Pillow, pyyaml 은 Colab 기본 설치 → 생략
 
-# transformers 4.48+ removed ProcessorMixin (vLLM 0.6.x 호환 버전으로 고정)
-transformers>=4.47.0,<4.48.0
+# EXAONE4 아키텍처 지원은 transformers 4.48+ 필요
+# vLLM 0.7+에서 ProcessorMixin 문제 해결됨
+transformers>=4.48.0
 
 # LLM Inference
-vllm>=0.4.0,<0.7.0
+vllm>=0.7.0
 accelerate
 
 # Agent Framework
