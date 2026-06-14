@@ -1,28 +1,17 @@
 # ══════════════════════════════════════════════════════════════
-# Colab 전용 설치 목록
+# Colab 전용 설치 목록 (vLLM 미사용)
 #
-# [중요] 이 파일을 직접 pip install하지 말고 아래 순서를 따르세요:
+# vLLM AWQ 커스텀 커널이 Colab의 torch ABI와 충돌하는 문제로
+# autoawq + transformers 기반으로 교체.
 #
-# Step 1: 충돌 패키지 제거
-#   !pip uninstall torch torchvision torchaudio vllm -y -q
-#
-# Step 2: torch + vLLM 버전 쌍 고정 설치
-#   !pip install "torch==2.5.1" "torchvision==0.20.1" \
-#       --index-url https://download.pytorch.org/whl/cu121 -q
-#   !pip install "vllm==0.7.3" -q
-#
-# Step 3: 나머지 패키지
-#   !pip install -r requirements-colab.txt -q
-#
-# 이유: vLLM AWQ 커스텀 CUDA 커널은 특정 torch 버전으로 컴파일됨.
-#       torch 버전이 다르면 TORCH_ABI_VERSION 오류 발생.
+# 설치 순서:
+#   Step 1: !pip install -r requirements-colab.txt -q
+#   Step 2: 런타임 재시작 후 실행
 # ══════════════════════════════════════════════════════════════
 
-# EXAONE4 아키텍처 지원 (4.48+), vLLM 0.7+ ProcessorMixin 문제 해결됨
+# EXAONE4 AWQ 로딩 (vLLM 대신 autoawq 사용)
+autoawq>=0.2.0
 transformers>=4.48.0
-
-# LLM Inference — torch/vllm은 위 Step 2에서 별도 설치 (버전 쌍 고정 필수)
-# vllm==0.7.3  ← Step 2에서 설치
 accelerate
 
 # Agent Framework
