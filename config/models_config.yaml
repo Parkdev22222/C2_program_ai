@@ -55,9 +55,9 @@ agent_model:
   # A100 40GB : gpu_memory_utilization: 0.45 / max_model_len: 12288
   # Colab L4 22GB: gpu_memory_utilization: 0.55 / max_model_len: 4096  (AWQ 필수)
   # ────────────────────────────────────────────────────────────
-  gpu_memory_utilization: 0.45     # 조정 필요 시 위 표 참고
+  gpu_memory_utilization: 0.55     # 조정 필요 시 위 표 참고
   dtype: "float16"
-  max_model_len: 12288             # KV 에러 시 줄이기 (최소 4096)
+  max_model_len: 32768             # KV 에러 시 gpu_memory_utilization을 높이거나 줄이기 (최소 4096)
   generation:
     temperature: 0.1
     max_tokens: 4096
@@ -69,9 +69,9 @@ agent_model:
 strategy_model:
   model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
   tensor_parallel_size: 1
-  gpu_memory_utilization: 0.40
+  gpu_memory_utilization: 0.45
   dtype: "bfloat16"
-  max_model_len: 12288             # KV 에러 시 줄이기 (최소 4096)
+  max_model_len: 32768             # KV 에러 시 gpu_memory_utilization을 높이거나 줄이기 (최소 4096)
   generation:
     temperature: 0.2
     max_tokens: 8192
