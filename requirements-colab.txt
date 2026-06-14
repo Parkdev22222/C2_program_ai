@@ -1,20 +1,28 @@
 # ══════════════════════════════════════════════════════════════
-# Colab 전용 최소 설치 목록
-# torch, torchvision, numpy, scipy, Pillow, pyyaml → Colab 기본 설치 생략
+# Colab 전용 설치 목록
 #
-# [중요] 설치 전 아래 셀을 먼저 실행하세요:
-#   !pip uninstall torchaudio -y
+# [중요] 이 파일을 직접 pip install하지 말고 아래 순서를 따르세요:
 #
-# 이유: vllm>=0.7 이 torch를 CUDA 13.x로 업그레이드할 때
-#       Colab 기본 torchaudio(CUDA 12.8)와 버전 충돌이 발생합니다.
-#       이 프로젝트는 torchaudio를 사용하지 않으므로 제거가 안전합니다.
+# Step 1: 충돌 패키지 제거
+#   !pip uninstall torch torchvision torchaudio vllm -y -q
+#
+# Step 2: torch + vLLM 버전 쌍 고정 설치
+#   !pip install "torch==2.5.1" "torchvision==0.20.1" \
+#       --index-url https://download.pytorch.org/whl/cu121 -q
+#   !pip install "vllm==0.7.3" -q
+#
+# Step 3: 나머지 패키지
+#   !pip install -r requirements-colab.txt -q
+#
+# 이유: vLLM AWQ 커스텀 CUDA 커널은 특정 torch 버전으로 컴파일됨.
+#       torch 버전이 다르면 TORCH_ABI_VERSION 오류 발생.
 # ══════════════════════════════════════════════════════════════
 
 # EXAONE4 아키텍처 지원 (4.48+), vLLM 0.7+ ProcessorMixin 문제 해결됨
 transformers>=4.48.0
 
-# LLM Inference
-vllm>=0.7.0
+# LLM Inference — torch/vllm은 위 Step 2에서 별도 설치 (버전 쌍 고정 필수)
+# vllm==0.7.3  ← Step 2에서 설치
 accelerate
 
 # Agent Framework
