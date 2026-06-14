@@ -271,9 +271,13 @@ class BattlefieldAgent:
         1) Python executor.__call__ 래핑 → 코드 블록 실행 전 카운터 리셋
         2) 각 Tool.forward() 래핑 → 2회째 호출 시 RuntimeError 발생
         """
-        from tools.single_tool_guard import guard as _guard, reset as _guard_reset
+        from tools.single_tool_guard import (
+            guard as _guard,
+            activate as _guard_activate,
+            deactivate as _guard_deactivate,
+        )
 
-        # ── 1) executor 패치: 코드 블록 실행 전 카운터 리셋 ───────────────
+        # ── 1) executor 패치: 코드 블록 실행 구간만 가드 활성화 ──────────
         _patched_exec = False
         for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
             _exec = getattr(code_agent, _exec_attr, None)
@@ -283,8 +287,11 @@ class BattlefieldAgent:
                 _orig_call = _exec.__call__
 
                 def _guarded_exec(code, *a, _orig=_orig_call, **kw):
-                    _guard_reset()
-                    return _orig(code, *a, **kw)
+                    _guard_activate()
+                    try:
+                        return _orig(code, *a, **kw)
+                    finally:
+                        _guard_deactivate()
 
                 _exec.__call__ = _guarded_exec
                 logger.info(f"[SingleToolGuard] {_exec_attr}.__call__ 패치 완료")
