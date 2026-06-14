@@ -1,8 +1,16 @@
+# ══════════════════════════════════════════════════════════════
 # Colab 전용 최소 설치 목록
-# torch, torchvision, numpy, scipy, Pillow, pyyaml 은 Colab 기본 설치 → 생략
+# torch, torchvision, numpy, scipy, Pillow, pyyaml → Colab 기본 설치 생략
+#
+# [중요] 설치 전 아래 셀을 먼저 실행하세요:
+#   !pip uninstall torchaudio -y
+#
+# 이유: vllm>=0.7 이 torch를 CUDA 13.x로 업그레이드할 때
+#       Colab 기본 torchaudio(CUDA 12.8)와 버전 충돌이 발생합니다.
+#       이 프로젝트는 torchaudio를 사용하지 않으므로 제거가 안전합니다.
+# ══════════════════════════════════════════════════════════════
 
-# EXAONE4 아키텍처 지원은 transformers 4.48+ 필요
-# vLLM 0.7+에서 ProcessorMixin 문제 해결됨
+# EXAONE4 아키텍처 지원 (4.48+), vLLM 0.7+ ProcessorMixin 문제 해결됨
 transformers>=4.48.0
 
 # LLM Inference

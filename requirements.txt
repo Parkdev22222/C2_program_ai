@@ -2,7 +2,7 @@
 torch>=2.0.0
 torchvision
 # EXAONE4 architecture requires transformers 4.48+
-# vLLM 0.7+ fixed the ProcessorMixin import (no longer requires <4.48)
+# vLLM 0.7+ fixed ProcessorMixin import (no longer requires <4.48)
 transformers>=4.48.0
 accelerate
 
@@ -39,3 +39,8 @@ plotly>=5.0.0
 pyyaml>=6.0
 huggingface-hub>=0.20.0
 anthropic>=0.25.0
+
+# NOTE: torchaudio is NOT listed here.
+# In Colab, vllm may upgrade torch to a newer CUDA version while
+# torchaudio stays on the old CUDA version → RuntimeError on mismatch.
+# Fix: run `pip uninstall torchaudio -y` before installing this file.
