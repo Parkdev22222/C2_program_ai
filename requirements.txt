@@ -23,6 +23,9 @@ open_clip_torch              # MobileCLIP-S2 로딩에 필요
 
 # ─── PDF Processing (for RAG) ────────────────────────────────
 PyPDF2>=3.0.0
+
+# ─── Graph RAG / Ontology ─────────────────────────────────────
+rdflib>=6.0.0
 num2words                    # SmolVLM2 processor 필수 의존성
 
 # ─── Web UI ───────────────────────────────────────────────────

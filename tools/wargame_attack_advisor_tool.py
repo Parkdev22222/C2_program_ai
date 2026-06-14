@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 _wargame_engine = None
 
 
+def _get_attack_ontology_ctx() -> str:
+    """공격 임무 관련 온톨로지 컨텍스트 조회 (실패 시 빈 문자열)."""
+    try:
+        from tools.graph_rag_tool import get_attack_ontology_context
+        return get_attack_ontology_context()
+    except Exception as e:
+        logger.debug(f"[GraphRAG] 공격 온톨로지 조회 실패 (무시): {e}")
+        return ""
+
+
 def register_wargame_engine(engine):
     global _wargame_engine
     _wargame_engine = engine
@@ -570,6 +580,7 @@ def get_optimal_attack_positions(
             "game_time": state.get("game_time_str", "00:00:00"),
             "total_targets": len(recommendations),
             "attack_recommendations": recommendations,
+            "ontology_context": _get_attack_ontology_ctx(),
         }
 
     except Exception as e:

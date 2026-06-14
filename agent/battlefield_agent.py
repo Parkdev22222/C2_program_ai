@@ -221,6 +221,13 @@ class BattlefieldAgent:
             logger.warning(f"Failed to load strategy advisor tool: {e}")
 
         try:
+            from tools.graph_rag_tool import graph_rag_military_query
+            tools.append(graph_rag_military_query)
+            logger.info("Graph RAG military ontology tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load graph RAG tool: {e}")
+
+        try:
             from tools.strategy_advisor_tool import create_recon_advisor_tool
             recon_advisor = create_recon_advisor_tool(self._strategy_model)
             tools.append(recon_advisor)

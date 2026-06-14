@@ -1,0 +1,1157 @@
+@prefix : <http://coha.org/military#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://coha.org/military> a owl:Ontology ;
+    rdfs:label "Military Tactical Ontology" .
+
+
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <http://coha.org/military#> .
+
+:permittedUnder rdfs:domain :EngagementRule ;
+    rdfs:range :ThreatLevel ;
+    rdfs:label "permitted under" .
+
+:hasEngagementRule rdfs:domain :Unit ;
+    rdfs:range :EngagementRule ;
+    rdfs:label "has engagement rule" .
+
+# --- CQ delta ---
+:ArmorUnit rdfs:label "Armor Unit" .
+:TerrainType rdfs:label "Terrain Type" .
+:operatesIn rdfs:label "operates in" ;
+    rdfs:domain :ArmorUnit ;
+    rdfs:range :TerrainType .
+
+# --- CQ delta ---
+:readinessPct rdfs:label "readiness percentage" ;
+    rdfs:domain :Unit ;
+    rdfs:range xsd:decimal .
+
+# --- CQ delta ---
+:FireSupportAsset a owl:Class ;
+    rdfs:label "Fire Support Asset" .
+
+:InfantryUnit a owl:Class ;
+    rdfs:label "Infantry Unit" .
+
+:Mission a owl:Class ;
+    rdfs:label "Mission" .
+
+:supportedBy a owl:ObjectProperty ;
+    rdfs:domain :InfantryUnit ;
+    rdfs:range :FireSupportAsset ;
+    rdfs:label "supported by" .
+
+# --- CQ delta ---
+:EngagementRule a owl:Class ;
+    rdfs:label "EngagementRule" .
+
+:WeaponsState a owl:Class ;
+    rdfs:label "WeaponsState" .
+
+:hostileAct a owl:Class ;
+    rdfs:label "hostileAct" .
+
+:appliesTo a owl:ObjectProperty ;
+    rdfs:domain :EngagementRule ;
+    rdfs:range :WeaponsState ;
+    rdfs:label "appliesTo" .
+
+:requires a owl:ObjectProperty ;
+    rdfs:domain :EngagementRule ;
+    rdfs:range :hostileAct ;
+    rdfs:label "requires" .
+
+# --- CQ delta ---
+:EscalationOfForce a owl:Class ;
+    rdfs:label "Escalation of Force" .
+
+:EngagementRule a owl:Class ;
+    rdfs:label "Engagement Rule" .
+
+:WeaponsState a owl:Class ;
+    rdfs:label "Weapons State" .
+
+:appliesTo a owl:ObjectProperty ;
+    rdfs:domain :EngagementRule ;
+    rdfs:range :WeaponsState ;
+    rdfs:label "applies to" .
+
+:requires a owl:ObjectProperty ;
+    rdfs:domain :EngagementRule ;
+    rdfs:range :EscalationOfForce ;
+    rdfs:label "requires" .
+
+# --- CQ delta ---
+:ArmorUnit a owl:Class ;
+    rdfs:label "Armor Unit" .
+
+:InfantryUnit a owl:Class ;
+    rdfs:label "Infantry Unit" .
+
+:UrbanTerrain a owl:Class ;
+    rdfs:label "Urban Terrain" .
+
+:requiresSupport a owl:ObjectProperty ;
+    rdfs:domain :ArmorUnit ;
+    rdfs:range :InfantryUnit ;
+    rdfs:label "requires support" .
+
+# --- CQ delta ---
+:FormOfManeuver a owl:Class ;
+    rdfs:label "FormOfManeuver" .
+
+:Attack a owl:Class ;
+    rdfs:label "Attack" .
+
+:DefensivePosition a owl:Class ;
+    rdfs:label "DefensivePosition" .
+
+:hasFormOfManeuver a owl:ObjectProperty ;
+    rdfs:domain :Attack ;
+    rdfs:range :FormOfManeuver ;
+    rdfs:label "hasFormOfManeuver" .
+
+:targets a owl:ObjectProperty ;
+    rdfs:domain :Attack ;
+    rdfs:range :DefensivePosition ;
+    rdfs:label "targets" .
+
+# --- CQ delta ---
+:Unit a owl:Class ;
+    rdfs:label "Unit" .
+
+:MovementToContact a owl:Class ;
+    rdfs:label "MovementToContact" .
+
+:ForestTerrain a owl:Class ;
+    rdfs:label "ForestTerrain" .
+
+:MovementToContact rdfs:subClassOf :FormOfManeuver .
+
+:ForestTerrain rdfs:subClassOf :UrbanTerrain .
+
+# --- CQ delta ---
+:Exploitation rdfs:label "Exploitation" ;
+    rdfs:subClassOf :Mission .
+
+:precondition rdfs:label "precondition" ;
+    rdfs:domain :Attack ;
+    rdfs:range :Mission .
+
+# --- CQ delta ---
+:CommandEchelon a owl:Class ;
+    rdfs:label "Command Echelon" .
+
+:BCT a owl:Class ;
+    rdfs:label "Brigade Combat Team" .
+
+:Division a owl:Class ;
+    rdfs:label "Division" .
+
+:modifiesEngagementRule a owl:ObjectProperty ;
+    rdfs:domain :CommandEchelon ;
+    rdfs:range :EngagementRule ;
+    rdfs:label "modifies engagement rule" .
+
+:BCT rdfs:subClassOf :CommandEchelon .
+:Division rdfs:subClassOf :CommandEchelon .
+
+# --- CQ delta ---
+:LogisticsClass a owl:Class ;
+    rdfs:label "LogisticsClass" .
+
+:ArmorUnit a owl:Class ;
+    rdfs:label "ArmorUnit" .
+
+:OffensiveMission a owl:Class ;
+    rdfs:label "OffensiveMission" .
+
+:sustainmentRequires a owl:ObjectProperty ;
+    rdfs:domain :ArmorUnit ;
+    rdfs:range :LogisticsClass ;
+    rdfs:label "sustainmentRequires" .
+
+# --- CQ delta ---
+:AviationUnit a owl:Class ;
+    rdfs:label "Aviation Unit" .
+
+:TerrainType a owl:Class ;
+    rdfs:label "Terrain Type" .
+
+:MountainTerrain a owl:Class ;
+    rdfs:label "Mountain Terrain" ;
+    rdfs:subClassOf :TerrainType .
+
+:degradesEffectiveness a owl:ObjectProperty ;
+    rdfs:label "degrades effectiveness" ;
+    rdfs:domain :TerrainType ;
+    rdfs:range :AviationUnit .
+
+# --- CQ delta ---
+:TerrainAnalysis a owl:Class ;
+    rdfs:label "Terrain Analysis" .
+
+:KeyTerrain a owl:Class ;
+    rdfs:label "Key Terrain" .
+
+:ObservationField a owl:Class ;
+    rdfs:label "Observation Field" .
+
+:AvenueOfApproach a owl:Class ;
+    rdfs:label "Avenue of Approach" .
+
+:identifies a owl:ObjectProperty ;
+    rdfs:domain :TerrainAnalysis ;
+    rdfs:range :KeyTerrain ;
+    rdfs:label "identifies" .
+
+:locates a owl:ObjectProperty ;
+    rdfs:domain :TerrainAnalysis ;
+    rdfs:range :ObservationField ;
+    rdfs:label "locates" .
+
+:defines a owl:ObjectProperty ;
+    rdfs:domain :TerrainAnalysis ;
+    rdfs:range :AvenueOfApproach ;
+    rdfs:label "defines" .
+
+# --- CQ delta ---
+:AreaDefense rdfs:label "Area Defense" ;
+    rdfs:subClassOf :DefensiveMission .
+
+:MobileDefense rdfs:label "Mobile Defense" ;
+    rdfs:subClassOf :DefensiveMission .
+
+:DefensiveMission rdfs:label "Defensive Mission" ;
+    rdfs:subClassOf :Mission .
+
+:terrainRetention rdfs:label "Terrain Retention" ;
+    rdfs:subClassOf :MissionObjective .
+
+# --- CQ delta ---
+:Platoon rdfs:label "Platoon" .
+:WeaponSystem rdfs:label "WeaponSystem" .
+:antiArmor rdfs:label "antiArmor" .
+
+:organicTo rdfs:label "organicTo" ;
+    rdfs:domain :WeaponSystem ;
+    rdfs:range :InfantryUnit .
+
+# --- CQ delta ---
+:EngineerUnit a owl:Class ;
+    rdfs:label "Engineer Unit" .
+
+:ObstacleBelt a owl:Class ;
+    rdfs:label "Obstacle Belt" .
+
+:BreachOperation a owl:Class ;
+    rdfs:label "Breach Operation" .
+
+:leadsBreaching a owl:ObjectProperty ;
+    rdfs:domain :EngineerUnit ;
+    rdfs:range :BreachOperation ;
+    rdfs:label "leads Breaching" .
+
+# --- CQ delta ---
+:ThreatLevel rdfs:label "ThreatLevel" .
+:ThreatLevel_RED rdfs:label "ThreatLevel_RED" .
+:ForceProtection rdfs:label "ForceProtection" .
+:armedEscort rdfs:label "armedEscort" .
+
+:ThreatLevel_RED rdfs:subClassOf :ThreatLevel .
+:ThreatLevel_RED owl:equivalentClass [
+    a owl:Restriction ;
+    owl:onProperty :triggers ;
+    owl:someValuesFrom :ForceProtection
+] .
+
+:ForceProtection owl:equivalentClass [
+    a owl:Restriction ;
+    owl:onProperty :requires ;
+    owl:someValuesFrom :armedEscort
+] .
+
+# --- CQ delta ---
+:SpecialForcesUnit a owl:Class ;
+    rdfs:label "Special Forces Unit" .
+
+:UnconventionalWarfare a owl:Class ;
+    rdfs:label "Unconventional Warfare" .
+
+:indigenousForce a owl:Class ;
+    rdfs:label "Indigenous Force" .
+
+:Mission :UnconventionalWarfare :rdfs:subClassOf .
+
+:Mission :indigenousForce :requires .
+
+# --- CQ delta ---
+:CommandPost a owl:Class ;
+    rdfs:label "Command Post" .
+
+:FireSupportCoordination a owl:Class ;
+    rdfs:label "Fire Support Coordination" .
+
+:ManeuverCoordination a owl:Class ;
+    rdfs:label "Maneuver Coordination" .
+
+:BCT :CommandPost :FireSupportCoordination, :ManeuverCoordination .
+
+# --- CQ delta ---
+:OrderType a owl:Class ;
+    rdfs:label "Order Type" .
+
+:FragmentaryOrder a owl:Class ;
+    rdfs:label "Fragmentary Order" .
+
+:FRAGO a owl:Class ;
+    rdfs:label "FRAGO" .
+
+:hastyAttack a owl:Class ;
+    rdfs:label "Hasty Attack" .
+
+:OrderType rdfs:subClassOf owl:Thing .
+:FragmentaryOrder rdfs:subClassOf :OrderType .
+:FRAGO rdfs:subClassOf :OrderType .
+:hastyAttack rdfs:subClassOf :OrderType .
+
+# --- CQ delta ---
+:ReportingChain a owl:Class ;
+    rdfs:label "ReportingChain" .
+
+:Battalion a owl:Class ;
+    rdfs:label "Battalion" .
+
+:Corps a owl:Class ;
+    rdfs:label "Corps" .
+
+:modifiesEngagementRule a owl:ObjectProperty ;
+    rdfs:label "modifiesEngagementRule" ;
+    rdfs:domain :ReportingChain ;
+    rdfs:range :EngagementRule .
+
+:BCT rdfs:subClassOf :Battalion .
+
+# --- CQ delta ---
+:IntelSummary a owl:Class ;
+    rdfs:label "Intelligence Summary" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:DecisionPoint a owl:Class ;
+    rdfs:label "Decision Point" .
+
+:Intelligence a owl:Class ;
+    rdfs:label "Intelligence" .
+
+:produces a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :IntelSummary ;
+    rdfs:label "produces" .
+
+:supports a owl:ObjectProperty ;
+    rdfs:domain :IntelSummary ;
+    rdfs:range :DecisionPoint ;
+    rdfs:label "supports" .
+
+# --- CQ delta ---
+:DecisionPoint a owl:Class ;
+    rdfs:label "Decision Point" .
+
+:Reserve a owl:Class ;
+    rdfs:label "Reserve" .
+
+:Brigade a owl:Class ;
+    rdfs:label "Brigade" .
+
+:CommandPost a owl:Class ;
+    rdfs:label "Command Post" .
+
+:commitsReserve a owl:ObjectProperty ;
+    rdfs:domain :Brigade ;
+    rdfs:range :Reserve ;
+    rdfs:label "commits reserve" .
+
+:atDecisionPoint a owl:ObjectProperty ;
+    rdfs:domain :commitsReserve ;
+    rdfs:range :DecisionPoint ;
+    rdfs:label "at decision point" .
+
+# --- CQ delta ---
+:approvalAuthority a owl:ObjectProperty ;
+    rdfs:domain :CommandEchelon ;
+    rdfs:range :WeaponsState_FREE ;
+    rdfs:label "approvalAuthority" .
+
+:BCT rdfs:subClassOf :CommandEchelon ;
+    rdfs:label "BCT" .
+
+:Division rdfs:subClassOf :CommandEchelon ;
+    rdfs:label "Division" .
+
+# --- CQ delta ---
+:OrderType a owl:Class ;
+    rdfs:label "Order Type" .
+
+:OPORD a owl:Class ;
+    rdfs:label "Operations Order" ;
+    rdfs:subClassOf :OrderType .
+
+:Battalion a owl:Class ;
+    rdfs:label "Battalion" ;
+    rdfs:subClassOf :Unit .
+
+:situation a owl:ObjectProperty ;
+    rdfs:domain :OPORD ;
+    rdfs:range :Mission ;
+    rdfs:label "situation" .
+
+:mission a owl:ObjectProperty ;
+    rdfs:domain :OPORD ;
+    rdfs:range :Mission ;
+    rdfs:label "mission" .
+
+:execution a owl:ObjectProperty ;
+    rdfs:domain :OPORD ;
+    rdfs:range :FormOfManeuver ;
+    rdfs:label "execution" .
+
+# --- CQ delta ---
+:StaffSection a owl:Class ;
+    rdfs:label "Staff Section" .
+
+:S4 a owl:Class ;
+    rdfs:label "S4" .
+
+:Sustainment a owl:Class ;
+    rdfs:label "Sustainment" .
+
+:LogisticsUnit a owl:Class ;
+    rdfs:label "Logistics Unit" .
+
+:CSSCoordination a owl:Class ;
+    rdfs:label "CSS Coordination" .
+
+:coordinatesCSS a owl:ObjectProperty ;
+    rdfs:domain :StaffSection ;
+    rdfs:range :CSSCoordination ;
+    rdfs:label "coordinates CSS" .
+
+:plansSustainment a owl:ObjectProperty ;
+    rdfs:domain :StaffSection ;
+    rdfs:range :Sustainment ;
+    rdfs:label "plans sustainment" .
+
+:supportsLogistics a owl:ObjectProperty ;
+    rdfs:domain :S4 ;
+    rdfs:range :LogisticsUnit ;
+    rdfs:label "supports logistics" .
+
+# --- CQ delta ---
+:CommandersIntent a owl:Class ;
+    rdfs:label "Commander's Intent" .
+
+:orderHierarchy a owl:ObjectProperty ;
+    rdfs:domain :CommandersIntent ;
+    rdfs:range :Corps ;
+    rdfs:label "Order Hierarchy" .
+
+:orderHierarchy a owl:ObjectProperty ;
+    rdfs:domain :CommandersIntent ;
+    rdfs:range :Division ;
+    rdfs:label "Order Hierarchy" .
+
+:orderHierarchy a owl:ObjectProperty ;
+    rdfs:domain :CommandersIntent ;
+    rdfs:range :BCT ;
+    rdfs:label "Order Hierarchy" .
+
+:orderHierarchy a owl:ObjectProperty ;
+    rdfs:domain :CommandersIntent ;
+    rdfs:range :Battalion ;
+    rdfs:label "Order Hierarchy" .
+
+# --- CQ delta ---
+:CommandRelationship a owl:Class ;
+    rdfs:label "CommandRelationship" .
+
+:OPCON a owl:Class ;
+    rdfs:label "OPCON" .
+
+:TACON a owl:Class ;
+    rdfs:label "TACON" .
+
+:ADCON a owl:Class ;
+    rdfs:label "ADCON" .
+
+:Unit a owl:Class ;
+    rdfs:label "Unit" .
+
+:authorizesDirection a owl:ObjectProperty ;
+    rdfs:domain :CommandRelationship ;
+    rdfs:range :Unit ;
+    rdfs:label "authorizesDirection" .
+
+:OPCON_authorizesDirection a owl:ObjectProperty ;
+    rdfs:domain :OPCON ;
+    rdfs:range :Unit ;
+    rdfs:label "OPCON_authorizesDirection" .
+
+:TACON_authorizesDirection a owl:ObjectProperty ;
+    rdfs:domain :TACON ;
+    rdfs:range :Unit ;
+    rdfs:label "TACON_authorizesDirection" .
+
+:ADCON_authorizesDirection a owl:ObjectProperty ;
+    rdfs:domain :ADCON ;
+    rdfs:range :Unit ;
+    rdfs:label "ADCON_authorizesDirection" .
+
+# --- CQ delta ---
+:BattleHandover a owl:Class ;
+    rdfs:label "Battle Handover" .
+
+:Retrograde a owl:Class ;
+    rdfs:label "Retrograde" .
+
+:TriggerLine a owl:Class ;
+    rdfs:label "Trigger Line" .
+
+:CommandPost a owl:Class ;
+    rdfs:label "Command Post" .
+
+:triggersHandover a owl:ObjectProperty ;
+    rdfs:domain :TriggerLine ;
+    rdfs:range :BattleHandover ;
+    rdfs:label "triggers handover" .
+
+:conductsRetrograde a owl:ObjectProperty ;
+    rdfs:domain :CommandPost ;
+    rdfs:range :Retrograde ;
+    rdfs:label "conducts retrograde" .
+
+# --- CQ delta ---
+:FSCM a owl:Class ;
+    rdfs:label "Fire Support Coordination Measure" .
+
+:FireSupportCoordination a owl:Class ;
+    rdfs:label "Fire Support Coordination" .
+
+:CoordinatedFireLine a owl:Class ;
+    rdfs:label "Coordinated Fire Line" .
+
+:NoFireArea a owl:Class ;
+    rdfs:label "No Fire Area" .
+
+:hasFSCM a owl:ObjectProperty ;
+    rdfs:domain :FireSupportCoordination ;
+    rdfs:range :FSCM ;
+    rdfs:label "has Fire Support Coordination Measure" .
+
+:establishesFSCM a owl:ObjectProperty ;
+    rdfs:domain :OffensiveMission ;
+    rdfs:range :FSCM ;
+    rdfs:label "establishes Fire Support Coordination Measure" .
+
+:protects a owl:ObjectProperty ;
+    rdfs:domain :FSCM ;
+    rdfs:range :Unit ;
+    rdfs:label "protects" .
+
+# --- CQ delta ---
+:CommunicationArchitecture a owl:Class ;
+    rdfs:label "Communication Architecture" .
+
+:CommandPost a owl:Class ;
+    rdfs:label "Command Post" .
+
+:RadioNet a owl:Class ;
+    rdfs:label "Radio Net" .
+
+:C2Network a owl:Class ;
+    rdfs:label "C2 Network" .
+
+:usesCommunicationArchitecture a owl:ObjectProperty ;
+    rdfs:domain :CommandPost ;
+    rdfs:range :CommunicationArchitecture ;
+    rdfs:label "uses Communication Architecture" .
+
+:BCT_mainCommandPost a :CommandPost ;
+    rdfs:label "BCT Main Command Post" .
+
+:BCT_mainCommandPost :usesCommunicationArchitecture :RadioNet .
+:BCT_mainCommandPost :usesCommunicationArchitecture :C2Network .
+
+# --- CQ delta ---
+:MainCommandPost a owl:Class ;
+    rdfs:label "Main Command Post" .
+
+:TacticalCommandPost a owl:Class ;
+    rdfs:label "Tactical Command Post" .
+
+:commanderLocation a owl:ObjectProperty ;
+    rdfs:label "Commander Location" ;
+    rdfs:domain :MainCommandPost ;
+    rdfs:range :TacticalCommandPost .
+
+:MainCommandPost rdfs:subClassOf :CommandPost .
+:TacticalCommandPost rdfs:subClassOf :CommandPost .
+
+:Attack a owl:Class ;
+    rdfs:label "Attack" .
+
+# --- CQ delta ---
+:PIR a owl:Class ;
+    rdfs:label "Priority Intelligence Requirement" .
+
+:CollectionAsset a owl:Class ;
+    rdfs:label "Collection Asset" .
+
+:Brigade a owl:Class ;
+    rdfs:label "Brigade" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:IntelligenceTask a owl:Class ;
+    rdfs:label "Intelligence Task" .
+
+:tasks a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :IntelligenceTask ;
+    rdfs:label "tasks" .
+
+:assigns a owl:ObjectProperty ;
+    rdfs:domain :IntelligenceTask ;
+    rdfs:range :CollectionAsset ;
+    rdfs:label "assigns" .
+
+:specifies a owl:ObjectProperty ;
+    rdfs:domain :IntelligenceTask ;
+    rdfs:range :PIR ;
+    rdfs:label "specifies" .
+
+:operatesAt a owl:ObjectProperty ;
+    rdfs:domain :CollectionAsset ;
+    rdfs:range :Brigade ;
+    rdfs:label "operatesAt" .
+
+# --- CQ delta ---
+:OrderType a owl:Class ;
+    rdfs:label "Order Type" .
+
+:FRAGO a owl:Class ;
+    rdfs:label "FRAGO" .
+
+:Raid a owl:Class ;
+    rdfs:label "Raid" .
+
+:timeSensitiveIntelligence a owl:Class ;
+    rdfs:label "Time Sensitive Intelligence" .
+
+:authorizesAction a owl:ObjectProperty ;
+    rdfs:domain :OrderType ;
+    rdfs:range :Raid ;
+    rdfs:label "Authorizes Action" .
+
+:requiresIntelligence a owl:ObjectProperty ;
+    rdfs:domain :Raid ;
+    rdfs:range :timeSensitiveIntelligence ;
+    rdfs:label "Requires Intelligence" .
+
+# --- CQ delta ---
+:SustainmentReport a owl:Class ;
+    rdfs:label "SustainmentReport" .
+
+:LogisticsClass a owl:Class ;
+    rdfs:label "LogisticsClass" .
+
+:ClassIII a owl:Class ;
+    rdfs:label "ClassIII" ;
+    rdfs:subClassOf :LogisticsClass .
+
+:ClassV a owl:Class ;
+    rdfs:label "ClassV" ;
+    rdfs:subClassOf :LogisticsClass .
+
+:resupplyCycle a owl:ObjectProperty ;
+    rdfs:label "resupplyCycle" ;
+    rdfs:domain :SustainmentReport ;
+    rdfs:range :LogisticsClass .
+
+# --- CQ delta ---
+:SensorPlatform a owl:Class ;
+    rdfs:label "Sensor Platform" .
+
+:TargetEntity a owl:Class ;
+    rdfs:label "Target Entity" .
+
+:contestedAirspace a owl:Class ;
+    rdfs:label "Contested Airspace" .
+
+:ISRTask a owl:Class ;
+    rdfs:label "ISR Task" .
+
+:collectsOn a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :TargetEntity ;
+    rdfs:label "collects on" .
+
+:taskedTo a owl:ObjectProperty ;
+    rdfs:domain :ISRTask ;
+    rdfs:range :SensorPlatform ;
+    rdfs:label "tasked to" .
+
+:inContestedAirspace a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :contestedAirspace ;
+    rdfs:label "in contested airspace" .
+
+:highPriority a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :TargetEntity ;
+    rdfs:label "high priority" .
+
+# --- CQ delta ---
+:ObservationEvent a owl:Class ;
+    rdfs:label "ObservationEvent" .
+
+:ThreatAssessment a owl:Class ;
+    rdfs:label "ThreatAssessment" .
+
+:NamedAreaOfInterest a owl:Class ;
+    rdfs:label "NamedAreaOfInterest" .
+
+:trigger a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :ThreatAssessment ;
+    rdfs:label "trigger" .
+
+# --- CQ delta ---
+:TargetEntity a owl:Class ;
+    rdfs:label "Target Entity" .
+
+:HighValueTarget a owl:Class ;
+    rdfs:label "High Value Target" ;
+    rdfs:subClassOf :TargetEntity .
+
+:engagementAuthority a owl:ObjectProperty ;
+    rdfs:label "Engagement Authority" ;
+    rdfs:domain :Division ;
+    rdfs:range :HighValueTarget .
+
+# --- CQ delta ---
+:PriorityIntelRequirement a owl:Class ;
+    rdfs:label "Priority Intelligence Requirement" .
+
+:CollectionPlanning a owl:Class ;
+    rdfs:label "Collection Planning" .
+
+:ArmorUnit a owl:Class ;
+    rdfs:label "Armor Unit" .
+
+:BCT a owl:Class ;
+    rdfs:label "Battalion Combat Team" .
+
+:drivesCollection a owl:ObjectProperty ;
+    rdfs:domain :PriorityIntelRequirement ;
+    rdfs:range :CollectionPlanning ;
+    rdfs:label "drives collection" .
+
+:requiredForArmorBCT a owl:ObjectProperty ;
+    rdfs:domain :PriorityIntelRequirement ;
+    rdfs:range :BCT ;
+    rdfs:label "required for armor BCT" .
+
+:specifiesPriority a owl:ObjectProperty ;
+    rdfs:domain :CollectionPlanning ;
+    rdfs:range :PriorityIntelRequirement ;
+    rdfs:label "specifies priority" .
+
+# --- CQ delta ---
+:SensorPlatform a owl:Class ;
+    rdfs:label "Sensor Platform" .
+
+:organicISR a owl:ObjectProperty ;
+    rdfs:domain :BCT ;
+    rdfs:range :SensorPlatform ;
+    rdfs:label "Organic ISR" .
+
+:UAV a owl:Class ;
+    rdfs:label "UAV" .
+
+:SIGINT a owl:Class ;
+    rdfs:label "SIGINT" .
+
+:UAV rdfs:subClassOf :SensorPlatform .
+:SIGINT rdfs:subClassOf :SensorPlatform .
+
+# --- CQ delta ---
+:ThreatAssessment a owl:Class ;
+    rdfs:label "ThreatAssessment" .
+
+:TargetEntity a owl:Class ;
+    rdfs:label "TargetEntity" .
+
+:suspectedHostile a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :ThreatAssessment ;
+    rdfs:label "suspectedHostile" .
+
+:confirmedHostile a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :ThreatAssessment ;
+    rdfs:label "confirmedHostile" .
+
+# --- CQ delta ---
+:SensorPlatform a owl:Class ;
+    rdfs:label "Sensor Platform" .
+
+:GMTI a owl:Class ;
+    rdfs:label "Ground Moving Target Indication" .
+
+:GroundSurveillance a owl:Class ;
+    rdfs:label "Ground Surveillance" .
+
+:RadarPlatform a owl:Class ;
+    rdfs:label "Radar Platform" .
+
+:providesGMTI a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :GMTI ;
+    rdfs:label "provides GMTI" .
+
+:organicTo a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :GroundSurveillance ;
+    rdfs:label "organic to" .
+
+:isTypeOf a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :RadarPlatform ;
+    rdfs:label "is type of" .
+
+# --- CQ delta ---
+:NamedAreaOfInterest a owl:Class ;
+    rdfs:label "Named Area of Interest" .
+
+:TargetedAreaOfInterest a owl:Class ;
+    rdfs:label "Targeted Area of Interest" .
+
+:ISRPlanning a owl:Class ;
+    rdfs:label "ISR Planning" .
+
+:collectionZone a owl:Class ;
+    rdfs:label "Collection Zone" .
+
+:ISRPlanning :identifies :NamedAreaOfInterest .
+:ISRPlanning :collectionZone :TargetedAreaOfInterest .
+
+# --- CQ delta ---
+:IntelligenceDiscipline a owl:Class ;
+    rdfs:label "Intelligence Discipline" .
+
+:SIGINT a owl:Class ;
+    rdfs:label "Signals Intelligence" .
+
+:HUMINT a owl:Class ;
+    rdfs:label "Human Intelligence" .
+
+:IMINT a owl:Class ;
+    rdfs:label "Imagery Intelligence" .
+
+:FusionCell a owl:Class ;
+    rdfs:label "Fusion Cell" .
+
+:represents a owl:ObjectProperty ;
+    rdfs:domain :FusionCell ;
+    rdfs:range :IntelligenceDiscipline ;
+    rdfs:label "represents" .
+
+# --- CQ delta ---
+:ThreatAssessment a owl:Class ;
+    rdfs:label "ThreatAssessment" .
+
+:ThreatLevel a owl:Class ;
+    rdfs:label "ThreatLevel" .
+
+:ISRAsset a owl:Class ;
+    rdfs:label "ISRAsset" .
+
+:theaterISR a owl:Class ;
+    rdfs:label "theaterISR" .
+
+:requestAuthority a owl:ObjectProperty ;
+    rdfs:domain :ThreatAssessment ;
+    rdfs:range :CommandEchelon ;
+    rdfs:label "requestAuthority" .
+
+:ThreatAssessment rdfs:subClassOf :ISRAsset .
+:theaterISR rdfs:subClassOf :ISRAsset .
+
+# --- CQ delta ---
+:TargetEntity a owl:Class ;
+    rdfs:label "Target Entity" .
+
+:ProtectedStatus a owl:Class ;
+    rdfs:label "Protected Status" .
+
+:LOAC a owl:Class ;
+    rdfs:label "Law of Armed Conflict" .
+
+:CivilianObject a owl:Class ;
+    rdfs:label "Civilian Object" .
+
+:MedicalFacility a owl:Class ;
+    rdfs:label "Medical Facility" .
+
+:hasProtectedStatus a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :ProtectedStatus ;
+    rdfs:label "has Protected Status" .
+
+:protectedUnder a owl:ObjectProperty ;
+    rdfs:domain :ProtectedStatus ;
+    rdfs:range :LOAC ;
+    rdfs:label "protected under" .
+
+:isCivilianObject a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :CivilianObject ;
+    rdfs:label "is Civilian Object" .
+
+:isMedicalFacility a owl:ObjectProperty ;
+    rdfs:domain :TargetEntity ;
+    rdfs:range :MedicalFacility ;
+    rdfs:label "is Medical Facility" .
+
+# --- CQ delta ---
+:ObservationEvent a owl:Class ;
+    rdfs:label "Observation Event" .
+
+:HUMINT a owl:Class ;
+    rdfs:label "HUMINT" .
+
+:OrderOfBattle a owl:Class ;
+    rdfs:label "Order of Battle" .
+
+:EnemyUnit a owl:Class ;
+    rdfs:label "Enemy Unit" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:requires a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :ObservationEvent ;
+    rdfs:label "requires" .
+
+:updates a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :OrderOfBattle ;
+    rdfs:label "updates" .
+
+:source a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :HUMINT ;
+    rdfs:label "source" .
+
+:targets a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :EnemyUnit ;
+    rdfs:label "targets" .
+
+# --- CQ delta ---
+:SensorPlatform rdfs:label "Sensor Platform" .
+:WeatherCondition rdfs:label "Weather Condition" .
+:IMINT rdfs:label "IMINT" .
+:UAV rdfs:label "UAV" .
+:degradedCapability rdfs:label "Degraded Capability" .
+
+:UAV rdfs:subClassOf :SensorPlatform .
+:IMINT rdfs:subClassOf :SensorPlatform .
+
+:degradedCapability rdfs:domain :SensorPlatform ;
+    rdfs:range :WeatherCondition .
+
+# --- CQ delta ---
+:PriorityIntelRequirement a owl:Class ;
+    rdfs:label "Priority Intelligence Requirement" .
+
+:DecisionPoint a owl:Class ;
+    rdfs:label "Decision Point" .
+
+:CommandersDecision a owl:Class ;
+    rdfs:label "Commanders Decision" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:produces a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :PriorityIntelRequirement ;
+    rdfs:label "produces" .
+
+:supports a owl:ObjectProperty ;
+    rdfs:domain :PriorityIntelRequirement ;
+    rdfs:range :DecisionPoint ;
+    rdfs:label "supports" .
+
+:atDecisionPoint a owl:ObjectProperty ;
+    rdfs:domain :CommandersDecision ;
+    rdfs:range :DecisionPoint ;
+    rdfs:label "atDecisionPoint" .
+
+# --- CQ delta ---
+:TargetEntity a owl:Class ;
+    rdfs:label "Target Entity" .
+
+:TimeSensitiveTarget a owl:Class ;
+    rdfs:label "Time-Sensitive Target" ;
+    rdfs:subClassOf :TargetEntity .
+
+:PID a owl:Class ;
+    rdfs:label "PID" .
+
+:engagementApproval a owl:ObjectProperty ;
+    rdfs:label "Engagement Approval" ;
+    rdfs:domain :TimeSensitiveTarget ;
+    rdfs:range :ThreatAssessment .
+
+:ThreatAssessment a owl:Class ;
+    rdfs:label "Threat Assessment" .
+
+# --- CQ delta ---
+:SensorPlatform a owl:Class ;
+    rdfs:label "Sensor Platform" .
+
+:PersistentSurveillance a owl:Class ;
+    rdfs:label "Persistent Surveillance" .
+
+:UAV a owl:Class ;
+    rdfs:label "Unmanned Aerial Vehicle" .
+
+:MQ1C a owl:Class ;
+    rdfs:label "MQ-1C Reaper" .
+
+:TargetArea a owl:Class ;
+    rdfs:label "Target Area" .
+
+:hasPersistentSurveillance a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :PersistentSurveillance ;
+    rdfs:label "has Persistent Surveillance" .
+
+:operatesOver a owl:ObjectProperty ;
+    rdfs:domain :SensorPlatform ;
+    rdfs:range :TargetArea ;
+    rdfs:label "operates Over" .
+
+:UAV rdfs:subClassOf :SensorPlatform .
+
+:MQ1C rdfs:subClassOf :UAV .
+
+# --- CQ delta ---
+:ObservationEvent a owl:Class ;
+    rdfs:label "Observation Event" .
+
+:IndirectFire a owl:Class ;
+    rdfs:label "Indirect Fire" .
+
+:ReportingTimeline a owl:Class ;
+    rdfs:label "Reporting Timeline" .
+
+:SALUTE a owl:Class ;
+    rdfs:label "SALUTE" .
+
+:ISOPREP a owl:Class ;
+    rdfs:label "ISOPREP" .
+
+:involves a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :IndirectFire ;
+    rdfs:label "involves" .
+
+:hasReportingTimeline a owl:ObjectProperty ;
+    rdfs:domain :ObservationEvent ;
+    rdfs:range :ReportingTimeline ;
+    rdfs:label "hasReportingTimeline" .
+
+:reportsTo a owl:ObjectProperty ;
+    rdfs:domain :IndirectFire ;
+    rdfs:range :SALUTE ;
+    rdfs:label "reportsTo" .
+
+:submitsAs a owl:ObjectProperty ;
+    rdfs:domain :IndirectFire ;
+    rdfs:range :ISOPREP ;
+    rdfs:label "submitsAs" .
+
+# --- CQ delta ---
+:ISRSynchronizationMatrix a owl:Class ;
+    rdfs:label "ISRSynchronizationMatrix" .
+
+:CollectionAsset a owl:Class ;
+    rdfs:label "CollectionAsset" .
+
+:deconfliction a owl:ObjectProperty ;
+    rdfs:domain :ISRSynchronizationMatrix ;
+    rdfs:range :CollectionAsset ;
+    rdfs:label "deconfliction" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:S3 a owl:Class ;
+    rdfs:label "S3" .
+
+:produces a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :ISRSynchronizationMatrix ;
+    rdfs:label "produces" .
+
+:supports a owl:ObjectProperty ;
+    rdfs:domain :S3 ;
+    rdfs:range :ISRSynchronizationMatrix ;
+    rdfs:label "supports" .
+
+# --- CQ delta ---
+:ThreatAssessment a owl:Class ;
+    rdfs:label "Threat Assessment" .
+
+:TargetingProduct a owl:Class ;
+    rdfs:label "Targeting Product" .
+
+:S2 a owl:Class ;
+    rdfs:label "S2" .
+
+:Brigade a owl:Class ;
+    rdfs:label "Brigade" .
+
+:HVT a owl:Class ;
+    rdfs:label "High-Value Target" .
+
+:HPT a owl:Class ;
+    rdfs:label "High-Priority Target" .
+
+:produces a owl:ObjectProperty ;
+    rdfs:domain :S2 ;
+    rdfs:range :ThreatAssessment ;
+    rdfs:label "produces" .
+
+:supports a owl:ObjectProperty ;
+    rdfs:domain :ThreatAssessment ;
+    rdfs:range :TargetingProduct ;
+    rdfs:label "supports" .
+
+:targets a owl:ObjectProperty ;
+    rdfs:domain :TargetingProduct ;
+    rdfs:range :HVT ;
+    rdfs:label "targets" .

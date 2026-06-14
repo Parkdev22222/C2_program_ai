@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 _wargame_engine = None
 
+
+def _get_recon_ontology_ctx() -> str:
+    """정찰 임무 관련 온톨로지 컨텍스트 조회 (실패 시 빈 문자열)."""
+    try:
+        from tools.graph_rag_tool import get_recon_ontology_context
+        return get_recon_ontology_context()
+    except Exception as e:
+        logger.debug(f"[GraphRAG] 정찰 온톨로지 조회 실패 (무시): {e}")
+        return ""
+
 # 정찰부대 탐지 범위(m) — 이 거리에서 관측 포인트 배치
 _RECON_DETECT_RANGE = 7_000
 # 관측 대기 거리(m) — 교전 범위(4 km) 바깥
@@ -459,6 +469,7 @@ def recommend_recon_routes() -> dict:
             "mission_plans": assignments,
             "apply_json":    apply_json,
             "summary":       "\n".join(summary_lines),
+            "ontology_context": _get_recon_ontology_ctx(),
         }
 
     except Exception as e:
