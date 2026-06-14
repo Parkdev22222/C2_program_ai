@@ -1,14 +1,14 @@
 """
 EXAONE4 메인 에이전트 모델 로더 (EXAONE-4.0-32B-AWQ)
 
-vLLM AWQ 커스텀 커널이 Colab 환경의 torch ABI와 맞지 않는 문제로
-autoawq + transformers 기반 로더로 교체.
+vllm.LLM을 직접 사용하여 quantization="awq"와 trust_remote_code=True를
+vLLM 엔진에 명시적으로 전달합니다.
 
 smolagents CodeAgent backbone으로 사용하기 위해
 __call__(messages, stop_sequences, **kwargs) → ChatMessage 인터페이스를 구현합니다.
 """
-import logging
 import yaml
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -40,7 +40,10 @@ def _make_chat_message(text: str):
 
 class EXAONE4DirectModel:
     """
-    EXAONE4 전용 autoawq + transformers 래퍼.
+    EXAONE4 전용 vLLM 직접 래퍼.
+
+    vllm.LLM을 직접 사용하여 quantization="awq"와 trust_remote_code=True를
+    vLLM 엔진에 명시적으로 전달합니다.
 
     smolagents CodeAgent backbone으로 동작하기 위해
     __call__(messages, stop_sequences, **kwargs) → ChatMessage 인터페이스를 구현합니다.
@@ -49,35 +52,56 @@ class EXAONE4DirectModel:
     def __init__(
         self,
         model_id: str,
+        quantization: str = "awq",
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.35,
         dtype: str = "float16",
         max_model_len: int = 32768,
         generation_kwargs: Optional[Dict] = None,
-        **_ignored,  # vLLM 전용 파라미터(tensor_parallel_size 등) 무시
+        **extra_llm_kwargs,
     ):
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from vllm import LLM
+        from transformers import AutoTokenizer
 
         self.model_id = model_id
-        self._max_model_len = max_model_len
-        self._generation_kwargs = generation_kwargs or {}
+        self._exaone4_generation_kwargs = generation_kwargs or {}
 
-        torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float16
-        logger.info(f"[EXAONE4] autoawq+transformers 로딩: {model_id} (dtype={dtype})")
-
-        self._model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            device_map="auto",
-            torch_dtype=torch_dtype,
+        logger.info(f"Initializing vllm.LLM directly for EXAONE4: {model_id}")
+        logger.info(
+            f"LLM kwargs: quantization={quantization}, "
+            f"tensor_parallel_size={tensor_parallel_size}, "
+            f"gpu_memory_utilization={gpu_memory_utilization}, "
+            f"dtype={dtype}, max_model_len={max_model_len}, trust_remote_code=True"
         )
+
+        self._llm = LLM(
+            model=model_id,
+            trust_remote_code=True,
+            quantization=quantization,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_memory_utilization=gpu_memory_utilization,
+            dtype=dtype,
+            max_model_len=max_model_len,
+            enforce_eager=True,
+            **extra_llm_kwargs,
+        )
+
+        logger.info(f"Loading tokenizer: {model_id}")
         self._tokenizer = AutoTokenizer.from_pretrained(
             model_id, trust_remote_code=True
         )
-        logger.info("[EXAONE4] 모델 로드 완료")
+        logger.info("EXAONE4DirectModel ready")
 
     @staticmethod
     def _normalize_messages(messages) -> List[Dict[str, str]]:
-        """smolagents ChatMessage / MessageRole enum → plain dict 변환."""
+        """
+        smolagents ChatMessage / MessageRole enum → EXAONE tokenizer용 plain dict 변환.
+
+        EXAONE chat template 지원 role: system, user, assistant
+        - TOOL_RESPONSE → user (prefix 추가)
+        - TOOL_CALL     → assistant
+        - 기타 unknown  → user
+        """
         normalized = []
         for msg in messages:
             if hasattr(msg, "role"):
@@ -125,45 +149,25 @@ class EXAONE4DirectModel:
         stop_sequences: Optional[List[str]] = None,
         **kwargs,
     ):
-        import torch
+        from vllm import SamplingParams
 
         normalized = self._normalize_messages(messages)
-        gen_cfg = self._generation_kwargs
 
-        inputs = self._tokenizer.apply_chat_template(
+        prompt = self._tokenizer.apply_chat_template(
             normalized,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=True,
-            return_tensors="pt",
-        ).to(self._model.device)
+        )
 
-        temperature = kwargs.get("temperature", gen_cfg.get("temperature", 0.1))
-        max_new_tokens = kwargs.get("max_tokens", gen_cfg.get("max_tokens", 4096))
-        max_new_tokens = min(max_new_tokens, self._max_model_len - inputs.shape[1])
+        gen_cfg = self._exaone4_generation_kwargs
+        params = SamplingParams(
+            temperature=kwargs.get("temperature", gen_cfg.get("temperature", 0.1)),
+            max_tokens=kwargs.get("max_tokens", gen_cfg.get("max_tokens", 4096)),
+            stop=stop_sequences or [],
+        )
 
-        stop_ids = []
-        if stop_sequences:
-            for s in stop_sequences:
-                ids = self._tokenizer.encode(s, add_special_tokens=False)
-                if ids:
-                    stop_ids.append(ids[0])
-
-        with torch.no_grad():
-            output_ids = self._model.generate(
-                inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature if temperature > 0 else None,
-                do_sample=temperature > 0,
-                pad_token_id=self._tokenizer.eos_token_id,
-                eos_token_id=(
-                    stop_ids + [self._tokenizer.eos_token_id]
-                    if stop_ids else self._tokenizer.eos_token_id
-                ),
-            )
-
-        text = self._tokenizer.decode(
-            output_ids[0][inputs.shape[1]:], skip_special_tokens=True
-        ).strip()
+        outputs = self._llm.generate([prompt], params)
+        text = outputs[0].outputs[0].text.strip()
         return _make_chat_message(text)
 
     def generate(self, messages, stop_sequences=None, **kwargs):
@@ -180,6 +184,9 @@ def load_exaone_model(config: Optional[Dict[str, Any]] = None) -> EXAONE4DirectM
     logger.info(f"Loading EXAONE4 model: {model_id}")
     return EXAONE4DirectModel(
         model_id=model_id,
+        quantization=config.get("quantization", "awq"),
+        tensor_parallel_size=config.get("tensor_parallel_size", 1),
+        gpu_memory_utilization=config.get("gpu_memory_utilization", 0.35),
         dtype=config.get("dtype", "float16"),
         max_model_len=config.get("max_model_len", 32768),
         generation_kwargs=generation_cfg,

@@ -1,10 +1,10 @@
 """
 EXAONE Deep 전략/전술 전문 모델 로더
 
-vLLM AWQ 커스텀 커널이 Colab 환경의 torch ABI와 맞지 않는 문제로
-transformers 기반 로더로 교체.
+smolagents VLLMModel은 trust_remote_code를 vLLM 엔진에 전달하지 못하는 버그가 있어,
+vllm.LLM을 직접 사용하는 커스텀 래퍼(StrategyVLLMModel)로 구현합니다.
 
-strategy_advisor_tool에서 model(messages, temperature, max_tokens) 형태로 호출됩니다.
+주의: temperature, max_tokens는 __init__()에 전달하지 않고 __call__() 시 전달합니다.
 """
 import yaml
 import logging
@@ -18,42 +18,58 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "models_config.yaml"
 
 class StrategyVLLMModel:
     """
-    EXAONE Deep 전용 transformers 래퍼.
+    EXAONE Deep 전용 vLLM 직접 래퍼.
+
+    smolagents VLLMModel이 trust_remote_code를 vLLM 엔진에 전달하지 못하는
+    문제를 해결하기 위해 vllm.LLM을 직접 사용합니다.
+
     strategy_advisor_tool에서 model(messages, temperature, max_tokens) 형태로 호출됩니다.
     """
 
     def __init__(
         self,
         model_id: str,
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.55,
         dtype: str = "bfloat16",
         max_model_len: int = 32768,
         generation_kwargs: Optional[Dict] = None,
-        **_ignored,  # vLLM 전용 파라미터 무시
+        **extra_llm_kwargs,
     ):
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from vllm import LLM
+        from transformers import AutoTokenizer
 
         self.model_id = model_id
-        self._max_model_len = max_model_len
-        self._generation_kwargs = generation_kwargs or {}
+        self._strategy_generation_kwargs = generation_kwargs or {}
 
-        torch_dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float16
-        logger.info(f"[StrategyModel] transformers 로딩: {model_id} (dtype={dtype})")
+        logger.info(f"Initializing vllm.LLM directly for: {model_id}")
+        logger.info(
+            f"LLM kwargs: tensor_parallel_size={tensor_parallel_size}, "
+            f"gpu_memory_utilization={gpu_memory_utilization}, "
+            f"dtype={dtype}, max_model_len={max_model_len}, trust_remote_code=True"
+        )
 
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._llm = LLM(
+            model=model_id,
+            trust_remote_code=True,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_memory_utilization=gpu_memory_utilization,
+            dtype=dtype,
+            max_model_len=max_model_len,
+            enforce_eager=True,
+            **extra_llm_kwargs,
+        )
+
+        logger.info(f"Loading tokenizer for chat template: {model_id}")
+        self._tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             trust_remote_code=True,
-            device_map="auto",
-            torch_dtype=torch_dtype,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            model_id, trust_remote_code=True
-        )
-        logger.info("[StrategyModel] 모델 로드 완료")
+        logger.info("StrategyVLLMModel ready")
 
     @staticmethod
     def _normalize_messages(messages) -> List[Dict[str, str]]:
-        """smolagents MessageRole enum → plain dict 변환."""
+        """smolagents MessageRole enum → plain dict 변환 (EXAONE Deep용)."""
         normalized = []
         for msg in messages:
             if hasattr(msg, "role"):
@@ -102,32 +118,24 @@ class StrategyVLLMModel:
         max_tokens: int = 8192,
         **kwargs,
     ) -> str:
-        import torch
+        from vllm import SamplingParams
 
         normalized = self._normalize_messages(messages)
-        inputs = self._tokenizer.apply_chat_template(
+        prompt = self._tokenizer.apply_chat_template(
             normalized,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=True,
-            return_tensors="pt",
-        ).to(self._model.device)
+        )
 
-        max_new_tokens = min(max_tokens, self._max_model_len - inputs.shape[1])
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
-        logger.debug(f"[StrategyModel] 생성 시작 (max_tokens={max_new_tokens}, temp={temperature})")
-        with torch.no_grad():
-            output_ids = self._model.generate(
-                inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature if temperature > 0 else None,
-                do_sample=temperature > 0,
-                pad_token_id=self._tokenizer.eos_token_id,
-            )
-
-        result = self._tokenizer.decode(
-            output_ids[0][inputs.shape[1]:], skip_special_tokens=True
-        ).strip()
-        logger.debug(f"[StrategyModel] 생성 완료 ({len(result)}자)")
+        logger.debug(f"Generating strategy response (max_tokens={max_tokens}, temp={temperature})")
+        outputs = self._llm.generate([prompt], sampling_params)
+        result = outputs[0].outputs[0].text.strip()
+        logger.debug(f"Strategy response length: {len(result)} chars")
         return result
 
 
@@ -141,6 +149,8 @@ def load_strategy_model(config: Optional[Dict[str, Any]] = None) -> StrategyVLLM
     logger.info(f"Loading EXAONE Deep strategy model: {model_id}")
     return StrategyVLLMModel(
         model_id=model_id,
+        tensor_parallel_size=config.get("tensor_parallel_size", 1),
+        gpu_memory_utilization=config.get("gpu_memory_utilization", 0.55),
         dtype=config.get("dtype", "bfloat16"),
         max_model_len=config.get("max_model_len", 32768),
         generation_kwargs=generation_cfg,
