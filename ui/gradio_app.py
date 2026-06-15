@@ -549,12 +549,12 @@ def _execute_auto_attack_plan(event_type: str, *args):
     _auto_plan_status["message"] = log_tag
     _auto_plan_status["started_at"] = _t_status.time()
 
-    # 진행 중인 공중지원(pending/active)이 완료될 때까지 대기한 후 정지
-    # 직접사격·간접사격은 틱 내 즉시 처리되므로 대기 불필요
+    # BLUFOR 공중지원(pending/active)이 완료될 때까지 대기한 후 정지.
+    # OPFOR 공중지원은 기다리지 않음 — 적 공중지원 때문에 재계획이 지연되면 안 됨.
     was_running = eng.running
     if was_running:
         import time as _time
-        _COMBAT_WAIT_MAX = 120.0   # 최대 2분 대기
+        _COMBAT_WAIT_MAX = 20.0   # 최대 20초 대기 (time_scale=60 기준 1200 게임초)
         _waited = 0.0
         _wait_step = 0.5
         while _waited < _COMBAT_WAIT_MAX:
@@ -562,6 +562,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 _air_ongoing = [
                     a for a in eng.get_state().get("air_supports", [])
                     if a.get("status") in ("pending", "active")
+                    and a.get("side") == "BLUFOR"  # BLUFOR 공중지원만 대기
                 ]
             except Exception:
                 _air_ongoing = []
@@ -570,7 +571,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             _time.sleep(_wait_step)
             _waited += _wait_step
         if _waited > 0:
-            logger.info(f"[자동임무계획] 공중지원 완료 대기 {_waited:.1f}s 후 일시정지")
+            logger.info(f"[자동임무계획] BLUFOR 공중지원 완료 대기 {_waited:.1f}s 후 일시정지")
         eng.stop()
         logger.info(f"[자동임무계획] 시뮬레이션 일시정지 완료 — running={eng.running}")
         # set_resume_on_apply 사용 안 함 — LLM 툴 호출 시 엔진이 중간에 재시작되어
