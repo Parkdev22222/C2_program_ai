@@ -42,22 +42,19 @@ event_description:
 
 # ===== EXAONE4 메인 에이전트 모델 =====
 # 상황 분석, 비디오 이해, 최종 응답 생성 담당
-# AWQ 4bit → 실사용 ~18GB
-# [수정] quantization을 명시적으로 전달해야 AWQ로 로딩됨
-#        미전달 시 FP16(~64GB)으로 로딩되어 EXAONE Deep 로딩 공간 없음
+# BF16 풀 프리시전 → 실사용 ~64GB (A100 80GB 필요)
 agent_model:
-  model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
-  quantization: "awq_marlin"        # awq_marlin: Marlin 커널 사용 (vLLM 0.8+, Colab ABI 충돌 우회)
-  model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
+  model_id: "LGAI-EXAONE/EXAONE-4.0-32B-Instruct"
+  quantization: null                # 양자화 없음 (풀 프리시전 BF16)
+  model_id_awq: null
   tensor_parallel_size: 1
   # ── GPU 환경별 설정 ──────────────────────────────────────────
-  # A100 80GB : gpu_memory_utilization: 0.30 / max_model_len: 32768
-  # A100 40GB : gpu_memory_utilization: 0.45 / max_model_len: 12288
-  # Colab L4 22GB: gpu_memory_utilization: 0.55 / max_model_len: 4096  (AWQ 필수)
+  # A100 80GB : gpu_memory_utilization: 0.80 / max_model_len: 32768
+  # A100 40GB : 단독 로딩 가능, EXAONE Deep 동시 로딩 불가
   # ────────────────────────────────────────────────────────────
-  gpu_memory_utilization: 0.55     # 조정 필요 시 위 표 참고
-  dtype: "float16"
-  max_model_len: 32768             # KV 에러 시 gpu_memory_utilization을 높이거나 줄이기 (최소 4096)
+  gpu_memory_utilization: 0.80
+  dtype: "bfloat16"
+  max_model_len: 32768
   generation:
     temperature: 0.1
     max_tokens: 4096
