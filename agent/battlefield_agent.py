@@ -275,6 +275,7 @@ class BattlefieldAgent:
             guard as _guard,
             activate as _guard_activate,
             deactivate as _guard_deactivate,
+            session_start as _guard_session_start,
         )
 
         # ── 1) executor 패치: 코드 블록 실행 구간만 가드 활성화 ──────────
@@ -325,6 +326,16 @@ class BattlefieldAgent:
                 logger.debug(f"[SingleToolGuard] tool.forward 패치 실패 ({getattr(tool_obj, 'name', '?')}): {e}")
 
         logger.info(f"[SingleToolGuard] {patched_count}/{len(self._tools)} 도구 forward() 패치 완료")
+
+        # ── 3) agent.run() 래핑: agent.run() 시작 시 세션 레벨 추적 초기화 ──
+        _orig_run = code_agent.run
+
+        def _session_run(*args, **kwargs):
+            _guard_session_start()
+            return _orig_run(*args, **kwargs)
+
+        code_agent.run = _session_run
+        logger.info("[SingleToolGuard] agent.run() 세션 레벨 추적 패치 완료")
 
     def _append_custom_prompt(self, agent):
         try:
