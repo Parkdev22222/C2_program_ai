@@ -52,10 +52,10 @@ class EXAONE4DirectModel:
     def __init__(
         self,
         model_id: str,
-        quantization: Optional[str] = None,
+        quantization: str = "awq",
         tensor_parallel_size: int = 1,
-        gpu_memory_utilization: float = 0.80,
-        dtype: str = "bfloat16",
+        gpu_memory_utilization: float = 0.30,
+        dtype: str = "float16",
         max_model_len: int = 32768,
         generation_kwargs: Optional[Dict] = None,
         **extra_llm_kwargs,
@@ -66,7 +66,7 @@ class EXAONE4DirectModel:
         self.model_id = model_id
         self._exaone4_generation_kwargs = generation_kwargs or {}
 
-        logger.info(f"Initializing vllm.LLM for EXAONE4: {model_id}")
+        logger.info(f"Initializing vllm.LLM directly for EXAONE4: {model_id}")
         logger.info(
             f"LLM kwargs: quantization={quantization}, "
             f"tensor_parallel_size={tensor_parallel_size}, "
@@ -74,9 +74,10 @@ class EXAONE4DirectModel:
             f"dtype={dtype}, max_model_len={max_model_len}, trust_remote_code=True"
         )
 
-        llm_kwargs = dict(
+        self._llm = LLM(
             model=model_id,
             trust_remote_code=True,
+            quantization=quantization,
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
             dtype=dtype,
@@ -84,10 +85,6 @@ class EXAONE4DirectModel:
             enforce_eager=True,
             **extra_llm_kwargs,
         )
-        if quantization:
-            llm_kwargs["quantization"] = quantization
-
-        self._llm = LLM(**llm_kwargs)
 
         logger.info(f"Loading tokenizer: {model_id}")
         self._tokenizer = AutoTokenizer.from_pretrained(
@@ -181,17 +178,16 @@ def load_exaone_model(config: Optional[Dict[str, Any]] = None) -> EXAONE4DirectM
     if config is None:
         config = load_exaone_model_config()
 
-    # model_id_awq가 null이면 model_id 사용
-    model_id = config.get("model_id_awq") or config.get("model_id", "LGAI-EXAONE/EXAONE-4.0-32B-Instruct")
+    model_id = config.get("model_id_awq") or config.get("model_id", "LGAI-EXAONE/EXAONE-4.0-32B-AWQ")
     generation_cfg = config.get("generation", {})
 
     logger.info(f"Loading EXAONE4 model: {model_id}")
     return EXAONE4DirectModel(
         model_id=model_id,
-        quantization=config.get("quantization") or None,  # null → None (양자화 없음)
+        quantization=config.get("quantization", "awq"),
         tensor_parallel_size=config.get("tensor_parallel_size", 1),
-        gpu_memory_utilization=config.get("gpu_memory_utilization", 0.80),
-        dtype=config.get("dtype", "bfloat16"),
+        gpu_memory_utilization=config.get("gpu_memory_utilization", 0.30),
+        dtype=config.get("dtype", "float16"),
         max_model_len=config.get("max_model_len", 32768),
         generation_kwargs=generation_cfg,
     )

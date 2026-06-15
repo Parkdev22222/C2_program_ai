@@ -42,18 +42,18 @@ event_description:
 
 # ===== EXAONE4 메인 에이전트 모델 =====
 # 상황 분석, 비디오 이해, 최종 응답 생성 담당
-# BF16 풀 프리시전 → 실사용 ~64GB (A100 80GB 필요)
+# AWQ 4bit → 실사용 ~18GB
 agent_model:
-  model_id: "LGAI-EXAONE/EXAONE-4.0-32B-Instruct"
-  quantization: null                # 양자화 없음 (풀 프리시전 BF16)
-  model_id_awq: null
+  model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
+  quantization: "awq"
+  model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
   tensor_parallel_size: 1
   # ── GPU 환경별 설정 ──────────────────────────────────────────
-  # A100 80GB : gpu_memory_utilization: 0.80 / max_model_len: 32768
-  # A100 40GB : 단독 로딩 가능, EXAONE Deep 동시 로딩 불가
+  # A100 80GB : gpu_memory_utilization: 0.30 / max_model_len: 32768
+  # A100 40GB : gpu_memory_utilization: 0.45 / max_model_len: 12288
   # ────────────────────────────────────────────────────────────
-  gpu_memory_utilization: 0.80
-  dtype: "bfloat16"
+  gpu_memory_utilization: 0.30
+  dtype: "float16"
   max_model_len: 32768
   generation:
     temperature: 0.1
