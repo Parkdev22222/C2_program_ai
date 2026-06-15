@@ -844,6 +844,15 @@ def _execute_auto_attack_plan(event_type: str, *args):
             eng.clear_detection_triggers()
         except Exception:
             pass
+        # 콜백 재등록 — 재계획 도중 _wg_engine이 교체됐을 경우를 대비해 현재 전역 엔진에 재등록
+        try:
+            _cur_eng = _wg_engine
+            if _cur_eng is not None:
+                _cur_eng.on_new_opfor_detection = _detection_enqueue
+                _cur_eng.on_blufor_cp_threshold = _cp_threshold_enqueue
+                _cur_eng.on_blufor_air_hit      = _air_hit_enqueue
+        except Exception:
+            pass
         if was_running and not eng.running:
             eng.start()
             logger.info("[자동임무계획] 시뮬레이션 재개")
@@ -1234,7 +1243,7 @@ def wargame_start_pause():
 
 
 def wargame_reset_sim():
-    global _wg_engine, _wg_planner, _wg_last_plan
+    global _wg_engine, _wg_planner, _wg_last_plan, _last_replan_tick
     if not _WARGAME_OK:
         return "초기화 실패", None, None, "", ""
     units = setup_bn_vs_bn()
@@ -1251,6 +1260,9 @@ def wargame_reset_sim():
     _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
     _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
     _wg_last_plan = {}
+    # 재계획 쿨다운 리셋 — 엔진 틱이 0으로 초기화되므로 _last_replan_tick도 초기화
+    # (초기화 전 값이 남아 있으면 쿨다운 계산에서 음수가 나와 30틱 내 이벤트가 모두 차단됨)
+    _last_replan_tick = -30
     fig, damage_fig, status, log_text = wargame_refresh()
     return "▶ 시뮬레이션 시작", fig, damage_fig, status, log_text
 
@@ -1869,6 +1881,17 @@ def wargame_refresh_with_alert(chatbot_history: List) -> tuple:
             alert_msg = _build_opfor_alert(state)
             chatbot_history.append(("⚠️ 시스템 알람", alert_msg))
             _save_chat_history(chatbot_history)
+    # 자동 재계획 진행 중 상태 알림
+    if _auto_plan_status.get("active"):
+        import time as _ap_t
+        elapsed = _ap_t.time() - _auto_plan_status.get("started_at", 0)
+        msg = _auto_plan_status.get("message", "")
+        notice = f"[자동 재계획 진행 중 — {elapsed:.0f}s 경과] {msg}"
+        # 이미 동일 알림이 마지막 메시지로 있으면 갱신, 없으면 추가
+        if chatbot_history and chatbot_history[-1][0] == "🔄 자동 재계획":
+            chatbot_history[-1] = ("🔄 자동 재계획", notice)
+        else:
+            chatbot_history.append(("🔄 자동 재계획", notice))
     return fig, damage_fig, status, log_text, chatbot_history
 
 
