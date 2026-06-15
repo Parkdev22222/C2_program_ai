@@ -142,8 +142,8 @@ def build_mission_query(state: dict) -> str:
       3. predict_opfor_routes()          → 탐지된 OPFOR 예상 기동 경로 분석
       4. get_optimal_attack_positions(opfor_routes_json=<3번 predicted_routes JSON>)
                                          → 경로 차단 보너스 반영 최적 공격 위치 추천
-      5. strategy_advisor_tool(query=..., additional_context=<4번 결과>)
-                                         → EXAONE Deep이 공격 위치 결과 검토·조언
+      5. strategy_advisor_tool(query=..., additional_context=<1~4번 모든 결과>)
+                                         → EXAONE Deep이 전체 툴 결과 검토·조언
       6. 최종 임무계획 JSON 생성         → 4번+5번 종합, detected OPFOR만 목표
       7. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
       8. 응답에 JSON 블록 출력
@@ -171,10 +171,10 @@ def build_mission_query(state: dict) -> str:
 ⚠️ 코드 첫 줄에 반드시 `import json` 을 실행하라. json 없이 json.dumps() 호출 시 NameError 발생.
 
 [필수 툴 호출 순서]
-1. (자동 재계획 시 생략 가능) get_wargame_situation()
-   → 이미 [현재 전장 상황]으로 제공된 경우 호출 불필요. situation 변수로 그대로 사용.
+1. get_wargame_situation()
+   → 결과를 situation_result에 저장. 이미 [현재 전장 상황]으로 제공된 경우 호출 생략하고 해당 데이터를 situation_result로 사용.
 2. assess_recon_need()
-   → OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
+   → 결과를 assess_result에 저장. OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
 3. recommend_recon_routes()
    → Delta 정찰부대의 경로 생성 → recon_result에 저장
    → recon_result["mission_plans"]의 첫 번째 항목을 Delta 임무로 사용
@@ -187,7 +187,13 @@ def build_mission_query(state: dict) -> str:
    → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
 6. strategy_advisor_tool(
      query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요. 또한 Delta 정찰부대의 정찰 경로(recon_result의 waypoints)가 공격 임무를 효과적으로 지원하는지, 경로 개선이 필요한지도 검토해주세요.",
-     additional_context=str(attack_positions_result) + "\n\n[Delta 정찰 경로]\n" + str(recon_result)
+     additional_context=(
+         "[전장 상황 — get_wargame_situation]\n" + json.dumps(situation_result, ensure_ascii=False) +
+         "\n\n[OPFOR 탐지 현황 — assess_recon_need]\n" + json.dumps(assess_result, ensure_ascii=False) +
+         "\n\n[Delta 정찰 경로 — recommend_recon_routes]\n" + json.dumps(recon_result, ensure_ascii=False) +
+         "\n\n[OPFOR 예상 기동 경로 — predict_opfor_routes]\n" + json.dumps(opfor_routes_result, ensure_ascii=False) +
+         "\n\n[최적 공격 위치 — get_optimal_attack_positions]\n" + json.dumps(attack_positions_result, ensure_ascii=False)
+     )
    )
    → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
 7. 위 1~6 결과를 종합하여 최종 임무계획 JSON 생성

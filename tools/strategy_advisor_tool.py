@@ -356,15 +356,27 @@ class ReconAdvisorTool(Tool):
             "description": "recommend_recon_routes()가 반환한 summary 문자열 (선택)",
             "nullable": True,
         },
+        "tool_results_context": {
+            "type": "string",
+            "description": (
+                "이전 툴 호출 결과 전체 (assess_recon_need, get_wargame_situation 등). "
+                "가능한 한 모든 이전 툴 결과를 합쳐서 전달하면 EXAONE Deep의 조언 품질이 향상됩니다."
+            ),
+            "nullable": True,
+        },
     }
     output_type = "string"
 
-    def forward(self, recon_routes_json: str, recon_summary: str = None) -> str:
+    def forward(self, recon_routes_json: str, recon_summary: str = None, tool_results_context: str = None) -> str:
         logger.info("ReconAdvisorTool called — forwarding recon routes to EXAONE Deep")
 
         # 현재 전장 상황 메모리 가져오기
         memory = get_situation_memory()
         situation_text = memory.get("situation_analysis") or "사전 상황 분석 없음."
+
+        # 이전 툴 결과 전체를 상황 텍스트에 추가
+        if tool_results_context:
+            situation_text = situation_text + "\n\n## 이전 툴 호출 결과 전체\n" + tool_results_context
 
         user_content = RECON_ADVISOR_USER_TEMPLATE.format(
             recon_summary=recon_summary or "(요약 없음)",

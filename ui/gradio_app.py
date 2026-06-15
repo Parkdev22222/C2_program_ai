@@ -1376,6 +1376,11 @@ def wargame_request_recon_plan(history: List = None):
     _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
     _recon_json_str  = _json.dumps(_base_recon_result, ensure_ascii=False, indent=2)
 
+    _tool_context_for_deep = (
+        f"[assess_recon_need 결과]\n{_assess_json_str}\n\n"
+        f"[recommend_recon_routes 결과]\n{_recon_json_str}"
+    )
+
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
         f"⚠️ assess_recon_need() 및 recommend_recon_routes() 호출 금지 — 결과가 아래에 이미 제공됨.\n\n"
@@ -1384,12 +1389,21 @@ def wargame_request_recon_plan(history: List = None):
         f"[툴 활용 순서]\n"
         f"1. (완료) assess_recon_need() — 위 결과 참조\n"
         f"2. (완료) recommend_recon_routes() — 위 apply_json 참조\n"
-        f"3. recon_advisor_tool(recon_routes_json=<위 apply_json>, recon_summary=<위 summary>)  [선택]\n"
-        f"   → EXAONE Deep에게 경로 전술 검토 요청 → 개선 의견 수신\n"
-        f"4. apply_wargame_mission_plan(plan_json=<위 apply_json>, dry_run=False)\n"
-        f"   → 위 recommend_recon_routes() 결과의 apply_json을 그대로 사용 (좌표 수정 금지, dry_run=True 절대 금지)\n"
-        f"   → 워게임 엔진에 즉시 적용\n"
-        f"5. 응답에 apply_json의 JSON 블록 출력\n\n"
+        f"3. recon_advisor_tool(\n"
+        f"     recon_routes_json=<위 apply_json 문자열>,\n"
+        f"     recon_summary=<위 summary 문자열>,\n"
+        f"     tool_results_context=<이전 툴 결과 전체 — 아래 [이전 툴 결과]를 그대로 사용>\n"
+        f"   )  [권장]\n"
+        f"   → EXAONE Deep에게 정찰 경로 전술 검토 요청 — 이전 툴 결과 전체를 함께 제공\n"
+        f"   → [이전 툴 결과]\n{_tool_context_for_deep}\n\n"
+        f"4. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
+        f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로, EXAONE Deep 조언(Step 3)을 반영하여\n"
+        f"      EXAONE4가 최종 mission_plans JSON을 직접 작성한다.\n"
+        f"   → unit_id·waypoints 좌표는 recommend_recon_routes() 결과에서 가져올 것 (임의 좌표 금지)\n"
+        f"   → mission_type은 반드시 'recon', 공격부대(Alpha/Bravo/Charlie/Echo) 포함 금지\n"
+        f"5. apply_wargame_mission_plan(plan_json=<Step 4에서 생성한 JSON>, dry_run=False)\n"
+        f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
+        f"6. 응답에 최종 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
