@@ -1081,12 +1081,11 @@ def _build_damage_chart(state: dict) -> Optional[go.Figure]:
             zeroline=False,
         ),
         yaxis=dict(
-            title="전투력 (%)",
+            title=dict(text="전투력 (%)", font=dict(color="#aaaaaa", size=10)),
             range=[0, 100],
             tickfont=dict(color="#aaaaaa", size=9),
             gridcolor="#2a3a4a",
             zeroline=False,
-            titlefont=dict(color="#aaaaaa", size=10),
         ),
         paper_bgcolor="#0d1117",
         plot_bgcolor="#0f1923",
