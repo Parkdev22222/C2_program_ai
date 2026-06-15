@@ -1359,21 +1359,35 @@ def wargame_request_recon_plan(history: List = None):
     # │                                                                  │
     # │ (학습된 규칙 있을 경우 [학습된 규칙] 섹션 추가됨)               │
     # └─────────────────────────────────────────────────────────────────┘
+    import json as _json, re as _re
+    agent_response_text = ""
+    applied_plan = None
+    # 정찰 경로를 미리 생성 — apply_json은 미터 좌표로 작성되어 있음
+    _base_recon_result = recommend_recon_routes()
+    if _base_recon_result.get("status") == "no_recon_units":
+        msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
+        history[-1] = (history[-1][0], msg)
+        if was_running:
+            eng.start()
+        fig, damage_fig, status, log_text = wargame_refresh()
+        return history, "", fig, damage_fig, status, log_text, ""
+    _base_apply_json = _base_recon_result.get("apply_json", "")
+    _base_summary    = _base_recon_result.get("summary", "")
+    _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
+    _recon_json_str  = _json.dumps(_base_recon_result, ensure_ascii=False, indent=2)
+
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
-        f"현재 전장 상황(부대 위치·전투력·인텔 등)은 반드시 도구(tool)를 호출하여 조회하라.\n\n"
-        f"[툴 활용 순서 — 반드시 이 순서대로 호출]\n"
-        f"1. assess_recon_need()\n"
-        f"   → OPFOR 탐지 현황(detected/approximate/lost) 및 정찰 필요 여부 확인\n"
-        f"   → 탐지 상실(lost) 또는 개략위치(approximate) OPFOR 식별\n"
-        f"2. recommend_recon_routes()\n"
-        f"   → 정찰부대(unit_type=정찰) 기준 교전 회피 경로 자동 생성\n"
-        f"   → 반환값: apply_json(엔진 적용용 JSON — 미터 좌표), summary, mission_plans(위경도 표시용)\n"
-        f"   ※ apply_json은 이미 엔진 내부 미터 좌표로 작성되어 있음 — 좌표 수정 금지\n"
-        f"3. recon_advisor_tool(recon_routes_json=<apply_json>, recon_summary=<summary>)  [선택]\n"
+        f"⚠️ assess_recon_need() 및 recommend_recon_routes() 호출 금지 — 결과가 아래에 이미 제공됨.\n\n"
+        f"[사전 계산된 결과 — assess_recon_need()]\n```json\n{_assess_json_str}\n```\n\n"
+        f"[사전 계산된 결과 — recommend_recon_routes()]\n```json\n{_recon_json_str}\n```\n\n"
+        f"[툴 활용 순서]\n"
+        f"1. (완료) assess_recon_need() — 위 결과 참조\n"
+        f"2. (완료) recommend_recon_routes() — 위 apply_json 참조\n"
+        f"3. recon_advisor_tool(recon_routes_json=<위 apply_json>, recon_summary=<위 summary>)  [선택]\n"
         f"   → EXAONE Deep에게 경로 전술 검토 요청 → 개선 의견 수신\n"
-        f"4. apply_wargame_mission_plan(plan_json=<apply_json>, dry_run=False)\n"
-        f"   → Step 2의 apply_json을 그대로 사용 (좌표 수정 금지, dry_run=True 절대 금지)\n"
+        f"4. apply_wargame_mission_plan(plan_json=<위 apply_json>, dry_run=False)\n"
+        f"   → 위 recommend_recon_routes() 결과의 apply_json을 그대로 사용 (좌표 수정 금지, dry_run=True 절대 금지)\n"
         f"   → 워게임 엔진에 즉시 적용\n"
         f"5. 응답에 apply_json의 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
@@ -1394,17 +1408,6 @@ def wargame_request_recon_plan(history: List = None):
         except Exception:
             pass
 
-    import json as _json, re as _re
-    agent_response_text = ""
-    applied_plan = None
-    # 정찰 경로를 미리 생성 — apply_json은 미터 좌표로 작성되어 있음
-    _base_recon_result = recommend_recon_routes()
-    if _base_recon_result.get("status") == "no_recon_units":
-        msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-        history[-1] = (history[-1][0], msg)
-        fig, damage_fig, status, log_text = wargame_refresh()
-        return history, "", fig, damage_fig, status, log_text, ""
-    _base_apply_json = _base_recon_result.get("apply_json", "")
     try:
         if agent is not None:
             try:
@@ -1510,6 +1513,7 @@ def wargame_request_attack_plan(history: List = None):
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, "", fig, damage_fig, status, log_text, ""
     warning_msg = ""
+    assessment = {}
     try:
         from tools.wargame_recon_tool import assess_recon_need
         assessment = assess_recon_need()
@@ -1538,7 +1542,18 @@ def wargame_request_attack_plan(history: List = None):
     _atk_recon_ids = _get_recon_unit_ids()
     _atk_recon_str = ", ".join(_atk_recon_ids) if _atk_recon_ids else "정찰부대"
     base_query = build_mission_query(state)
+    # assess_recon_need() 결과를 쿼리에 포함 → 에이전트 재호출 방지
+    try:
+        import json as _atk_json
+        _assess_block = (
+            f"\n\n⚠️ assess_recon_need() 호출 금지 — 결과가 아래에 이미 제공됨.\n"
+            f"[사전 계산된 결과 — assess_recon_need()]\n```json\n"
+            f"{_atk_json.dumps(assessment, ensure_ascii=False)}\n```\n"
+        )
+    except Exception:
+        _assess_block = ""
     attack_suffix = (
+        f"{_assess_block}"
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
         f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
         f"⚠️ {_atk_recon_str}(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
