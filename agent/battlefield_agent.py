@@ -280,7 +280,30 @@ class BattlefieldAgent:
 
         self._patch_single_tool_guard(agent)
         self._patch_executor_output_limit(agent)
+        self._patch_executor_timeout(agent)
         return agent
+
+    def _patch_executor_timeout(self, code_agent, timeout_seconds: int = 300):
+        """
+        Python executor의 코드 블록 실행 타임아웃을 늘린다.
+
+        smolagents 기본값은 30초인데, recon_advisor_tool / strategy_advisor_tool이
+        EXAONE Deep 추론을 동기 호출하므로 쉽게 초과된다.
+        max_execution_time 속성을 직접 패치하여 5분으로 늘린다.
+        """
+        for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
+            _exec = getattr(code_agent, _exec_attr, None)
+            if _exec is None:
+                continue
+            try:
+                cur = getattr(_exec, "max_execution_time", None)
+                _exec.max_execution_time = timeout_seconds
+                logger.info(
+                    f"[ExecTimeout] {_exec_attr}.max_execution_time: {cur} → {timeout_seconds}s"
+                )
+            except Exception as e:
+                logger.debug(f"[ExecTimeout] 설정 실패 ({_exec_attr}): {e}")
+            break
 
     def _patch_executor_output_limit(self, code_agent, max_chars: int = 8000):
         """
