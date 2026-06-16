@@ -261,7 +261,29 @@ class BattlefieldAgent:
             self._append_custom_prompt(agent)
 
         self._patch_single_tool_guard(agent)
+        self._patch_executor_output_limit(agent)
         return agent
+
+    def _patch_executor_output_limit(self, code_agent, max_chars: int = 8000):
+        """
+        Python executor의 print() 출력 길이를 제한한다.
+
+        smolagents는 코드 블록의 print() 출력 전체를 observation으로 기록하므로,
+        긴 JSON 덤프 등이 무제한으로 누적되면 스텝마다 LLM 입력 토큰이 증가한다.
+        max_print_outputs_length를 설정해 이를 방지한다.
+        """
+        for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
+            _exec = getattr(code_agent, _exec_attr, None)
+            if _exec is None:
+                continue
+            try:
+                cur = getattr(_exec, "max_print_outputs_length", None)
+                if cur is None or cur > max_chars:
+                    _exec.max_print_outputs_length = max_chars
+                    logger.info(f"[OutputLimit] {_exec_attr}.max_print_outputs_length = {max_chars}")
+            except Exception as e:
+                logger.debug(f"[OutputLimit] 설정 실패 ({_exec_attr}): {e}")
+            break
 
     def _patch_single_tool_guard(self, code_agent):
         """
@@ -355,6 +377,50 @@ class BattlefieldAgent:
 
         logger.info("Falling back to per-query instruction prepend")
         self._prepend_instructions = True
+
+    def reset_memory(self) -> None:
+        """
+        에이전트의 메모리·스텝 로그·Python 네임스페이스를 완전히 초기화한다.
+
+        smolagents는 agent.run() 호출 사이에도 step_logs/memory가 누적되어
+        LLM 입력 토큰이 점차 증가한다. 임무계획 실행 전에 호출하면 속도 저하를 방지한다.
+        """
+        inner = self._agent
+        # 1) 신규 smolagents API — memory.reset()
+        try:
+            if hasattr(inner, "memory") and hasattr(inner.memory, "reset"):
+                inner.memory.reset()
+                logger.debug("[reset_memory] memory.reset() 완료")
+        except Exception as e:
+            logger.debug(f"[reset_memory] memory.reset() 실패: {e}")
+
+        # 2) 구버전 smolagents — logs / step_logs 직접 클리어
+        for _attr in ("logs", "step_logs", "_logs"):
+            _obj = getattr(inner, _attr, None)
+            if isinstance(_obj, list):
+                _obj.clear()
+                logger.debug(f"[reset_memory] {_attr} cleared")
+                break
+
+        # 3) Python executor 네임스페이스 클리어 (이전 실행 변수 제거)
+        for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
+            _exec = getattr(inner, _exec_attr, None)
+            if _exec is None:
+                continue
+            for _ns_attr in ("state", "_state", "local_vars", "_local_vars"):
+                _ns = getattr(_exec, _ns_attr, None)
+                if isinstance(_ns, dict):
+                    _ns.clear()
+                    logger.debug(f"[reset_memory] {_exec_attr}.{_ns_attr} cleared")
+                    break
+            break
+
+        # 4) 대형 객체 GC 강제 수거
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
 
     def run(self, query: str, reset: bool = False) -> str:
         intent_result = classify_intent(query)

@@ -703,35 +703,9 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 except Exception:
                     pass
 
-                # smolagents CodeAgent 메모리(step_logs)와 Python 네임스페이스를 명시적으로 초기화.
-                # reset=True는 대화 기록만 초기화하고, step_logs가 남으면 context가 누적되어
-                # 재계획을 반복할수록 LLM 입력 토큰이 증가 → 점진적 속도 저하의 주원인.
-                try:
-                    _inner_agent = agent.agent
-                    # 1) smolagents memory.reset() — step_logs 제거
-                    if hasattr(_inner_agent, "memory") and hasattr(_inner_agent.memory, "reset"):
-                        _inner_agent.memory.reset()
-                        logger.info("[자동임무계획] CodeAgent memory.reset() 완료")
-                    # 2) 구버전 smolagents의 logs / step_logs 리스트 직접 클리어
-                    for _log_attr in ("logs", "step_logs", "_logs"):
-                        _log_obj = getattr(_inner_agent, _log_attr, None)
-                        if isinstance(_log_obj, list):
-                            _log_obj.clear()
-                            logger.info(f"[자동임무계획] {_log_attr} cleared")
-                            break
-                    # 3) Python executor 네임스페이스 클리어
-                    for _exec_attr in ('python_executor', 'python_interpreter', '_executor'):
-                        _exec = getattr(_inner_agent, _exec_attr, None)
-                        if _exec is not None:
-                            for _state_attr in ('state', '_state', 'local_vars', '_local_vars'):
-                                _ns = getattr(_exec, _state_attr, None)
-                                if isinstance(_ns, dict):
-                                    _ns.clear()
-                                    logger.info(f"[자동임무계획] Python executor namespace cleared ({_exec_attr}.{_state_attr})")
-                                    break
-                            break
-                except Exception as _cls_err:
-                    logger.debug(f"[자동임무계획] namespace/memory clear 실패 (무시): {_cls_err}")
+                # 에이전트 메모리 완전 초기화 — 반복 실행 시 토큰 누적 방지
+                agent.reset_memory()
+                logger.info("[자동임무계획] 에이전트 메모리 초기화 완료")
 
                 _raw_holder: list = [None]
                 _err_holder: list = [None]
@@ -1424,6 +1398,7 @@ def wargame_request_recon_plan(history: List = None):
 
     try:
         if agent is not None:
+            agent.reset_memory()  # 이전 실행 누적 토큰 제거
             try:
                 agent_response_text = str(agent.run(recon_query, reset=False))
             except Exception as e:
@@ -1595,20 +1570,8 @@ def wargame_request_attack_plan(history: List = None):
         if plan is None:
             if agent is not None:
                 try:
-                    # 이전 실행(정찰 등)의 Python namespace 잔류 변수 제거
-                    try:
-                        _inner_agent = agent.agent
-                        for _exec_attr in ('python_executor', 'python_interpreter', '_executor'):
-                            _exec = getattr(_inner_agent, _exec_attr, None)
-                            if _exec is not None:
-                                for _state_attr in ('state', '_state', 'local_vars', '_local_vars'):
-                                    _ns = getattr(_exec, _state_attr, None)
-                                    if isinstance(_ns, dict):
-                                        _ns.clear()
-                                        break
-                                break
-                    except Exception:
-                        pass
+                    # 에이전트 메모리 완전 초기화 — 이전 실행 잔류 변수·로그 제거
+                    agent.reset_memory()
                     raw = agent.agent.run(full_query, reset=True)
                     plan = _wg_planner._parse_json(str(raw))
                     if plan and "mission_plans" in plan:
