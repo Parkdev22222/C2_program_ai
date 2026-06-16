@@ -289,20 +289,49 @@ class BattlefieldAgent:
 
         smolagents 기본값은 30초인데, recon_advisor_tool / strategy_advisor_tool이
         EXAONE Deep 추론을 동기 호출하므로 쉽게 초과된다.
-        max_execution_time 속성을 직접 패치하여 5분으로 늘린다.
+        버전별로 속성명이 다를 수 있으므로 알려진 이름을 모두 시도한다.
         """
         for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
             _exec = getattr(code_agent, _exec_attr, None)
             if _exec is None:
                 continue
+            patched = False
+            for _attr in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+                if hasattr(_exec, _attr):
+                    cur = getattr(_exec, _attr)
+                    setattr(_exec, _attr, timeout_seconds)
+                    logger.info(
+                        f"[ExecTimeout] {_exec_attr}.{_attr}: {cur} → {timeout_seconds}s"
+                    )
+                    patched = True
+            if not patched:
+                # 속성이 없어도 강제로 설정 — smolagents가 getattr로 읽는 경우 동작
+                try:
+                    _exec.timeout = timeout_seconds
+                    _exec.max_execution_time = timeout_seconds
+                    logger.info(f"[ExecTimeout] {_exec_attr}: force-set timeout/max_execution_time={timeout_seconds}s")
+                except Exception as e:
+                    logger.warning(f"[ExecTimeout] 속성 설정 실패 ({_exec_attr}): {e}")
+
+            # __call__ 래핑: 속성 패치가 동작하지 않는 버전 대비
+            # smolagents가 내부적으로 threading.Timer로 타임아웃을 구현할 경우
+            # 속성 값을 읽기 전에 이미 30초 기본값이 박혀 있을 수 있다.
+            # __call__을 래핑해서 실행 직전에 타임아웃 속성을 재설정한다.
             try:
-                cur = getattr(_exec, "max_execution_time", None)
-                _exec.max_execution_time = timeout_seconds
-                logger.info(
-                    f"[ExecTimeout] {_exec_attr}.max_execution_time: {cur} → {timeout_seconds}s"
-                )
+                _orig_call = _exec.__call__
+
+                def _timeout_patched_call(code, *a, _e=_exec, _t=timeout_seconds, _orig=_orig_call, **kw):
+                    for _n in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+                        try:
+                            setattr(_e, _n, _t)
+                        except Exception:
+                            pass
+                    return _orig(code, *a, **kw)
+
+                _exec.__call__ = _timeout_patched_call
+                logger.info(f"[ExecTimeout] {_exec_attr}.__call__ 래핑 완료 (timeout={timeout_seconds}s)")
             except Exception as e:
-                logger.debug(f"[ExecTimeout] 설정 실패 ({_exec_attr}): {e}")
+                logger.warning(f"[ExecTimeout] __call__ 래핑 실패 ({_exec_attr}): {e}")
             break
 
     def _patch_executor_output_limit(self, code_agent, max_chars: int = 8000):
