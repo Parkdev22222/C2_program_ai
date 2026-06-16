@@ -1364,18 +1364,17 @@ def wargame_request_recon_plan(history: List = None):
         f"1. (완료) assess_recon_need() — 위 결과 참조\n"
         f"2. (완료) recommend_recon_routes() — 위 apply_json 참조\n"
         f"3. recon_advisor_tool 호출 — 아래 예시 코드를 그대로 사용:\n"
-        f"```py\n"
-        f"import json\n"
-        f"_apply_json = {repr(_base_apply_json)}\n"
-        f"_summary    = {repr(_base_summary)}\n"
-        f"_ctx        = {repr(_tool_context_for_deep)}\n"
-        f"deep_advice = recon_advisor_tool(\n"
-        f"    recon_routes_json=_apply_json,\n"
-        f"    recon_summary=_summary,\n"
-        f"    tool_results_context=_ctx,\n"
-        f")\n"
-        f"print(deep_advice)\n"
-        f"```\n"
+        f'```py\n'
+        f'_apply_json = """\n{_base_apply_json}\n"""\n'
+        f'_summary = """\n{_base_summary}\n"""\n'
+        f'_ctx = """\n{_tool_context_for_deep}\n"""\n'
+        f'deep_advice = recon_advisor_tool(\n'
+        f'    recon_routes_json=_apply_json,\n'
+        f'    recon_summary=_summary,\n'
+        f'    tool_results_context=_ctx,\n'
+        f')\n'
+        f'print(deep_advice)\n'
+        f'```\n'
         f"   → EXAONE Deep에게 정찰 경로 전술 검토 요청 — 이전 툴 결과 전체를 함께 제공\n\n"
         f"4. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
         f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로, EXAONE Deep 조언(Step 3)을 반영하여\n"
