@@ -45,18 +45,36 @@ def get_instruction_section(section: str) -> str:
     return "\n".join(result)
 
 
+_MAX_LEARNED_RULES = 25  # 보관할 최근 학습 규칙 최대 개수
+
+
 def append_learned_rule(rule: str) -> bool:
-    """워게임 평가 후 학습된 규칙을 [LEARNED_RULES] 섹션에 추가합니다."""
+    """워게임 평가 후 학습된 규칙을 [LEARNED_RULES] 섹션에 추가합니다.
+
+    [LEARNED_RULES] 섹션은 최근 _MAX_LEARNED_RULES 개만 보관한다.
+    시스템 프롬프트 토큰 증가로 인한 LLM 추론 속도 저하를 방지하기 위함.
+    """
     from datetime import datetime
     content = _load_custom_instructions()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     new_line = f"- [{timestamp}] {rule}"
-    if "[LEARNED_RULES]" in content:
-        content = content + f"\n{new_line}"
-    else:
-        content += f"\n[LEARNED_RULES]\n{new_line}"
-    INSTRUCTIONS_FILE.write_text(content, encoding="utf-8")
-    logger.info(f"Learned rule appended: {rule[:80]}")
+
+    if "[LEARNED_RULES]" not in content:
+        content += f"\n[LEARNED_RULES]\n# 에이전트가 워게임 평가 후 자동으로 추가하는 학습 규칙\n{new_line}"
+        INSTRUCTIONS_FILE.write_text(content, encoding="utf-8")
+        logger.info(f"Learned rule appended: {rule[:80]}")
+        return True
+
+    # [LEARNED_RULES] 섹션 분리
+    pre, _, rest = content.partition("[LEARNED_RULES]")
+    # rest = 섹션 헤더 이후 전체 텍스트 (다음 섹션까지 포함될 수 있으나 LEARNED_RULES는 파일 끝에 위치)
+    existing_lines = [ln for ln in rest.splitlines() if ln.strip().startswith("- [")]
+    existing_lines.append(new_line)
+    # 최근 N개만 유지
+    trimmed = existing_lines[-_MAX_LEARNED_RULES:]
+    new_section = "[LEARNED_RULES]\n# 에이전트가 워게임 평가 후 자동으로 추가하는 학습 규칙\n" + "\n".join(trimmed)
+    INSTRUCTIONS_FILE.write_text(pre + new_section, encoding="utf-8")
+    logger.info(f"Learned rule appended ({len(trimmed)}/{_MAX_LEARNED_RULES}): {rule[:80]}")
     return True
 
 
