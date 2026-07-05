@@ -193,17 +193,6 @@ def _update_situation_memory_if_needed(response: str):
             logger.warning(f"Failed to update situation memory: {e}")
 
 
-def _is_strategy_query(text: str) -> bool:
-    try:
-        from agent.battlefield_agent import is_strategy_query
-        return is_strategy_query(text)
-    except Exception:
-        strategy_kw = ["전략", "전술", "작전", "기동", "대응방안", "추천", "제안",
-                       "strategy", "tactics", "maneuver", "recommend"]
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in strategy_kw)
-
-
 def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]:
     if not message.strip():
         return "", history
@@ -211,24 +200,17 @@ def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[
     if agent is None:
         history.append((message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요."))
         return "", history
-    is_strategy = _is_strategy_query(message)
     history.append((message, "처리 중..."))
     try:
         response = agent.run(message)
         response_text = str(response)
         _update_situation_memory_if_needed(response_text)
-        if is_strategy:
-            response_text = _annotate_dual_model_response(response_text)
         history[-1] = (message, response_text)
     except Exception as e:
         logger.error(f"Agent run error: {e}", exc_info=True)
         history[-1] = (message, f"처리 중 오류가 발생했습니다: {e}")
     _save_ui_state(main_history=history)
     return "", history
-
-
-def _annotate_dual_model_response(response: str) -> str:
-    return response + "\n\n---\n*이 응답은 EXAONE4(상황 분석) + EXAONE Deep(전략/전술 추천)의 협업으로 생성되었습니다.*"
 
 
 _MARKER_SYMBOL = {"infantry": "circle", "apc": "square", "armor": "diamond", "helicopter": "triangle-up", "aircraft": "triangle-up", "vehicle": "square", "truck": "square", "unknown": "circle"}
@@ -586,7 +568,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
             f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
-            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
+            f"3. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
             f"4. get_wargame_situation() 호출 금지 — 전장 상황이 아래 [현재 전장 상황]에 이미 제공됨.\n"
             f"5. apply_wargame_mission_plan(dry_run=False) 호출 후 즉시 final_answer() 호출하고 종료. 추가 툴 호출 절대 금지.\n"
             f"{_sit_block}\n"
@@ -1175,13 +1157,11 @@ def wargame_request_recon_plan(history: List = None):
     Step 2. recommend_recon_routes()
             └─ 정찰부대(unit_type=정찰) 경로 생성
                → apply_json, summary, mission_plans 반환
-    Step 3. recon_advisor_tool(recon_routes_json=..., recon_summary=...)   [선택]
-            └─ EXAONE Deep 전술 검토 — 경로 개선 의견 수신
-    Step 4. 최종 정찰 임무계획 JSON 직접 생성
-            └─ Step 2·3 결과 종합 / unit_type=정찰 부대만 포함
-    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+    Step 3. 최종 정찰 임무계획 JSON 직접 생성
+            └─ Step 2 결과 기반 / unit_type=정찰 부대만 포함
+    Step 4. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 사용 금지)
-    Step 6. 응답에 최종 JSON 블록 출력
+    Step 5. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, 공격부대(Alpha/Bravo/Charlie/Echo) 임무 부여,
           정찰+공격 임무 동시 생성
@@ -1225,8 +1205,7 @@ def wargame_request_recon_plan(history: List = None):
     # 에이전트가 아래 tool을 순서대로 호출하여 직접 조회한다:
     #   1) assess_recon_need()        → OPFOR 탐지 현황 및 정찰 필요 여부
     #   2) recommend_recon_routes()   → 교전 회피 정찰 경로 + apply_json
-    #   3) recon_advisor_tool(...)    → EXAONE Deep 전술 검토
-    #   4) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
+    #   3) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
     #
     # [생성 예시]
     # ┌─────────────────────────────────────────────────────────────────┐
@@ -1261,15 +1240,8 @@ def wargame_request_recon_plan(history: List = None):
             eng.start()
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, "", fig, damage_fig, status, log_text, ""
-    _base_apply_json = _base_recon_result.get("apply_json", "")
-    _base_summary    = _base_recon_result.get("summary", "")
     _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
     _recon_json_str  = _json.dumps(_base_recon_result, ensure_ascii=False, indent=2)
-
-    _tool_context_for_deep = (
-        f"[assess_recon_need 결과]\n{_assess_json_str}\n\n"
-        f"[recommend_recon_routes 결과]\n{_recon_json_str}"
-    )
 
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
@@ -1279,27 +1251,13 @@ def wargame_request_recon_plan(history: List = None):
         f"[툴 활용 순서]\n"
         f"1. (완료) assess_recon_need() — 위 결과 참조\n"
         f"2. (완료) recommend_recon_routes() — 위 apply_json 참조\n"
-        f"3. recon_advisor_tool 호출 — 아래 예시 코드를 그대로 사용:\n"
-        f'```py\n'
-        f'_apply_json = """\n{_base_apply_json}\n"""\n'
-        f'_summary = """\n{_base_summary}\n"""\n'
-        f'_ctx = """\n{_tool_context_for_deep}\n"""\n'
-        f'deep_advice = recon_advisor_tool(\n'
-        f'    recon_routes_json=_apply_json,\n'
-        f'    recon_summary=_summary,\n'
-        f'    tool_results_context=_ctx,\n'
-        f')\n'
-        f'print(deep_advice)\n'
-        f'```\n'
-        f"   → EXAONE Deep에게 정찰 경로 전술 검토 요청 — 이전 툴 결과 전체를 함께 제공\n\n"
-        f"4. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
-        f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로, EXAONE Deep 조언(Step 3)을 반영하여\n"
-        f"      EXAONE4가 최종 mission_plans JSON을 직접 작성한다.\n"
+        f"3. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
+        f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로 최종 mission_plans JSON을 직접 작성한다.\n"
         f"   → unit_id·waypoints 좌표는 recommend_recon_routes() 결과에서 가져올 것 (임의 좌표 금지)\n"
         f"   → mission_type은 반드시 'recon', 공격부대(Alpha/Bravo/Charlie/Echo) 포함 금지\n"
-        f"5. apply_wargame_mission_plan(plan_json=<Step 4에서 생성한 JSON>, dry_run=False)\n"
+        f"4. apply_wargame_mission_plan(plan_json=<Step 3에서 생성한 JSON>, dry_run=False)\n"
         f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
-        f"6. 응답에 최종 JSON 블록 출력\n\n"
+        f"5. 응답에 최종 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
@@ -1362,11 +1320,7 @@ def wargame_request_recon_plan(history: List = None):
         plans = applied_plan.get("mission_plans", [])
         plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
         unit_lines = "\n".join(f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)" for p in plans)
-        deep_review = ""
-        review_match = _re.search(r"### 정찰 임무계획 검토 의견\\s*(.*?)(?=###|\\Z)", agent_response_text, _re.DOTALL)
-        if review_match:
-            deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
-        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
+        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
         history[-1] = (history[-1][0], result_msg)
         _save_ui_state(wg_history=history, plan_box=plan_text)
         fig, damage_fig, status, log_text = wargame_refresh()
@@ -1394,20 +1348,13 @@ def wargame_request_attack_plan(history: List = None):
                → detected 목표만 공격 대상, approximate/lost는 제외
     Step 3. get_optimal_attack_positions()
             └─ 탐지된 OPFOR 기준 최적 공격 위치·기동 방향 추천
-               → 결과를 변수에 저장 (Step 4 additional_context로 전달)
-    Step 4. strategy_advisor_tool(
-              query="공격 임무계획 전술 검토 요청",
-              additional_context=<Step 3 결과>
-            )
-            └─ EXAONE Deep이 공격 위치 결과를 검토하여 전술 조언 제공
-               → 조언을 변수에 저장 (Step 5 JSON 생성에 반영)
-    Step 5. 최종 임무계획 JSON 생성
-            └─ Step 3 공격 위치 + Step 4 EXAONE Deep 조언 종합
+    Step 4. 최종 임무계획 JSON 생성
+            └─ Step 3 공격 위치 추천을 근거로 직접 결정
                detected OPFOR만 목표 / 공중지원도 detected 위치에만
                CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
-    Step 6. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
-    Step 7. 응답에 최종 JSON 블록 출력
+    Step 6. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
           정찰부대(unit_type=정찰) 공격/flank 임무 부여 (recon 임무는 필수 포함)
@@ -2158,8 +2105,8 @@ def create_app(agent=None) -> gr.Blocks:
         # ── Header ─────────────────────────────────────────────────────
         gr.HTML(f"""
         <div class="c2-header">
-            <h1>⚔ C2 지휘통제 AI — {ui_cfg.get('title', 'EXAONE4 + EXAONE Deep')}</h1>
-            <p>{ui_cfg.get('description', '듀얼 모델 아키텍처 | EXAONE4: 상황 분석 · 응답 생성 &nbsp;|&nbsp; EXAONE Deep: 전략/전술 자문')}</p>
+            <h1>⚔ C2 지휘통제 AI — {ui_cfg.get('title', 'EXAONE4')}</h1>
+            <p>{ui_cfg.get('description', 'EXAONE4: 상황 분석 · 전략/전술 추천 · 임무계획 수립')}</p>
         </div>
         """)
         with gr.Tabs():
@@ -2171,7 +2118,7 @@ def create_app(agent=None) -> gr.Blocks:
                 memory_status_box = gr.Textbox(label="EXAONE4 상황 분석 메모리", lines=5, interactive=False)
               with gr.Column(scale=2):
                 gr.Markdown("### AI 에이전트 채팅")
-                gr.Markdown("전략/전술 관련 질문을 입력하세요. 전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.")
+                gr.Markdown("전략/전술 관련 질문을 입력하세요.")
                 chatbot = gr.Chatbot(label="대화", height=500, show_copy_button=True)
                 with gr.Row():
                     query_input = gr.Textbox(label="쿼리 입력", placeholder="예: '현재 상황에서 방어 전술을 추천해줘'", lines=2, scale=5)

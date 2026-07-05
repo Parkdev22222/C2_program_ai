@@ -2,21 +2,18 @@
 """
 vLLM 서버 기동 스크립트
 
-config/models_config.yaml의 agent_model / strategy_model 설정을 읽어
-각 모델을 OpenAI 호환 vLLM 서버(`vllm serve`)로 기동합니다.
+config/models_config.yaml의 agent_model 설정을 읽어
+EXAONE4를 OpenAI 호환 vLLM 서버(`vllm serve`)로 기동합니다.
 
 사용 예시:
-  python scripts/launch_vllm_servers.py                # 두 모델 모두 기동
-  python scripts/launch_vllm_servers.py --only agent    # EXAONE4만 기동
-  python scripts/launch_vllm_servers.py --only strategy # EXAONE Deep만 기동
-  python scripts/launch_vllm_servers.py --dry-run       # 실행할 명령만 출력
+  python scripts/launch_vllm_servers.py             # EXAONE4 서버 기동
+  python scripts/launch_vllm_servers.py --dry-run   # 실행할 명령만 출력
 
-서버는 앞 서버가 준비된 후 다음 서버를 기동하는 순차 방식이며,
-각 서버의 로그는 logs/vllm_<서버명>.log 파일에 분리 저장됩니다.
+서버 로그는 logs/vllm_<서버명>.log 파일에 저장되며,
 서버가 기동 중 죽으면 해당 로그의 마지막 부분을 자동으로 출력합니다.
 
 기동 후 애플리케이션(python main.py ui 등)을 별도 프로세스로 실행하면
-agent/model_loader.py, agent/strategy_model_loader.py가 이 서버로 요청을 보냅니다.
+agent/model_loader.py가 이 서버로 요청을 보냅니다.
 """
 import argparse
 import signal
@@ -80,28 +77,6 @@ def build_agent_command(cfg: dict) -> tuple:
     return cmd, host, port
 
 
-def build_strategy_command(cfg: dict) -> tuple:
-    """EXAONE Deep (전략/전술) vllm serve 명령을 생성합니다."""
-    serving = cfg.get("serving", {})
-    model_id = cfg.get("model_id", "LGAI-EXAONE/EXAONE-Deep-7.8B")
-    host = serving.get("host", "127.0.0.1")
-    port = int(serving.get("port", 8001))
-
-    cmd = [
-        "vllm", "serve", model_id,
-        "--host", host,
-        "--port", str(port),
-        "--served-model-name", serving.get("served_model_name", model_id),
-        "--trust-remote-code",
-        "--tensor-parallel-size", str(cfg.get("tensor_parallel_size", 1)),
-        "--gpu-memory-utilization", str(cfg.get("gpu_memory_utilization", 0.45)),
-        "--dtype", cfg.get("dtype", "bfloat16"),
-        "--max-model-len", str(cfg.get("max_model_len", 32768)),
-        "--enforce-eager",
-    ]
-    return cmd, host, port
-
-
 def wait_until_ready(
     name: str, host: str, port: int,
     proc: "subprocess.Popen" = None,
@@ -146,11 +121,7 @@ def wait_until_ready(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="vLLM 서버 기동 (EXAONE4 + EXAONE Deep)")
-    parser.add_argument(
-        "--only", choices=["agent", "strategy"],
-        help="지정한 모델 서버만 기동 (기본: 둘 다)",
-    )
+    parser = argparse.ArgumentParser(description="vLLM 서버 기동 (EXAONE4)")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="서버를 기동하지 않고 실행할 명령만 출력",
@@ -162,13 +133,8 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
-    targets = []
-    if args.only in (None, "agent"):
-        cmd, host, port = build_agent_command(config.get("agent_model", {}))
-        targets.append(("EXAONE4-agent", cmd, host, port))
-    if args.only in (None, "strategy"):
-        cmd, host, port = build_strategy_command(config.get("strategy_model", {}))
-        targets.append(("EXAONE-Deep-strategy", cmd, host, port))
+    cmd, host, port = build_agent_command(config.get("agent_model", {}))
+    targets = [("EXAONE4-agent", cmd, host, port)]
 
     if args.dry_run:
         for name, cmd, _, _ in targets:
@@ -193,9 +159,7 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # 순차 기동: 두 서버가 동시에 GPU 메모리를 프로파일링하면 가용량 계산이
-    # 어긋나 OOM이 날 수 있으므로, 앞 서버가 준비된 후 다음 서버를 기동한다.
-    # 각 서버의 stdout/stderr는 logs/vllm_<name>.log 파일로 분리 저장한다.
+    # 서버 stdout/stderr는 logs/vllm_<name>.log 파일로 분리 저장한다.
     LOG_DIR.mkdir(exist_ok=True)
     log_paths = {}
     for name, cmd, host, port in targets:

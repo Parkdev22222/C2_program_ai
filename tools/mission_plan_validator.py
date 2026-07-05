@@ -376,7 +376,6 @@ def classify_intent(query: str) -> dict:
                 "get_wargame_situation",
                 "assess_recon_need",
                 "recommend_recon_routes",
-                "recon_advisor_tool",
             ],
         }
 
@@ -388,7 +387,6 @@ def classify_intent(query: str) -> dict:
                 "get_wargame_situation",
                 "assess_recon_need",
                 "get_optimal_attack_positions",
-                "strategy_advisor_tool",
             ],
         }
 
@@ -410,14 +408,17 @@ def classify_intent(query: str) -> dict:
         return {
             "intent": "general_strategy_advice",
             "requires_confirmation": False,
-            "preferred_tools": ["strategy_advisor_tool"],
+            "preferred_tools": [
+                "get_wargame_situation",
+                "get_wargame_tactical_recommendation",
+            ],
         }
 
     if any(k in q for k in ["계획", "추천", "제안", "검토", "plan", "recommend", "suggest", "review"]):
         return {
             "intent": "planning_request",
             "requires_confirmation": False,
-            "preferred_tools": ["strategy_advisor_tool", "analyze_coa_wargame"],
+            "preferred_tools": ["get_wargame_tactical_recommendation", "analyze_coa_wargame"],
         }
 
     return {

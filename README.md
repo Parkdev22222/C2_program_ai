@@ -16,15 +16,14 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 | **UI Layer** | 파랑 | Gradio 웹 인터페이스 — AI 채팅, 워게임 시뮬레이터, 전장 지도 탭 |
 | **Agent / Planner** | 초록 | `BattlefieldAgent` (smolagents CodeAgent, EXAONE4) + `MissionPlanner` + `DetectionWorker` |
 | **Tools** | 주황·청록·보라 | 에이전트가 코드로 호출하는 도구 레이어 — 17개 도구, 스텝당 1개 제한 |
-| **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4/Deep LLM (vLLM 서빙), rdflib 온톨로지 |
+| **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
 | **Data / External** | 빨강 | 시나리오, SQLite DB, COHA 온톨로지 TTL |
 
-### 듀얼 모델 아키텍처
+### 모델 아키텍처
 
 | 모델 | 역할 |
 |------|------|
-| **EXAONE4-32B-AWQ** | 메인 CodeAgent — 상황 판단, 임무계획 수립, 최종 응답 |
-| **EXAONE Deep** | 전략·전술 전문 자문 — `strategy_advisor_tool` / `recon_advisor_tool`을 통해 EXAONE4가 호출 |
+| **EXAONE4-32B-AWQ** | 메인 CodeAgent — 상황 판단, 전략/전술 추천, 임무계획 수립, 최종 응답 |
 
 ---
 
@@ -34,7 +33,7 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 # 패키지 설치
 pip install -r requirements.txt
 
-# 1) vLLM 서버 기동 (EXAONE4 + EXAONE Deep, 별도 터미널)
+# 1) vLLM 서버 기동 (EXAONE4, 별도 터미널)
 python scripts/launch_vllm_servers.py
 
 # 2) AI 시스템 기동 (Gradio UI)
@@ -44,15 +43,14 @@ python main.py ui
 브라우저에서 출력된 Gradio URL에 접속합니다.
 
 > LLM은 애플리케이션 프로세스 내부가 아닌 별도 vLLM 서버(OpenAI 호환 API)에서 동작합니다.
-> 서버 주소는 `config/models_config.yaml`의 `agent_model.serving` / `strategy_model.serving`
-> (기본 `127.0.0.1:8000` / `127.0.0.1:8001`) 또는 환경변수
-> `C2_AGENT_VLLM_BASE_URL` / `C2_STRATEGY_VLLM_BASE_URL`로 설정합니다.
+> 서버 주소는 `config/models_config.yaml`의 `agent_model.serving`(기본 `127.0.0.1:8000`)
+> 또는 환경변수 `C2_AGENT_VLLM_BASE_URL`로 설정합니다.
 
 ### vLLM 서버 수동 실행 (nohup 백그라운드, A100 80GB 기준)
 
-런처 스크립트 대신 두 서버를 직접 띄우는 방법입니다.
+런처 스크립트 대신 서버를 직접 띄우는 방법입니다.
 `nohup` + 백그라운드(`&`)로 실행하므로 SSH/터미널을 닫아도 유지되며,
-로그는 각각 `out1.log`, `out2.log`에 기록됩니다.
+로그는 `out1.log`에 기록됩니다.
 
 ```bash
 # EXAONE4 (:8000) → out1.log
@@ -62,39 +60,27 @@ nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
   --gpu-memory-utilization 0.43 --max-model-len 33768 \
   --enable-prefix-caching \
   > out1.log 2>&1 &
-
-# EXAONE Deep (:8001) → out2.log
-nohup vllm serve LGAI-EXAONE/EXAONE-Deep-7.8B --host 127.0.0.1 --port 8001 \
-  --served-model-name exaone-deep-strategy --trust-remote-code \
-  --dtype bfloat16 --gpu-memory-utilization 0.35 --max-model-len 32768 \
-  --enable-prefix-caching \
-  > out2.log 2>&1 &
 ```
 
 ```bash
 # 로딩 진행 확인 (Ctrl+C는 tail만 종료)
 tail -f out1.log
-tail -f out2.log
 
-# 서버 준비 확인 (둘 다 200이면 준비 완료)
+# 서버 준비 확인 (200이면 준비 완료)
 curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8001/health
 ```
 
 주의 사항:
 
-- **순차 기동 권장**: 첫 번째 서버가 준비 완료(`/health` 200)된 후 두 번째를 실행하세요.
-  동시에 띄우면 GPU 메모리 프로파일링이 겹쳐 두 번째 서버가 OOM으로 죽을 수 있습니다.
 - `2>&1`이 stderr(vLLM 로그 대부분)를 로그 파일로 합쳐주므로 반드시 포함해야 합니다.
 - 재실행 시 `>`는 기존 로그를 덮어씁니다. 이어 쓰려면 `>>`로 변경하세요.
-- `--served-model-name`(`exaone4-agent` / `exaone-deep-strategy`)은
+- `--served-model-name`(`exaone4-agent`)은
   `models_config.yaml`의 `serving.served_model_name`과 일치해야 합니다.
 
 서버 종료:
 
 ```bash
-pkill -f "vllm serve"                      # 전부 종료
-pkill -f "vllm serve.*--port 8001"         # EXAONE Deep만 종료
+pkill -f "vllm serve"                      # 종료
 sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재시작
 ```
 
@@ -307,17 +293,6 @@ COHA(Command and Ontology for Hostile Action) 군사 전술 온톨로지를 rdfl
 
 ---
 
-### 7. EXAONE Deep 어드바이저 도구 (`strategy_advisor_tool.py`)
-
-EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
-
-| 도구 | 파라미터 | 설명 |
-|------|----------|------|
-| `strategy_advisor_tool(query, additional_context)` | query: 전략/전술 질문, additional_context: 보완 정보(선택) | EXAONE4의 상황 분석 + 쿼리를 EXAONE Deep에 전달하여 전략·전술 권고 생성 |
-| `recon_advisor_tool(recon_routes_json, recon_summary)` | recon_routes_json: `recommend_recon_routes()`의 apply_json, recon_summary: 경로 요약(선택) | 정찰 경로를 EXAONE Deep에 전술 검토 요청 → 수정 의견 + 최종 확정 JSON 반환 |
-
----
-
 ## 임무계획 수립 흐름
 
 ### 공격 임무계획
@@ -336,10 +311,7 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
    → 경로 차단 보너스 + 공중지원 보너스 반영 최적 공격 위치 추천
    → ontology_context: COHA 기동·화력 교리 자동 포함
 
-4. strategy_advisor_tool(...)
-   → EXAONE Deep 전술 검토
-
-5. 최종 JSON 생성
+4. 최종 JSON 생성 (get_optimal_attack_positions 결과 기반 직접 결정)
    → apply_wargame_mission_plan(plan_json, dry_run=False)
    → detected OPFOR에 공중지원(cas/strike/artillery/helicopter) 적극 배치
 ```
@@ -354,10 +326,7 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
    → 교전 회피 정찰 경로 생성
    → ontology_context: COHA ISR·지형 교리 자동 포함
 
-3. recon_advisor_tool(...)          [선택]
-   → EXAONE Deep 경로 전술 검토
-
-4. apply_wargame_mission_plan(plan_json, dry_run=False)
+3. apply_wargame_mission_plan(plan_json, dry_run=False)
    → Delta(정찰부대)만 임무 부여
 ```
 
@@ -399,8 +368,7 @@ EXAONE Deep 모델을 호출하여 전략·전술 권고를 생성합니다.
 | COA 분석 | `coa_analysis_tool.py` | 1 | 행동 방책 비교 평가 |
 | 임무계획 조회 | `mission_plan_validator_tool.py` | 1 | 승인 대기 임무계획 조회 |
 | Graph RAG | `graph_rag_tool.py` | 1 | COHA 군사 온톨로지 교리 검색 |
-| EXAONE Deep 어드바이저 | `strategy_advisor_tool.py` | 2 | 전략·전술 권고 / 정찰 경로 검토 |
-| **합계** | | **17** | |
+| **합계** | | **15** | |
 
 ---
 
@@ -411,10 +379,9 @@ C2_program_ai/
 ├── agent/
 │   ├── battlefield_agent.py       # EXAONE4 메인 에이전트 + SingleToolGuard 패치
 │   ├── vllm_client.py             # vLLM 서빙 공용 클라이언트 (OpenAI 호환 API)
-│   ├── model_loader.py            # EXAONE4 서빙 클라이언트 로더
-│   └── strategy_model_loader.py   # EXAONE Deep 서빙 클라이언트 로더
+│   └── model_loader.py            # EXAONE4 서빙 클라이언트 로더
 ├── scripts/
-│   └── launch_vllm_servers.py     # vLLM 서버 기동 (EXAONE4 :8000, EXAONE Deep :8001)
+│   └── launch_vllm_servers.py     # vLLM 서버 기동 (EXAONE4 :8000)
 ├── wargame/
 │   ├── engine.py                  # 워게임 시뮬레이션 엔진 (FOW, 교전, 공중지원, 자동재계획)
 │   ├── models.py                  # Unit, AirSupport, WargameDB 데이터 모델
@@ -433,7 +400,6 @@ C2_program_ai/
 │   ├── mission_plan_validator.py  # 임무계획 검증 엔진 (Pydantic 스키마)
 │   ├── mission_plan_validator_tool.py  # 승인 대기 조회 (1개 도구)
 │   ├── single_tool_guard.py       # 스텝당 1 도구 제한 가드
-│   ├── strategy_advisor_tool.py   # EXAONE Deep 어드바이저 (2개 도구)
 │   └── coord_utils.py             # 좌표 변환 유틸리티
 ├── ui/
 │   └── gradio_app.py              # Gradio 웹 인터페이스 + 자동 재계획 워커

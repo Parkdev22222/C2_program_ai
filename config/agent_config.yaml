@@ -4,8 +4,8 @@ code_agent:
   max_steps: 10
   planning_interval: null   # 비활성화: 에러 후 전체 재계획으로 인한 워크플로 재시작 방지
   stream_outputs: false
-  # 코드 블록 실행 타임아웃(초). smolagents 기본 30초 — 툴 안에서 EXAONE Deep
-  # 동기 추론이 돌기 때문에 넉넉히 설정 (초과 시 "Code execution exceeded ..." 에러)
+  # 코드 블록 실행 타임아웃(초). smolagents 기본 30초
+  # (초과 시 "Code execution exceeded ..." 에러)
   execution_timeout: 180
   authorized_imports:
     - "json"
@@ -63,11 +63,10 @@ gradio:
   server_name: "0.0.0.0"
   server_port: 7860
   share: false
-  title: "C2 군사 전략 AI - EXAONE4 + EXAONE Deep"
+  title: "C2 군사 전략 AI - EXAONE4"
   description: |
     군사 전략/전술 추천 시스템
-    - EXAONE4: 상황 판단 및 응답 생성
-    - EXAONE Deep: 전략 및 전술 추천 (EXAONE4의 상황 분석 기반)
+    - EXAONE4: 상황 판단, 전략/전술 추천, 임무계획 수립
   examples:
     - "현재 전장 상황에 대한 전략적 대응 방안을 추천해줘"
     - "적 기갑부대에 대한 전술적 대응 전술을 제안해줘"

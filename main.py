@@ -1,11 +1,9 @@
 """
 C2 군사 전략 AI - 메인 진입점
 
-듀얼 모델 아키텍처:
-- EXAONE4 (EXAONE-4.0-32B-AWQ): 상황 판단 메인 에이전트
-- EXAONE Deep (EXAONE-Deep-7.8B): 전략/전술 전문 모델
-  → EXAONE4가 군사 전략/전술 쿼리 감지 시 자동 호출
-  → EXAONE4의 상황 분석 결과를 기반으로 전략/전술 권고 생성
+모델 아키텍처:
+- EXAONE4 (EXAONE-4.0-32B-AWQ): 상황 판단·전략/전술 추천·임무계획 수립 메인 에이전트
+  (vLLM 서버로 서빙 — scripts/launch_vllm_servers.py)
 
 사용 예시:
   python main.py ui                          # HTML 대시보드 UI 실행 (기본 포트 7861)
@@ -28,42 +26,31 @@ logger = logging.getLogger(__name__)
 # 모델 사전 로딩 (공유 인스턴스)
 # ─────────────────────────────────────────────
 
-def preload_models(skip_strategy: bool = False):
-    """EXAONE4와 EXAONE Deep의 vLLM 서버 클라이언트를 생성합니다.
+def preload_models():
+    """EXAONE4 vLLM 서버 클라이언트를 생성합니다.
 
     모델은 별도 프로세스의 vLLM 서버에서 동작합니다.
     서버 기동: python scripts/launch_vllm_servers.py
     """
     from agent.model_loader import load_model_from_config_file
-    from agent.strategy_model_loader import load_strategy_model_from_config_file
 
     logger.info("=== vLLM 서버 클라이언트 초기화 시작 ===")
     logger.info("EXAONE4 (메인 에이전트 모델) 서버 연결 중...")
     exaone4_model = load_model_from_config_file()
     logger.info("EXAONE4 클라이언트 준비 완료")
-
-    strategy_model = None
-    if not skip_strategy:
-        logger.info("EXAONE Deep (전략/전술 전문 모델) 서버 연결 중...")
-        strategy_model = load_strategy_model_from_config_file()
-        logger.info("EXAONE Deep 클라이언트 준비 완료")
-
     logger.info("=== vLLM 서버 클라이언트 초기화 완료 ===")
-    return exaone4_model, strategy_model
+    return exaone4_model
 
 
 # ─────────────────────────────────────────────
 # 에이전트 초기화
 # ─────────────────────────────────────────────
 
-def init_agent(exaone4_model=None, strategy_model=None) -> "BattlefieldAgent":
+def init_agent(exaone4_model=None) -> "BattlefieldAgent":
     """BattlefieldAgent를 초기화합니다."""
     from agent.battlefield_agent import BattlefieldAgent
     logger.info("BattlefieldAgent 초기화 중...")
-    agent = BattlefieldAgent(
-        exaone4_model=exaone4_model,
-        strategy_model=strategy_model,
-    )
+    agent = BattlefieldAgent(exaone4_model=exaone4_model)
     logger.info("BattlefieldAgent 초기화 완료")
     return agent
 
@@ -76,8 +63,8 @@ def cmd_ui(args):
     """HTML 대시보드 UI (FastAPI + Leaflet)를 실행합니다."""
     logger.info("UI 모드 시작 — http://%s:%d", args.host, args.port)
 
-    exaone4_model, strategy_model = preload_models(skip_strategy=args.skip_strategy)
-    agent = init_agent(exaone4_model, strategy_model)
+    exaone4_model = preload_models()
+    agent = init_agent(exaone4_model)
 
     from ui.web_api import start_server
     start_server(agent=agent, host=args.host, port=args.port)
@@ -89,24 +76,14 @@ def cmd_ui(args):
 
 def cmd_query(args):
     """에이전트에 단일 쿼리를 실행합니다."""
-    from agent.battlefield_agent import BattlefieldAgent, is_strategy_query
-
-    exaone4_model, strategy_model = preload_models(
-        skip_strategy=not is_strategy_query(args.query)
-    )
-    agent = init_agent(exaone4_model, strategy_model)
+    exaone4_model = preload_models()
+    agent = init_agent(exaone4_model)
 
     print(f"\n쿼리: {args.query}")
     print("=" * 60)
 
     response = agent.run(args.query)
     print(response)
-
-    # 전략 쿼리인 경우 메모리 상태 출력
-    if is_strategy_query(args.query):
-        memory = agent.get_situation_memory()
-        if memory.get("situation_analysis"):
-            print("\n[참고] 상황 분석 메모리가 EXAONE Deep에 전달되었습니다.")
 
 
 # ─────────────────────────────────────────────
@@ -174,18 +151,10 @@ def cmd_check_env(args):
         from agent.model_loader import (
             load_exaone_model_config, AGENT_BASE_URL_ENV, AGENT_DEFAULT_PORT,
         )
-        from agent.strategy_model_loader import (
-            load_strategy_model_config, STRATEGY_BASE_URL_ENV, STRATEGY_DEFAULT_PORT,
-        )
         agent_cfg = load_exaone_model_config()
-        strategy_cfg = load_strategy_model_config()
         _check_vllm_server(
             "EXAONE4",
             resolve_base_url(agent_cfg.get("serving", {}), AGENT_BASE_URL_ENV, AGENT_DEFAULT_PORT),
-        )
-        _check_vllm_server(
-            "EXAONE Deep",
-            resolve_base_url(strategy_cfg.get("serving", {}), STRATEGY_BASE_URL_ENV, STRATEGY_DEFAULT_PORT),
         )
     except Exception as e:
         print(f"[WARN] vLLM 서버 설정 확인 실패: {e}")
@@ -218,7 +187,7 @@ def cmd_check_env(args):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="c2_ai",
-        description="C2 군사 전략 AI - EXAONE4 + EXAONE Deep 듀얼 모델 시스템",
+        description="C2 군사 전략 AI - EXAONE4 단일 모델 시스템",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -226,7 +195,6 @@ def build_parser() -> argparse.ArgumentParser:
     ui_p = subparsers.add_parser("ui", help="HTML 대시보드 UI 실행 (FastAPI + Leaflet)")
     ui_p.add_argument("--host", default="0.0.0.0")
     ui_p.add_argument("--port", type=int, default=7860)
-    ui_p.add_argument("--skip-strategy", action="store_true", help="EXAONE Deep 로딩 건너뜀")
 
     # query
     q_p = subparsers.add_parser("query", help="에이전트 쿼리 (CLI)")

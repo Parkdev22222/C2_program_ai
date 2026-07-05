@@ -31,40 +31,5 @@ agent_model:
     api_key: "EMPTY"
     request_timeout: 600
 
-# ===== EXAONE Deep 전략/전술 전문 모델 =====
-# 군사 전략 및 전술 추천 생성 전담
-# 7.8B BF16 → 실사용 ~16GB
-# EXAONE4 AWQ 수정 후: 80GB - 24GB = 56GB 여유 → 7.8B 충분히 로딩 가능
-strategy_model:
-  model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
-  tensor_parallel_size: 1
-  gpu_memory_utilization: 0.45
-  dtype: "bfloat16"
-  max_model_len: 32768             # KV 에러 시 gpu_memory_utilization을 높이거나 줄이기 (최소 4096)
-  generation:
-    temperature: 0.2
-    max_tokens: 8192
-  serving:
-    host: "127.0.0.1"
-    port: 8001
-    # base_url을 지정하면 host/port보다 우선함
-    # 환경변수 C2_STRATEGY_VLLM_BASE_URL이 최우선
-    base_url: ""
-    served_model_name: "exaone-deep-strategy"
-    api_key: "EMPTY"
-    request_timeout: 600
-
 # ===== A100 80GB 단일 GPU 예상 메모리 사용량 =====
-# EXAONE4 AWQ 32B:       24GB  (gpu_util 0.30)
-# EXAONE Deep 7.8B BF16: 36GB  (gpu_util 0.45)
-# ─────────────────────────────
-# 합계:                  ~60GB  (80GB 중 75% → 여유 20GB)
-#
-# ===== GPU 증설 시 더 큰 모델 사용 =====
-# A100 80GB × 2장:
-#   strategy_model.model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
-#   tensor_parallel_size: 2, gpu_memory_utilization: 0.80
-#
-# A100 80GB × 4장:
-#   agent_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.45
-#   strategy_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.80
+# EXAONE4 AWQ 32B: 24GB (gpu_util 0.30) — 단일 모델이므로 gpu_util을 더 올려도 됨

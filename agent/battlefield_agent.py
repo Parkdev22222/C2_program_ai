@@ -107,13 +107,11 @@ class BattlefieldAgent:
     def __init__(
         self,
         exaone4_model=None,
-        strategy_model=None,
     ):
         self._agent_config = _load_agent_config()
         self._custom_instructions = _load_custom_instructions()
 
         self._exaone4_model = exaone4_model or self._load_exaone4()
-        self._strategy_model = strategy_model or self._load_strategy_model()
 
         self._tools = self._build_tools()
         self._prepend_instructions = False
@@ -127,14 +125,6 @@ class BattlefieldAgent:
         except Exception as e:
             logger.error(f"Failed to load EXAONE4 model: {e}")
             raise
-
-    def _load_strategy_model(self):
-        try:
-            from agent.strategy_model_loader import load_strategy_model_from_config_file
-            return load_strategy_model_from_config_file()
-        except Exception as e:
-            logger.warning(f"Failed to load EXAONE Deep model: {e}. Strategy tool will fail if used.")
-            return None
 
     def _build_tools(self) -> list:
         tools = []
@@ -204,27 +194,11 @@ class BattlefieldAgent:
             logger.warning(f"Failed to load recon tools: {e}")
 
         try:
-            from tools.strategy_advisor_tool import create_strategy_advisor_tool
-            strategy_tool = create_strategy_advisor_tool(self._strategy_model)
-            tools.append(strategy_tool)
-            logger.info("Strategy advisor tool (EXAONE Deep) loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load strategy advisor tool: {e}")
-
-        try:
             from tools.graph_rag_tool import graph_rag_military_query
             tools.append(graph_rag_military_query)
             logger.info("Graph RAG military ontology tool loaded")
         except Exception as e:
             logger.warning(f"Failed to load graph RAG tool: {e}")
-
-        try:
-            from tools.strategy_advisor_tool import create_recon_advisor_tool
-            recon_advisor = create_recon_advisor_tool(self._strategy_model)
-            tools.append(recon_advisor)
-            logger.info("Recon advisor tool (EXAONE Deep route review) loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load recon advisor tool: {e}")
 
         return tools
 
@@ -266,8 +240,7 @@ class BattlefieldAgent:
         """
         Python executor의 코드 블록 실행 타임아웃을 늘린다.
 
-        smolagents 기본값은 30초인데, recon_advisor_tool / strategy_advisor_tool이
-        EXAONE Deep 추론을 동기 호출하므로 쉽게 초과된다.
+        smolagents 기본값은 30초인데, 툴 실행 시간이 이를 쉽게 초과할 수 있다.
         버전별로 속성명이 다를 수 있으므로 알려진 이름을 모두 시도한다.
         """
         for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
@@ -569,7 +542,3 @@ class BattlefieldAgent:
     @property
     def exaone4_model(self):
         return self._exaone4_model
-
-    @property
-    def strategy_model(self):
-        return self._strategy_model

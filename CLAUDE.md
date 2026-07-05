@@ -3,7 +3,7 @@
 ## 프로젝트 개요
 EXAONE4 기반 C2(지휘통제) 군사 AI 시스템.
 - **워게임 시뮬레이터**: Python 기반 5 vs 5 대대급 시뮬레이터 (SQLite 이벤트 DB)
-- **LLM 에이전트**: smolagents CodeAgent (EXAONE4 메인 + EXAONE Deep 전술 자문)
+- **LLM 에이전트**: smolagents CodeAgent (EXAONE4 단일 모델, vLLM 서빙)
 - **UI**: Gradio + Plotly 실시간 전장 지도
 
 ## 디렉토리 구조
@@ -20,7 +20,6 @@ agent/
   battlefield_agent.py   # BattlefieldAgent 래퍼 (intent 분류, 지시사항 주입)
   vllm_client.py         # vLLM 서빙 공용 클라이언트 (OpenAI 호환 API)
   model_loader.py        # EXAONE4 서빙 클라이언트 로더 (기본 :8000)
-  strategy_model_loader.py # EXAONE Deep 서빙 클라이언트 로더 (기본 :8001)
 
 scripts/
   launch_vllm_servers.py # vLLM 서버 기동 스크립트 (모델은 별도 프로세스에서 서빙)
@@ -33,7 +32,7 @@ tools/
   wargame_opfor_routes_tool.py    # predict_opfor_routes
   wargame_strategy_tool.py        # get_wargame_tactical_recommendation
   mission_plan_validator.py       # Pydantic 스키마 검증 (MissionPlanRequest)
-  strategy_advisor_tool.py        # EXAONE Deep 전술 자문 툴
+  strategy_advisor_tool.py        # 상황 분석 세션 메모리 (자문 툴은 제거됨)
 
 ui/
   gradio_app.py   # Gradio UI + 자동 재계획 워커 스레드
@@ -152,6 +151,6 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 
 - `wargame_reset_sim()` 수정 시 콜백 재등록 블록 반드시 유지
 - `waypoints` 좌표는 반드시 미터(m) 정수 (9000 O, 9 X)
-- 에이전트 자동 재계획 쿼리에서 `recommend_recon_routes` / `recon_advisor_tool` 호출 금지
+- 에이전트 자동 재계획 쿼리에서 `recommend_recon_routes` 호출 금지
 - `apply_mission_plan()` 이중 호출 금지 (툴로 적용 완료 후 UI에서 재적용 X)
 - `_wg_ensure_engine()` 대신 `wargame_reset_sim()` 에서 콜백을 관리하므로 콜백 등록 로직을 `_wg_ensure_engine()`에 추가하지 말 것
