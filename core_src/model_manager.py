@@ -13,7 +13,6 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "models_config.yaml"
 
 class ModelManager:
     _instance = None
-    _detector = None
     _embedding_generator = None
     _description_generator = None
 
@@ -26,14 +25,6 @@ class ModelManager:
     def _load_config(self) -> dict:
         with open(CONFIG_PATH) as f:
             return yaml.safe_load(f)
-
-    def get_detector(self):
-        if self._detector is None:
-            from .object_detection import ObjectDetector
-            cfg = self._config["object_detection"]
-            self._detector = ObjectDetector(cfg)
-            logger.info("ObjectDetector loaded")
-        return self._detector
 
     def get_embedding_generator(self):
         if self._embedding_generator is None:
@@ -52,14 +43,12 @@ class ModelManager:
         return self._description_generator
 
     def preload_all(self):
-        self.get_detector()
         self.get_embedding_generator()
         self.get_description_generator()
         logger.info("All ML models preloaded")
 
     def cleanup(self):
         import torch
-        self._detector = None
         self._embedding_generator = None
         self._description_generator = None
         if torch.cuda.is_available():

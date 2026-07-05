@@ -22,7 +22,6 @@ logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
-logging.getLogger("core_src.object_detection").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 

@@ -418,7 +418,6 @@ C2_program_ai/
 │   └── coord_utils.py             # 좌표 변환 유틸리티
 ├── core_src/
 │   ├── video_analysis_system.py   # 영상 분석 시스템 (YOLO + SmolVLM2)
-│   ├── object_detection.py        # 객체 탐지·추적
 │   ├── embedding_generator.py     # MobileCLIP 임베딩
 │   └── event_description.py       # SmolVLM2 이벤트 설명 생성
 ├── ui/

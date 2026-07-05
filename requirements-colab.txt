@@ -39,7 +39,6 @@ open_clip_torch
 
 # Computer Vision (headless — Colab은 디스플레이 없음)
 opencv-python-headless>=4.8.0
-supervision>=0.20.0
 
 # Graph RAG / Ontology
 rdflib>=6.0.0

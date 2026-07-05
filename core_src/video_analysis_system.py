@@ -1,6 +1,6 @@
 """
 비디오 분석 시스템 - 전체 파이프라인 오케스트레이터
-업로드 → 세그먼트 분할 → 객체 탐지 → 임베딩 생성 → 이벤트 설명
+업로드 → 세그먼트 분할 → 임베딩 생성 → 이벤트 설명
 """
 import cv2
 import uuid
@@ -22,7 +22,6 @@ class VideoAnalysisSystem:
     def __init__(
         self,
         collection_name: str = "default",
-        detector=None,
         embedding_generator=None,
         description_generator=None,
     ):
@@ -30,14 +29,12 @@ class VideoAnalysisSystem:
         self._load_configs()
 
         # 공유 모델 인스턴스 사용 (None이면 ModelManager에서 로딩)
-        self._owned_models = (detector is None)
-        if detector is None:
+        self._owned_models = (embedding_generator is None)
+        if embedding_generator is None:
             mm = ModelManager()
-            self.detector = mm.get_detector()
             self.embedding_generator = mm.get_embedding_generator()
             self.description_generator = mm.get_description_generator()
         else:
-            self.detector = detector
             self.embedding_generator = embedding_generator
             self.description_generator = description_generator
 
@@ -122,19 +119,8 @@ class VideoAnalysisSystem:
         key_frame_idx = len(frames) // 2
         key_frame = frames[key_frame_idx]
 
-        # SAM3 추적: 세그먼트 전체 프레임 추적 (track_segment 지원 시)
-        # 결과에서 키 프레임 탐지만 det_dicts로 추출하여 DB 저장에 활용
-        if hasattr(self.detector, "track_segment"):
-            tracked = self.detector.track_segment(frames)
-            # 키 프레임과 가장 가까운 프레임 결과 선택
-            det_dicts = []
-            if tracked:
-                # 키 프레임 인덱스와 가장 근접한 결과 선택
-                best = min(tracked, key=lambda r: abs(r["frame_index"] - key_frame_idx))
-                det_dicts = best["detections"]
-        else:
-            dets = self.detector.detect(key_frame)
-            det_dicts = [d.to_dict() for d in dets]
+        # 객체 탐지 제거됨 — 세그먼트는 임베딩·설명만 생성 (DB 스키마 호환을 위해 빈 목록 유지)
+        det_dicts = []
 
         # 임베딩 생성 (키 프레임 기준)
         embedding = self.embedding_generator.generate([key_frame])[0]
