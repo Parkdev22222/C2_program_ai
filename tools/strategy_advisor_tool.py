@@ -253,8 +253,10 @@ class StrategyAdvisorTool(Tool):
             return (
                 f"[EXAONE Deep 전략 모델 호출 실패]\n"
                 f"오류: {e}\n\n"
-                f"전략/전술 추천을 위해 EXAONE Deep 모델이 필요합니다. "
-                f"모델 설정을 확인해주세요."
+                f"이 툴을 재시도하지 마세요. "
+                f"EXAONE Deep 조언 없이, 이미 확보한 툴 계산 결과"
+                f"(get_wargame_situation, assess_recon_need, get_optimal_attack_positions 등)만으로 "
+                f"최종 임무계획 JSON을 직접 생성하고 apply_wargame_mission_plan으로 즉시 적용하세요."
             )
 
     def _extract_text(self, response: Any) -> str:
@@ -399,7 +401,12 @@ class ReconAdvisorTool(Tool):
             return advice_text
         except Exception as e:
             logger.error(f"EXAONE Deep call failed in ReconAdvisorTool: {e}")
-            return f"[EXAONE Deep 호출 실패: {e}]\n초기 경로를 그대로 활용하세요."
+            return (
+                f"[EXAONE Deep 호출 실패: {e}]\n"
+                f"이 툴을 재시도하지 마세요. "
+                f"recommend_recon_routes()가 반환한 초기 경로(apply_json)를 그대로 사용하여 "
+                f"최종 정찰 임무계획 JSON을 생성하고 apply_wargame_mission_plan으로 즉시 적용하세요."
+            )
 
     def _extract_text(self, response) -> str:
         if isinstance(response, str):
