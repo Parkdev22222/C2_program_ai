@@ -17,6 +17,7 @@ env/
 # Runtime data
 data/wargame_state.db
 data/*.db
+config/ui_state.json
 
 # Logs
 *.log
