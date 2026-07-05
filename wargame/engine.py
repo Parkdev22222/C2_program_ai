@@ -114,6 +114,16 @@ _OPFOR_DEFEND_MIN_SEP = 3_000.0
 _BLUFOR_APPROX_CX = 8_000.0
 _BLUFOR_APPROX_CY = 8_000.0
 
+# ── 은밀 기동(발각 회피) 경로 파라미터 ────────────────────────────────
+# LLM이 준 임무 waypoint의 각 구간을 적 정찰 발각 위험이 낮은 경로로 확장한다.
+_STEALTH_STEP_M       = 800.0    # 위험 적분 시 경로 샘플 간격(m)
+_STEALTH_EXPOSURE_W   = 0.15     # 지형 노출(엄폐 부족) 기본 위험 가중치
+_STEALTH_MIN_LEG_M    = 2_000.0  # 이보다 짧은 구간은 우회 분할 중단
+_STEALTH_MAX_DEPTH    = 3        # 구간 재귀 분할 최대 깊이
+_STEALTH_OFFSETS_M    = (1_500.0, 3_000.0, 5_000.0)  # 측방 우회 후보 크기
+# 우회로 위험 적분이 직선 대비 이 비율 미만이어야 채택 (약간의 우회는 허용)
+_STEALTH_IMPROVE_RATIO = 0.98
+
 
 # ── 모듈 레벨 헬퍼 ────────────────────────────────────────────────────
 
@@ -383,15 +393,24 @@ class WargameEngine:
                     wps = [[float(p[0]), float(p[1])] for p in mp.get("waypoints", [])]
                 except Exception:
                     wps = [[float(p["x"]), float(p["y"])] for p in mp.get("waypoints", [])]
+                # BLUFOR 하위 제대: LLM이 준 목표 waypoint는 유지하되,
+                # 각 구간(현위치→A, A→B, ...)을 적 정찰 발각 위험이 낮은
+                # 은밀 기동 경로로 확장한다.
+                raw_wp_count = len(wps)
+                if u.side == "BLUFOR" and wps:
+                    wps = self._stealth_expand_waypoints(u, wps)
                 u.waypoints       = wps
                 u.current_action  = mp.get("mission_type", "move")
                 if u.side == "BLUFOR" and wps:
                     self._blufor_llm_units.add(uid)
                     u.mission_lock_ticks = 30  # 신규 임무 발령 → 30틱간 AI 개입 차단
                 self.db.update_unit(u)
+                _wp_note = (f"{len(wps)}개 WP"
+                            if len(wps) == raw_wp_count
+                            else f"{len(wps)}개 WP (은밀경로 확장 {raw_wp_count}→{len(wps)})")
                 self.db.log_event(
                     self.tick, self.game_time, "ORDER",
-                    f"{uid} 임무부여: {u.current_action} → {len(wps)}개 WP",
+                    f"{uid} 임무부여: {u.current_action} → {_wp_note}",
                 )
 
     # ── FOW 인텔 ─────────────────────────────────────────────────────
@@ -1187,6 +1206,125 @@ class WargameEngine:
             sum(u.x for u in alive) / len(alive),
             sum(u.y for u in alive) / len(alive),
         )
+
+    # ── 은밀 기동(발각 회피) 경로 생성 ────────────────────────────────
+    # LLM 임무계획의 목표 waypoint는 유지하되, 각 구간을 적 정찰 발각
+    # 위험이 낮은 우회 경로로 확장한다. 위험은 엔진 탐지 모델과 동일한
+    # 요소(적과의 거리·LOS 차폐·지형 엄폐)로 평가한다.
+
+    def _opfor_threat_sources(self, observer: str = "BLUFOR") -> List[Tuple[float, float, float]]:
+        """
+        아군(observer)이 인지한 적 위치를 발각 위협원으로 반환.
+
+        각 원소 = (x, y, 탐지반경). 적 정찰부대는 탐지반경이 커서
+        자동으로 넓게 회피된다. detected/approximate 인텔만 사용
+        (아직 탐지 못한 적은 정확히 회피 불가 — 지형 엄폐로 보완).
+        """
+        threats: List[Tuple[float, float, float]] = []
+        for e in self._intelligence.get(observer, {}).values():
+            if e.get("status") not in ("detected", "approximate"):
+                continue
+            rng = _DETECT_RANGE.get(e.get("unit_type", ""), 3_000.0)
+            threats.append((e["known_x"], e["known_y"], rng))
+        return threats
+
+    def _point_detection_risk(
+        self, px: float, py: float,
+        threats: List[Tuple[float, float, float]],
+    ) -> float:
+        """지점 (px,py)의 발각 위험 점수 (낮을수록 은밀)."""
+        try:
+            cover = terrain.cover_factor(px, py)
+        except Exception:
+            cover = 0.0
+        # 미지의 관측자 대비 기본 노출 위험 (엄폐 부족할수록 높음)
+        risk = (1.0 - cover) * _STEALTH_EXPOSURE_W
+        for tx, ty, rng in threats:
+            d = math.hypot(px - tx, py - ty)
+            if d >= rng:
+                continue
+            prox = 1.0 - d / rng               # 가까울수록 1에 근접
+            los  = _los_quality(tx, ty, px, py)  # 시선 개방 시 발각 쉬움
+            risk += prox * (0.3 + 0.7 * los)     # 차폐돼도 완전 0은 아님
+        return risk
+
+    def _segment_risk(
+        self, ax: float, ay: float, bx: float, by: float,
+        threats: List[Tuple[float, float, float]],
+    ) -> float:
+        """구간 A→B를 따라 위험을 적분(샘플 합)한 값. 경로가 길수록 누적된다."""
+        seg = math.hypot(bx - ax, by - ay)
+        n = max(1, int(seg / _STEALTH_STEP_M))
+        total = 0.0
+        for i in range(1, n + 1):
+            t = i / n
+            sx = ax + (bx - ax) * t
+            sy = ay + (by - ay) * t
+            total += self._point_detection_risk(sx, sy, threats) * (seg / n)
+        return total
+
+    def _stealth_leg(
+        self, ax: float, ay: float, bx: float, by: float,
+        threats: List[Tuple[float, float, float]], depth: int = 0,
+    ) -> List[List[float]]:
+        """
+        구간 A→B를 발각 위험이 낮은 우회 경로로 확장.
+        반환: A를 제외하고 B로 끝나는 중간·도착 waypoint 리스트.
+        """
+        straight = self._segment_risk(ax, ay, bx, by, threats)
+        seg_len = math.hypot(bx - ax, by - ay)
+        if depth >= _STEALTH_MAX_DEPTH or seg_len < _STEALTH_MIN_LEG_M:
+            return [[bx, by]]
+
+        # 구간에 수직인 단위벡터 (측방 우회 방향)
+        ux, uy = (bx - ax) / seg_len, (by - ay) / seg_len
+        perp_x, perp_y = -uy, ux
+        mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+
+        best_cost = straight
+        best_point = None
+        for off in _STEALTH_OFFSETS_M:
+            for sign in (1.0, -1.0):
+                cx = max(0.0, min(29_999.0, mx + perp_x * off * sign))
+                cy = max(0.0, min(29_999.0, my + perp_y * off * sign))
+                cost = (self._segment_risk(ax, ay, cx, cy, threats)
+                        + self._segment_risk(cx, cy, bx, by, threats))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_point = (cx, cy)
+
+        # 우회가 직선 대비 충분히 개선될 때만 채택 (사소한 우회는 무시)
+        if best_point is None or best_cost >= straight * _STEALTH_IMPROVE_RATIO:
+            return [[bx, by]]
+
+        cx, cy = best_point
+        left  = self._stealth_leg(ax, ay, cx, cy, threats, depth + 1)
+        right = self._stealth_leg(cx, cy, bx, by, threats, depth + 1)
+        return left + right
+
+    def _stealth_expand_waypoints(
+        self, unit: "Unit", raw_wps: List[List[float]],
+    ) -> List[List[float]]:
+        """
+        LLM이 준 목표 waypoint 리스트를 은밀 기동 경로로 확장.
+        현위치→첫 WP, 그리고 각 WP 사이 구간을 발각 회피 경로로 치환한다.
+        목표 지점 자체(원본 WP)는 항상 경로에 유지된다.
+        """
+        try:
+            threats = self._opfor_threat_sources(observer=unit.side)
+            if not threats:
+                return raw_wps  # 인지된 적 없음 → 원본 유지
+            expanded: List[List[float]] = []
+            cx, cy = unit.x, unit.y
+            for wp in raw_wps:
+                gx, gy = float(wp[0]), float(wp[1])
+                leg = self._stealth_leg(cx, cy, gx, gy, threats)
+                expanded.extend(leg)
+                cx, cy = gx, gy
+            return expanded if expanded else raw_wps
+        except Exception as e:
+            logger.warning(f"은밀 경로 확장 실패 (원본 경로 사용): {e}")
+            return raw_wps
 
     def _opfor_recon_phase(self, active_opfor: list):
         """

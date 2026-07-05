@@ -92,6 +92,15 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 - **잠금 해제 후에도** `_blufor_llm_units`에 있고 `waypoints`가 남아 있으면 AI 개입 차단 (경로 덮어쓰기 방지)
 - 모든 waypoint 완주 시 `_blufor_llm_units`에서 제거
 
+## BLUFOR 은밀 기동 경로 확장
+
+- `apply_mission_plan()`에서 BLUFOR 부대의 LLM waypoint를 `_stealth_expand_waypoints()`로 확장
+- LLM이 준 **목표 지점(원본 WP)은 항상 유지**하고, 각 구간(현위치→A, A→B, …)만 발각 위험이 낮은 우회 경로로 치환
+- 발각 위험 = 엔진 탐지 모델과 동일 요소: 적과의 거리 / LOS 차폐(`_los_quality`) / 지형 엄폐(`cover_factor`)
+- 위협원 = 아군 인텔의 OPFOR(`detected`/`approximate`) — 적 정찰(`_DETECT_RANGE` 8km)이 자동으로 넓게 회피됨
+- 인지된 적이 없으면 원본 waypoint 그대로 사용, OPFOR·룰기반 이동에는 미적용
+- 파라미터: `engine.py:_STEALTH_*` (샘플 간격, 우회 후보 크기, 재귀 깊이 등)
+
 ## 공중지원 처리 주의사항
 
 - `pending → active` 전환 시 초과 시간을 `eff_dt = elapsed - delay`로 carry-over
