@@ -287,13 +287,6 @@ def test_intent_attack_planning():
     return f"intent={result['intent']}"
 
 
-def test_intent_video_query():
-    from tools.mission_plan_validator import classify_intent
-    result = classify_intent("드론 영상에서 탐지된 객체를 분석해줘")
-    assert result["intent"] == "video_query"
-    return f"intent={result['intent']}"
-
-
 def test_intent_situation_query():
     from tools.mission_plan_validator import classify_intent
     result = classify_intent("현재 전투 현황을 알려줘")
@@ -378,7 +371,6 @@ ALL_CASES = [
     ("intent/execution_request", test_intent_execution_request),
     ("intent/recon_planning", test_intent_recon_planning),
     ("intent/attack_planning", test_intent_attack_planning),
-    ("intent/video_query", test_intent_video_query),
     ("intent/situation_query", test_intent_situation_query),
     ("intent/no_confirmation_for_recon", test_intent_no_confirmation_for_recon),
     ("coa/basic", test_coa_analysis_basic),

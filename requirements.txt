@@ -1,10 +1,6 @@
-# ─── Core Framework ───────────────────────────────────────────
+# ─── Core ──────────────────────────────────────────────────────
+# torch는 check-env의 GPU 확인 및 vLLM 서버 기동 머신에서 사용
 torch>=2.0.0
-torchvision
-# EXAONE4 architecture requires transformers 4.48+
-# vLLM 0.7+ fixed ProcessorMixin import (no longer requires <4.48)
-transformers>=4.48.0
-accelerate
 
 # ─── smolagents (Agent Framework) ────────────────────────────
 smolagents>=1.0.0
@@ -15,18 +11,11 @@ smolagents>=1.0.0
 vllm>=0.7.0
 openai>=1.0.0
 
-# ─── Computer Vision ──────────────────────────────────────────
+# ─── 지형/수치 계산 ───────────────────────────────────────────
 opencv-python-headless>=4.8.0
 Pillow>=10.0.0
 scipy
-
-# ─── Embeddings & Search ─────────────────────────────────────
-faiss-cpu>=1.7.4
 numpy>=1.24.0,<2.0.0
-open_clip_torch
-
-# ─── PDF Processing (for RAG) ────────────────────────────────
-PyPDF2>=3.0.0
 
 # ─── Graph RAG / Ontology ─────────────────────────────────────
 rdflib>=6.0.0
@@ -38,8 +27,6 @@ plotly>=5.0.0
 
 # ─── Utilities ────────────────────────────────────────────────
 pyyaml>=6.0
-huggingface-hub>=0.20.0
-anthropic>=0.25.0
 
 # NOTE: torchaudio is NOT listed here.
 # In Colab, vllm may upgrade torch to a newer CUDA version while

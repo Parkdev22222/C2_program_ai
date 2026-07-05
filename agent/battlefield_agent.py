@@ -108,18 +108,9 @@ class BattlefieldAgent:
         self,
         exaone4_model=None,
         strategy_model=None,
-        videodb_manager=None,
-        embedding_generator=None,
-        pdf_rag_system=None,
     ):
         self._agent_config = _load_agent_config()
         self._custom_instructions = _load_custom_instructions()
-        self._videodb_manager = videodb_manager
-        self._embedding_generator = embedding_generator
-        self._pdf_rag_system = pdf_rag_system
-
-        self._selected_video_ids: List[str] = []
-        self._selected_pdf_ids: List[str] = []
 
         self._exaone4_model = exaone4_model or self._load_exaone4()
         self._strategy_model = strategy_model or self._load_strategy_model()
@@ -147,24 +138,6 @@ class BattlefieldAgent:
 
     def _build_tools(self) -> list:
         tools = []
-
-        try:
-            from tools.videodb_query_tool import (
-                get_selected_contexts, query_video_semantic, query_video_by_object,
-                query_video_by_event, get_video_summary, get_segment_details, set_active_videos,
-            )
-            tools.extend([get_selected_contexts, query_video_semantic, query_video_by_object,
-                          query_video_by_event, get_video_summary, get_segment_details, set_active_videos])
-            logger.info("VideoDB query tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load videodb tools: {e}")
-
-        try:
-            from tools.pdf_rag_tool import pdf_rag_search, add_pdf_to_rag
-            tools.extend([pdf_rag_search, add_pdf_to_rag])
-            logger.info("PDF RAG tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load PDF RAG tools: {e}")
 
         try:
             from tools.wargame_query_tool import (
@@ -557,33 +530,6 @@ class BattlefieldAgent:
             )
 
         return query
-
-    def set_video_context(self, video_ids: List[str]):
-        self._selected_video_ids = video_ids
-        try:
-            from tools.videodb_query_tool import set_selected_video_ids
-            set_selected_video_ids(video_ids)
-        except Exception as e:
-            logger.warning(f"Failed to update videodb tool context: {e}")
-        logger.info(f"Video context set: {video_ids}")
-
-    def set_pdf_context(self, pdf_ids: List[str]):
-        self._selected_pdf_ids = pdf_ids
-        try:
-            from tools.pdf_rag_tool import set_selected_pdfs
-            set_selected_pdfs(pdf_ids)
-        except Exception as e:
-            logger.warning(f"Failed to update PDF tool context: {e}")
-        logger.info(f"PDF context set: {pdf_ids}")
-
-    def add_pdf(self, pdf_path: str) -> str:
-        try:
-            from tools.pdf_rag_tool import add_pdf_to_rag
-            result = add_pdf_to_rag(pdf_path)
-            return str(result)
-        except Exception as e:
-            logger.error(f"Failed to add PDF: {e}")
-            return f"PDF 추가 실패: {e}"
 
     def get_situation_memory(self) -> dict:
         from tools.strategy_advisor_tool import get_situation_memory

@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 _session_memory: dict = {
     "situation_analysis": None,   # 가장 최근 EXAONE4 상황 분석 텍스트
-    "video_ids": [],              # 분석에 사용된 영상 ID 목록
     "analysis_timestamp": None,   # 분석 시각
 }
 
@@ -30,10 +29,10 @@ def update_situation_memory(analysis_text: str, video_ids: list = None):
     """
     EXAONE4가 상황 분석을 완료한 후 호출하여 세션 메모리를 갱신합니다.
     gradio_app.py 또는 battlefield_agent.py에서 호출됩니다.
+    (video_ids 인자는 하위 호환용으로만 남아 있으며 무시됩니다.)
     """
     from datetime import datetime
     _session_memory["situation_analysis"] = analysis_text
-    _session_memory["video_ids"] = video_ids or []
     _session_memory["analysis_timestamp"] = datetime.now().isoformat()
     logger.info("Situation memory updated with latest EXAONE4 analysis")
 
@@ -46,7 +45,6 @@ def get_situation_memory() -> dict:
 def clear_situation_memory():
     """세션 메모리를 초기화합니다."""
     _session_memory["situation_analysis"] = None
-    _session_memory["video_ids"] = []
     _session_memory["analysis_timestamp"] = None
 
 
@@ -118,7 +116,7 @@ NO_SITUATION_TEMPLATE = """## 병종 상성 및 추천 기동 경로 (워게임 
 
 {user_query}
 
-주의: 사전 영상 분석 결과가 없습니다. 워게임 전술 데이터와 일반 군사 원칙에 기반하여 답변합니다."""
+주의: 사전 상황 분석 결과가 없습니다. 워게임 전술 데이터와 일반 군사 원칙에 기반하여 답변합니다."""
 
 
 class StrategyAdvisorTool(Tool):
@@ -135,8 +133,7 @@ class StrategyAdvisorTool(Tool):
     description = (
         "군사 전략 및 전술 추천을 위해 EXAONE Deep 전문 모델을 호출합니다. "
         "전략, 전술, 작전계획, 기동방안, 화력지원, 방어계획 등 군사적 행동 권고가 필요할 때 사용하세요. "
-        "이 툴은 이전에 EXAONE4가 수행한 전장 상황 분석 결과를 자동으로 EXAONE Deep에 전달하므로, "
-        "반드시 먼저 영상 분석을 수행한 후에 이 툴을 사용해야 합니다."
+        "이 툴은 이전에 EXAONE4가 수행한 전장 상황 분석 결과를 자동으로 EXAONE Deep에 전달합니다."
     )
     inputs = {
         "query": {

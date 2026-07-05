@@ -79,7 +79,6 @@ def _convert_latlon_plan_to_meters(plan: dict) -> dict:
     return plan
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
-SAMPLES_DIR = Path(__file__).parent.parent / "samples"
 
 
 def _load_ui_config() -> dict:
@@ -88,9 +87,6 @@ def _load_ui_config() -> dict:
 
 
 _agent = None
-_video_analysis_system = None
-_analyzed_videos: List[dict] = []
-_active_video_ids: List[str] = []
 _last_situation_analysis: str = ""
 
 _wg_engine: Optional["WargameEngine"] = None
@@ -185,13 +181,13 @@ def _is_situation_analysis_response(response: str) -> bool:
     return matched >= 2
 
 
-def _update_situation_memory_if_needed(response: str, video_ids: List[str] = None):
+def _update_situation_memory_if_needed(response: str):
     global _last_situation_analysis
     if _is_situation_analysis_response(response):
         _last_situation_analysis = response
         try:
             from tools.strategy_advisor_tool import update_situation_memory
-            update_situation_memory(response, video_ids or _active_video_ids)
+            update_situation_memory(response)
             logger.info("Situation memory updated from EXAONE4 analysis response")
         except Exception as e:
             logger.warning(f"Failed to update situation memory: {e}")
@@ -208,82 +204,6 @@ def _is_strategy_query(text: str) -> bool:
         return any(kw in text_lower for kw in strategy_kw)
 
 
-def analyze_video(video_file, collection_name: str, progress=gr.Progress()):
-    global _video_analysis_system, _analyzed_videos, _active_video_ids
-    choices = _get_video_list_choices()
-    if video_file is None:
-        return "영상 파일을 먼저 업로드하세요.", gr.update(choices=choices, value=choices)
-    try:
-        progress(0.1, desc="영상 분석 시스템 초기화 중...")
-        if _video_analysis_system is None:
-            from core_src.video_analysis_system import VideoAnalysisSystem
-            _video_analysis_system = VideoAnalysisSystem(collection_name=collection_name or "default")
-        progress(0.3, desc="비디오 분석 중...")
-        summary = _video_analysis_system.analyze_video(
-            video_path=video_file.name if hasattr(video_file, "name") else str(video_file),
-        )
-        video_id = summary["video_id"]
-        _analyzed_videos.append({"video_id": video_id, "filename": Path(video_file.name if hasattr(video_file, "name") else str(video_file)).name, "summary": summary})
-        _active_video_ids = [v["video_id"] for v in _analyzed_videos]
-        try:
-            from tools.videodb_query_tool import set_selected_video_ids, register_videodb_manager, register_video_collection
-            set_selected_video_ids(_active_video_ids)
-            register_videodb_manager(collection_name or "default", _video_analysis_system.videodb)
-            register_video_collection(video_id, collection_name or "default")
-        except Exception as e:
-            logger.warning(f"Failed to update tool context: {e}")
-        if _agent:
-            _agent.set_video_context(_active_video_ids)
-        progress(1.0, desc="분석 완료!")
-        total_dets = summary.get("total_detections", 0)
-        result_msg = (f"✓ 영상 분석 완료\n  - 비디오 ID: {video_id}\n  - 총 길이: {summary.get('duration', 0):.1f}초\n  - 세그먼트 수: {summary.get('segment_count', 0)}개\n  - 탐지된 객체 수: {total_dets}건\n\n이제 채팅창에서 영상에 대해 질문하거나 전략/전술 추천을 요청할 수 있습니다.")
-        new_choices = _get_video_list_choices()
-        return result_msg, gr.update(choices=new_choices, value=new_choices)
-    except Exception as e:
-        logger.error(f"Video analysis error: {e}", exc_info=True)
-        choices = _get_video_list_choices()
-        return f"분석 오류: {e}", gr.update(choices=choices, value=choices)
-
-
-def _get_video_list_choices() -> list:
-    return [f"{v['video_id']} - {v['filename']}" for v in _analyzed_videos]
-
-
-def _get_sample_video_choices() -> list:
-    SAMPLES_DIR.mkdir(exist_ok=True)
-    exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-    return sorted(p.name for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in exts)
-
-
-def analyze_sample_video(sample_name: str, collection_name: str, progress=gr.Progress()):
-    if not sample_name:
-        choices = _get_video_list_choices()
-        return "예시 영상을 선택하세요.", gr.update(choices=choices, value=choices)
-    sample_path = SAMPLES_DIR / sample_name
-    if not sample_path.exists():
-        choices = _get_video_list_choices()
-        return f"파일을 찾을 수 없습니다: {sample_name}", gr.update(choices=choices, value=choices)
-    class _FileLike:
-        def __init__(self, path): self.name = str(path)
-    return analyze_video(_FileLike(sample_path), collection_name, progress)
-
-
-def update_active_videos(selected_items: List[str]) -> str:
-    global _active_video_ids
-    _active_video_ids = []
-    for item in (selected_items or []):
-        vid = item.split(" - ")[0].strip()
-        _active_video_ids.append(vid)
-    try:
-        from tools.videodb_query_tool import set_selected_video_ids
-        set_selected_video_ids(_active_video_ids)
-    except Exception as e:
-        logger.warning(f"Failed to update video context: {e}")
-    if _agent:
-        _agent.set_video_context(_active_video_ids)
-    return f"활성 비디오: {len(_active_video_ids)}개 선택됨"
-
-
 def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]:
     if not message.strip():
         return "", history
@@ -292,15 +212,11 @@ def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[
         history.append((message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요."))
         return "", history
     is_strategy = _is_strategy_query(message)
-    if is_strategy and not _last_situation_analysis:
-        warning = ("[안내] 전략/전술 추천을 위해서는 먼저 군사 영상을 분석하는 것을 권장합니다.\n")
-        history.append((message, warning + "처리 중..."))
-    else:
-        history.append((message, "처리 중..."))
+    history.append((message, "처리 중..."))
     try:
         response = agent.run(message)
         response_text = str(response)
-        _update_situation_memory_if_needed(response_text, _active_video_ids)
+        _update_situation_memory_if_needed(response_text)
         if is_strategy:
             response_text = _annotate_dual_model_response(response_text)
         history[-1] = (message, response_text)
@@ -1913,7 +1829,7 @@ def get_situation_memory_status() -> str:
             ts = memory.get("analysis_timestamp", "")
             preview = memory["situation_analysis"][:200] + "..."
             return f"상황 분석 메모리 활성 (분석 시각: {ts})\n\n미리보기:\n{preview}"
-        return "상황 분석 메모리가 비어 있습니다. 먼저 영상 분석을 수행하세요."
+        return "상황 분석 메모리가 비어 있습니다. 채팅으로 전장 상황 분석을 먼저 요청하세요."
     except Exception as e:
         return f"메모리 상태 조회 오류: {e}"
 
@@ -2250,35 +2166,21 @@ def create_app(agent=None) -> gr.Blocks:
           with gr.Tab("🎖️ AI 에이전트"):
             with gr.Row():
               with gr.Column(scale=1):
-                gr.Markdown("### 영상 분석")
-                gr.Markdown("##### 직접 업로드")
-                video_upload = gr.File(label="군사 영상 업로드 (mp4, avi, mov)", file_types=[".mp4", ".avi", ".mov", ".mkv"])
-                collection_input = gr.Textbox(label="콜렉션명", value="default", placeholder="콜렉션 이름 입력")
-                analyze_btn = gr.Button("영상 분석 시작", variant="primary")
-                gr.Markdown("##### 예시 영상")
-                sample_dropdown = gr.Dropdown(label="예시 영상 선택", choices=_get_sample_video_choices(), value=None, interactive=True)
-                with gr.Row():
-                    sample_refresh_btn = gr.Button("목록 새로고침", scale=1)
-                    sample_analyze_btn = gr.Button("예시 영상 분석", variant="primary", scale=2)
-                analysis_status = gr.Textbox(label="분석 상태", lines=6, interactive=False)
-                gr.Markdown("### 분석된 영상 목록")
-                video_list = gr.CheckboxGroup(label="쿼리할 영상 선택", choices=[], value=[])
-                video_select_status = gr.Textbox(label="선택 상태", value="선택된 비디오 없음", interactive=False)
                 gr.Markdown("### 상황 분석 메모리")
                 memory_status_btn = gr.Button("메모리 상태 확인")
                 memory_status_box = gr.Textbox(label="EXAONE4 상황 분석 메모리", lines=5, interactive=False)
               with gr.Column(scale=2):
                 gr.Markdown("### AI 에이전트 채팅")
-                gr.Markdown("영상 분석 및 전략/전술 관련 질문을 입력하세요. 전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.")
+                gr.Markdown("전략/전술 관련 질문을 입력하세요. 전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.")
                 chatbot = gr.Chatbot(label="대화", height=500, show_copy_button=True)
                 with gr.Row():
-                    query_input = gr.Textbox(label="쿼리 입력", placeholder="예: '영상에서 탐지된 적 기갑부대를 분석해줘' 또는 '현재 상황에서 방어 전술을 추천해줘'", lines=2, scale=5)
+                    query_input = gr.Textbox(label="쿼리 입력", placeholder="예: '현재 상황에서 방어 전술을 추천해줘'", lines=2, scale=5)
                     send_btn = gr.Button("전송", variant="primary", scale=1)
                 with gr.Row():
                     clear_btn = gr.Button("대화 초기화", variant="secondary")
                     clear_status = gr.Textbox(label="", value="", interactive=False, scale=3)
                 gr.Markdown("### 예시 쿼리")
-                example_queries = ui_cfg.get("examples", ["영상에서 탐지된 적 전력을 분석해줘", "현재 전장 상황에 대한 전략적 대응 방안을 추천해줘", "적 기갑부대에 대한 전술적 대응 방안을 제안해줘", "아군 방어 진지 구축을 위한 전략을 수립해줘"])
+                example_queries = ui_cfg.get("examples", ["현재 전장 상황에 대한 전략적 대응 방안을 추천해줘", "적 기갑부대에 대한 전술적 대응 방안을 제안해줘", "아군 방어 진지 구축을 위한 전략을 수립해줘"])
                 gr.Examples(examples=[[q] for q in example_queries], inputs=[query_input], label="클릭하여 예시 쿼리 입력")
           with gr.Tab("⚔️ 워게임 시뮬레이터"):
             if not _WARGAME_OK:
@@ -2350,10 +2252,6 @@ def create_app(agent=None) -> gr.Blocks:
                     map_refresh_btn = gr.Button("🔄 새로고침", variant="primary")
                     gr.Markdown("**마커 범례**\n- 🔵 원 = BLUFOR 보병\n- 🔵 사각 = BLUFOR APC/차량\n- 🔵 다이아 = BLUFOR 장갑\n- 🔴 원 = OPFOR 보병\n- 🔴 사각 = OPFOR APC/차량\n- 🔴 다이아 = OPFOR 장갑\n- 큰 다이아 = 그룹 지휘관 위치\n\n**좌표계**\nx = 동쪽(m), y = 북쪽(m)\nAltis 맵 기준 (0 ~ 30,000m)")
             map_timer = gr.Timer(value=10)
-        analyze_btn.click(fn=analyze_video, inputs=[video_upload, collection_input], outputs=[analysis_status, video_list])
-        sample_analyze_btn.click(fn=analyze_sample_video, inputs=[sample_dropdown, collection_input], outputs=[analysis_status, video_list])
-        sample_refresh_btn.click(fn=lambda: gr.update(choices=_get_sample_video_choices()), outputs=[sample_dropdown])
-        video_list.change(fn=update_active_videos, inputs=[video_list], outputs=[video_select_status])
         send_btn.click(fn=chat, inputs=[query_input, chatbot], outputs=[query_input, chatbot])
         query_input.submit(fn=chat, inputs=[query_input, chatbot], outputs=[query_input, chatbot])
         clear_btn.click(fn=clear_chat_history, outputs=[chatbot, clear_status])

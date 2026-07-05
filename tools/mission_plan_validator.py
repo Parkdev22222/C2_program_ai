@@ -368,18 +368,6 @@ def classify_intent(query: str) -> dict:
             "preferred_tools": ["apply_wargame_mission_plan"],
         }
 
-    # 영상/비디오 쿼리 (정찰 키워드보다 먼저 검사)
-    if any(k in q for k in ["영상", "비디오", "video", "탐지 객체", "segment", "구간", "클립"]):
-        return {
-            "intent": "video_query",
-            "requires_confirmation": False,
-            "preferred_tools": [
-                "get_selected_contexts",
-                "query_video_semantic",
-                "query_video_by_object",
-            ],
-        }
-
     if any(k in q for k in ["정찰", "탐지", "recon", "reconnaissance", "위치 확인", "감시"]):
         return {
             "intent": "recon_planning",

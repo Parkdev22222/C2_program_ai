@@ -1,21 +1,5 @@
-# ===== 임베딩 모델 =====
-embedding:
-  model_name: "apple/MobileCLIP-S2"
-  image_size: 336
-  embedding_dim: 512        # open_clip MobileCLIP-S2: 512 / CLIP-ViT-L/14 fallback: 768
-  device: "cuda"
-  batch_size: 8
-
-# ===== 이벤트 설명 모델 (경량 VLM) =====
-event_description:
-  model_name: "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-  device: "cuda"
-  temperature: 0.7
-  max_new_tokens: 512
-  batch_size: 4
-
 # ===== EXAONE4 메인 에이전트 모델 =====
-# 상황 분석, 비디오 이해, 최종 응답 생성 담당
+# 상황 분석, 최종 응답 생성 담당
 # AWQ 4bit → 실사용 ~18GB
 #
 # vLLM 서빙 구조: 모델은 별도 프로세스의 vLLM 서버가 로드하고,
@@ -72,11 +56,9 @@ strategy_model:
 
 # ===== A100 80GB 단일 GPU 예상 메모리 사용량 =====
 # EXAONE4 AWQ 32B:       24GB  (gpu_util 0.30)
-# EXAONE Deep 7.8B BF16: 28GB  (gpu_util 0.35)
-# SmolVLM2 2.2B:          5GB
-# CLIP/embedding:          2GB
+# EXAONE Deep 7.8B BF16: 36GB  (gpu_util 0.45)
 # ─────────────────────────────
-# 합계:                  ~59GB  (80GB 중 74% → 여유 21GB)
+# 합계:                  ~60GB  (80GB 중 75% → 여유 20GB)
 #
 # ===== GPU 증설 시 더 큰 모델 사용 =====
 # A100 80GB × 2장:

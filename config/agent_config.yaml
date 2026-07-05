@@ -58,16 +58,6 @@ strategy_keywords:
     - "course of action"
     - "COA"
 
-# ===== RAG 설정 =====
-rag:
-  vector_db: "faiss"
-  chunk_size: 512
-  chunk_overlap: 50
-  top_k: 5
-  similarity_threshold: 0.7
-  pdf_storage_path: "./data/pdfs"
-  faiss_index_path: "./data/faiss_index"
-
 # ===== Gradio UI 설정 =====
 gradio:
   server_name: "0.0.0.0"
@@ -75,12 +65,10 @@ gradio:
   share: false
   title: "C2 군사 전략 AI - EXAONE4 + EXAONE Deep"
   description: |
-    군사 영상 분석 및 전략/전술 추천 시스템
-    - EXAONE4: 영상 분석 및 상황 판단
+    군사 전략/전술 추천 시스템
+    - EXAONE4: 상황 판단 및 응답 생성
     - EXAONE Deep: 전략 및 전술 추천 (EXAONE4의 상황 분석 기반)
   examples:
-    - "영상에서 탐지된 적 전력을 분석해줘"
     - "현재 전장 상황에 대한 전략적 대응 방안을 추천해줘"
     - "적 기갑부대에 대한 전술적 대응 전술을 제안해줘"
     - "아군 방어 진지 구축을 위한 전략을 수립해줘"
-    - "영상에 포착된 병력 이동 경로를 분석해줘"
