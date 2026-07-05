@@ -48,6 +48,56 @@ python main.py ui
 > (기본 `127.0.0.1:8000` / `127.0.0.1:8001`) 또는 환경변수
 > `C2_AGENT_VLLM_BASE_URL` / `C2_STRATEGY_VLLM_BASE_URL`로 설정합니다.
 
+### vLLM 서버 수동 실행 (nohup 백그라운드, A100 80GB 기준)
+
+런처 스크립트 대신 두 서버를 직접 띄우는 방법입니다.
+`nohup` + 백그라운드(`&`)로 실행하므로 SSH/터미널을 닫아도 유지되며,
+로그는 각각 `out1.log`, `out2.log`에 기록됩니다.
+
+```bash
+# EXAONE4 (:8000) → out1.log
+nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
+  --served-model-name exaone4-agent --trust-remote-code \
+  --quantization awq_marlin --dtype float16 \
+  --gpu-memory-utilization 0.43 --max-model-len 33768 \
+  --enable-prefix-caching \
+  > out1.log 2>&1 &
+
+# EXAONE Deep (:8001) → out2.log
+nohup vllm serve LGAI-EXAONE/EXAONE-Deep-7.8B --host 127.0.0.1 --port 8001 \
+  --served-model-name exaone-deep-strategy --trust-remote-code \
+  --dtype bfloat16 --gpu-memory-utilization 0.35 --max-model-len 32768 \
+  --enable-prefix-caching \
+  > out2.log 2>&1 &
+```
+
+```bash
+# 로딩 진행 확인 (Ctrl+C는 tail만 종료)
+tail -f out1.log
+tail -f out2.log
+
+# 서버 준비 확인 (둘 다 200이면 준비 완료)
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8001/health
+```
+
+주의 사항:
+
+- **순차 기동 권장**: 첫 번째 서버가 준비 완료(`/health` 200)된 후 두 번째를 실행하세요.
+  동시에 띄우면 GPU 메모리 프로파일링이 겹쳐 두 번째 서버가 OOM으로 죽을 수 있습니다.
+- `2>&1`이 stderr(vLLM 로그 대부분)를 로그 파일로 합쳐주므로 반드시 포함해야 합니다.
+- 재실행 시 `>`는 기존 로그를 덮어씁니다. 이어 쓰려면 `>>`로 변경하세요.
+- `--served-model-name`(`exaone4-agent` / `exaone-deep-strategy`)은
+  `models_config.yaml`의 `serving.served_model_name`과 일치해야 합니다.
+
+서버 종료:
+
+```bash
+pkill -f "vllm serve"                      # 전부 종료
+pkill -f "vllm serve.*--port 8001"         # EXAONE Deep만 종료
+sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재시작
+```
+
 ---
 
 ## 워게임 시뮬레이터
