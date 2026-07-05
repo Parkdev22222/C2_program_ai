@@ -1238,6 +1238,7 @@ def wargame_request_recon_plan(history: List = None):
         history.append(("🔍 정찰 임무계획 요청", msg))
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, "", fig, damage_fig, status, log_text, ""
+    _base_apply_json = _base_recon_result.get("apply_json", "")
     _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
     _recon_json_str  = _json.dumps(_base_recon_result, ensure_ascii=False, indent=2)
 
