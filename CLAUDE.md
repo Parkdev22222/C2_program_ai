@@ -58,15 +58,16 @@ config/
 
 ## 자동 재계획 이벤트 시스템
 
-세 가지 이벤트가 `_detection_queue`로 들어가고 `_detection_worker` 스레드가 처리한다.
+네 가지 이벤트가 `_detection_queue`로 들어가고 `_detection_worker` 스레드가 처리한다.
 
 ```
-("detection",    enemy_id, unit_type, x, y)         # 신규 OPFOR 탐지
-("cp_threshold", unit_id, unit_type, threshold, cp)  # BLUFOR CP 70%/30% 이하
-("air_hit",      unit_id, unit_type, call_sign, cp)  # BLUFOR OPFOR 공중지원 피격
+("detection",    enemy_id, unit_type, x, y)             # 신규 OPFOR 탐지
+("cp_threshold", unit_id, unit_type, threshold, cp)      # BLUFOR CP 70%/30% 이하
+("air_hit",      unit_id, unit_type, call_sign, cp)      # BLUFOR OPFOR 공중지원 피격
+("target_moved", unit_id, unit_type, target_id, dist_m)  # 담당 표적 1km+ 이동 (접근 중)
 ```
 
-**콜백 등록 규칙**: `wargame_reset_sim()` 에서 항상 세 콜백을 재등록한다.
+**콜백 등록 규칙**: `wargame_reset_sim()` 에서 항상 네 콜백을 재등록한다.
 새 이벤트 유형 추가 시 → `wargame_reset_sim()` 의 콜백 등록 블록에도 추가 필요.
 
 ## WargameEngine 주요 메서드
@@ -83,7 +84,18 @@ engine.get_intelligence_report(side)     # 탐지 인텔 보고서
 engine.on_new_opfor_detection: Callable  # (enemy_id, unit_type, x, y)
 engine.on_blufor_cp_threshold: Callable  # (unit_id, unit_type, threshold_pct, current_cp)
 engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, current_cp)
+engine.on_target_moved: Callable         # (unit_id, unit_type, target_id, moved_dist_m)
 ```
+
+## BLUFOR 표적 추격 (target_unit_id)
+
+- 임무계획의 `mission_plans[].target_unit_id`로 각 공격부대(attack/flank)가 담당할 적 부대 지정
+- `apply_mission_plan()`에서 부대에 `target_unit_id` 저장 + 발령 시점 표적 인지 위치를 `target_ref_x/y`에 스냅샷
+- **경유지(waypoints) 완주 후** `_on_waypoints_empty()`가 표적의 현재 인지 위치로 지속 추격 (`_PURSUE_REACQUIRE_M`=60m 이상 이동 시 재기동), `u.pursuing=True`
+- 추격 중에는 `_blufor_llm_units` 유지 + `pursuing` 플래그로 룰 AI 개입 차단
+- 표적이 격멸/탐지상실(lost)되면 추격 종료 → hold 전환
+- **접근 중(추격 전, waypoints 남음)** 표적이 `_TARGET_MOVE_REPLAN_M`=1000m 이상 이동하면 `_check_target_moved()`가 `on_target_moved` 콜백을 부대별 1회 발동 → LLM 공격 재계획
+- 표적 위치는 아군 인텔(`detected`/`approximate`)의 `known_x/known_y` 기준 (FOW 준수)
 
 ## BLUFOR LLM 임무 잠금
 
@@ -116,6 +128,7 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
     {
       "company_id": "Alpha",
       "mission_type": "attack|defend|flank|withdraw|hold|recon",
+      "target_unit_id": "Red1",
       "waypoints": [[x_m, y_m], ...],
       "objective": "임무 목표 설명"
     }
@@ -133,6 +146,7 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 ```
 
 - `waypoints`는 `[x, y]` 리스트 또는 `{"x": x, "y": y}` 딕셔너리 모두 허용 (validator에서 자동 변환)
+- `target_unit_id` (선택): attack/flank 부대가 담당·추격할 적 부대 ID. 경유지 완주 후 이 표적을 지속 추격
 - `target` 좌표는 반드시 `get_wargame_situation()`에서 조회한 탐지된 OPFOR 실제 좌표 사용
 - `apply_mission_plan()`은 `mission_plans`에 포함된 부대만 업데이트 (선택적 재배정)
 

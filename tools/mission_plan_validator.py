@@ -47,6 +47,7 @@ try:
         mission_type: str
         waypoints: List[Waypoint]
         objective: str
+        target_unit_id: Optional[str] = None   # 이 부대가 담당·추격할 적 부대 ID
 
         @validator("company_id")
         def _check_company_id(cls, v):

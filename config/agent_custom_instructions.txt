@@ -144,10 +144,25 @@ print(result)
        - 반환값을 attack_positions_result 변수에 저장
 4단계: 최종 임무계획 JSON 생성
        - attack_positions_result의 추천 위치·공격 수단·추천 부대를 근거로 직접 결정
+       - ★ attack/flank 부대는 "target_unit_id"에 담당할 detected OPFOR unit_id를 반드시 명시 ★
+         · waypoints는 표적으로의 접근 경유지이며, 부대는 경유지 통과 후 표적을 지속 추격·공격한다
+         · 표적이 이동하면 부대가 자동으로 따라가므로, waypoints에 표적 예상위치를 억지로 넣지 말 것
        - det_status='detected'인 OPFOR에만 공중지원(air_support_plans) 할당
        - det_status='approximate' 또는 'lost'인 OPFOR은 공중지원 목표 제외
 5단계: apply_wargame_mission_plan(plan_json=final_json, dry_run=False) → 즉시 워게임 적용
 6단계: 응답에 임무계획 JSON 블록 출력
+```
+
+공격 임무계획 JSON 예시 (target_unit_id 필수):
+```json
+{
+  "mission_plans": [
+    {"company_id": "Alpha", "mission_type": "attack",
+     "target_unit_id": "Red1",
+     "waypoints": [[38.07, 127.12], [38.08, 127.13]],
+     "objective": "Red1 격멸 — 능선 우회 접근 후 추격"}
+  ]
+}
 ```
 
 ## 중요 규칙

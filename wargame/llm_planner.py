@@ -212,9 +212,12 @@ def build_mission_query(state: dict) -> str:
            continue
        # attack_positions_result에서 이 부대에 권고된 공격 위치 찾기
        # (recommended_units에 부대 ID가 포함된 항목 우선)
+       # ★ attack/flank 임무는 담당할 적 부대를 target_unit_id로 반드시 명시 ★
+       #   (detected OPFOR unit_id). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
        mission_plans.append({{
            "company_id": unit["unit_id"],
            "mission_type": "<attack_positions_result 기반으로 직접 결정: attack|flank|defend|withdraw|hold>",
+           "target_unit_id": "<담당 detected OPFOR unit_id — attack/flank일 때 필수, 그 외 생략>",
            "waypoints": [[<attack_positions_result의 lat>, <lon>], ...],  # 위경도 소수점6자리
            "objective": "<detected OPFOR unit_id 목표 또는 방어 목표>"
        }})
@@ -250,6 +253,11 @@ def build_mission_query(state: dict) -> str:
    조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
    예: Red1 위치가 known_lat=37.074775, known_lon=127.141013 이면 → "target": [37.074775, 127.141013]
+⚠️ [담당 표적 지정 규칙]
+   • mission_type이 attack 또는 flank인 부대는 "target_unit_id"에 담당할 detected OPFOR unit_id를 반드시 명시
+   • 부대는 waypoints(경유지)를 통과한 뒤 target_unit_id 부대의 현재 위치를 지속 추격·공격한다
+   • waypoints는 표적으로의 은밀·유리한 접근 경로(경유지)이고, 최종 교전 위치는 표적 실시간 위치로 자동 갱신됨
+   • defend/withdraw/hold/recon 부대는 target_unit_id 생략
 [규칙] 좌표는 반드시 위경도(WGS84) 소수점 6자리, WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려
 ⚠️ [공중지원 적극 활용 규칙] 교전 초반 위치 확인(detected) 적에게 공중지원 적극 투사
    - 공중지원 잔여 횟수>0이면 detected OPFOR 1개 이상에 반드시 air_support_plans 할당
@@ -263,7 +271,8 @@ def build_mission_query(state: dict) -> str:
 {{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
 "mission_plans":[
   {{"company_id":"Delta","mission_type":"recon","waypoints":[[위도소수,경도소수]],"objective":"측방 관측·추적 또는 미탐지 부대 확인"}},
-  {{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[위도소수,경도소수]],"objective":"목표"}}
+  {{"company_id":"실제부대ID","mission_type":"attack|flank","target_unit_id":"담당 detected OPFOR ID","waypoints":[[위도소수,경도소수]],"objective":"목표"}},
+  {{"company_id":"실제부대ID","mission_type":"defend|withdraw|hold","waypoints":[[위도소수,경도소수]],"objective":"목표"}}
 ],
 "air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[위도소수,경도소수],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""

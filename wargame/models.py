@@ -83,6 +83,12 @@ class Unit:
     color: str = "blue"                # UI 색상
     unit_type: str = ""                # "기계화보병" | "전차" | "정찰" | "대전차" | "자주포"
     mission_lock_ticks: int = 0        # 신규 임무 발령 후 룰 기반 AI 차단 잔여 틱 수 (0=해제)
+    # ── 표적 추적 (BLUFOR 공격 임무) — DB 미영속 (런타임 전용) ──────────
+    target_unit_id: Optional[str] = None   # 이 부대가 공격·추격할 적 부대 ID
+    target_ref_x: Optional[float] = None   # 임무 발령 시점 표적 인지 위치 x (재계획 트리거 기준)
+    target_ref_y: Optional[float] = None   # 임무 발령 시점 표적 인지 위치 y
+    target_replan_fired: bool = False      # 표적 이동 재계획 콜백 1회 발동 여부
+    pursuing: bool = False                 # LLM 경유지 완주 후 표적 지속 추격 중 여부
 
     # ── 파생 속성 ──────────────────────────────────────────────────
 

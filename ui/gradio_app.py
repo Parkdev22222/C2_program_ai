@@ -297,6 +297,8 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
         # BLUFOR 유닛 공중지원 피격 임무계획 콜백 등록
         _wg_engine.on_blufor_air_hit = _air_hit_enqueue
+        # 담당 표적 1km+ 이동 시 공격 재계획 콜백 등록
+        _wg_engine.on_target_moved = _target_moved_enqueue
     return _wg_engine
 
 
@@ -348,6 +350,7 @@ def wargame_apply_custom_scenario(scenario_config: dict) -> dict:
         _wg_engine.on_new_opfor_detection = _detection_enqueue
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
         _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+        _wg_engine.on_target_moved        = _target_moved_enqueue
         _wg_last_plan = {}
 
         logger.info("사용자 정의 시나리오 적용 완료: BLUFOR %d개, OPFOR %d개",
@@ -383,6 +386,13 @@ def _air_hit_enqueue(unit_id: str, unit_type: str,
                                  call_sign, current_cp))
 
 
+def _target_moved_enqueue(unit_id: str, unit_type: str,
+                          target_id: str, moved_dist: float):
+    """담당 표적이 1km+ 이동 시 엔진 틱 스레드에서 호출 — 공격 재계획 큐잉."""
+    _detection_queue.put_nowait(("target_moved", unit_id, unit_type,
+                                 target_id, moved_dist))
+
+
 def _execute_auto_attack_plan(event_type: str, *args):
     """
     신규 OPFOR 탐지 / BLUFOR CP 임계값 / BLUFOR 공중지원 피격 시 공격임무계획 재수립.
@@ -391,6 +401,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
     event_type == "detection"    : args = (enemy_id, unit_type, x, y)
     event_type == "cp_threshold" : args = (unit_id, unit_type, threshold_pct, current_cp)
     event_type == "air_hit"      : args = (unit_id, unit_type, call_sign, current_cp)
+    event_type == "target_moved" : args = (unit_id, unit_type, target_id, moved_dist)
     """
     eng = _wg_engine
     if eng is None:
@@ -424,6 +435,20 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"다른 부대로 임무를 인계할지 전술적으로 판단하여 최적 임무계획을 조언해주세요."
         )
         log_tag = f"CP 임계값: {unit_id}({unit_type}) {threshold_pct:.0f}% 이하 (현재 {current_cp:.1f}%)"
+    elif event_type == "target_moved":
+        unit_id, unit_type, target_id, moved_dist = args
+        trigger_desc = (
+            f"⚠️ [표적 이동 트리거] 아군 {unit_id}({unit_type})의 담당 표적 "
+            f"{target_id}이(가) 임무 발령 시점 대비 {moved_dist/1000:.1f}km 이동했다.\n"
+            f"기존 경유지가 표적 현위치와 어긋났으니 공격 임무계획을 재판단하라."
+        )
+        strategy_hint = (
+            f"아군 {unit_id}({unit_type})의 담당 표적 {target_id}이(가) "
+            f"{moved_dist/1000:.1f}km 이동하여 기존 접근 경로가 유효하지 않습니다. "
+            f"{target_id}의 현재 탐지 위치를 기준으로 {unit_id}의 접근 경유지·공격 방향을 "
+            f"재산정하고, 필요 시 담당 표적 재지정 여부도 판단하여 조언해주세요."
+        )
+        log_tag = f"표적 이동: {unit_id}({unit_type}) 담당표적 {target_id} {moved_dist/1000:.1f}km 이동"
     else:  # air_hit
         unit_id, unit_type, call_sign, current_cp = args
         trigger_desc = (
@@ -723,6 +748,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 _cur_eng.on_new_opfor_detection = _detection_enqueue
                 _cur_eng.on_blufor_cp_threshold = _cp_threshold_enqueue
                 _cur_eng.on_blufor_air_hit      = _air_hit_enqueue
+                _cur_eng.on_target_moved        = _target_moved_enqueue
         except Exception:
             pass
         if was_running and not eng.running:
@@ -1131,6 +1157,7 @@ def wargame_reset_sim():
     _wg_engine.on_new_opfor_detection = _detection_enqueue
     _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
     _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+    _wg_engine.on_target_moved        = _target_moved_enqueue
     _wg_last_plan = {}
     # 재계획 쿨다운 리셋 — 엔진 틱이 0으로 초기화되므로 _last_replan_tick도 초기화
     # (초기화 전 값이 남아 있으면 쿨다운 계산에서 음수가 나와 30틱 내 이벤트가 모두 차단됨)
