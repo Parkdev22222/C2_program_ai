@@ -34,3 +34,4 @@ Thumbs.db
 # DEM 캐시 (AWS Terrarium 타일 — 자동 다운로드)
 data/korea_dem_*.npy
 data/korea_dem_*.json
+logs/
