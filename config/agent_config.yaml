@@ -4,6 +4,9 @@ code_agent:
   max_steps: 10
   planning_interval: null   # 비활성화: 에러 후 전체 재계획으로 인한 워크플로 재시작 방지
   stream_outputs: false
+  # 코드 블록 실행 타임아웃(초). smolagents 기본 30초 — 툴 안에서 EXAONE Deep
+  # 동기 추론이 돌기 때문에 넉넉히 설정 (초과 시 "Code execution exceeded ..." 에러)
+  execution_timeout: 180
   authorized_imports:
     - "json"
     - "numpy"

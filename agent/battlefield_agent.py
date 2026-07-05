@@ -261,6 +261,7 @@ class BattlefieldAgent:
 
         ca_cfg = self._agent_config.get("code_agent", {})
         valid_params = inspect.signature(CodeAgent.__init__).parameters
+        exec_timeout = ca_cfg.get("execution_timeout", 180)
 
         kwargs = {
             "tools": self._tools,
@@ -273,6 +274,11 @@ class BattlefieldAgent:
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
 
+        # smolagents ≥1.16: executor_kwargs로 LocalPythonExecutor(timeout_seconds=...)에
+        # 직접 전달하는 것이 정식 경로 (기본 MAX_EXECUTION_TIME_SECONDS=30초)
+        if "executor_kwargs" in valid_params:
+            kwargs["executor_kwargs"] = {"timeout_seconds": exec_timeout}
+
         agent = CodeAgent(**kwargs)
 
         if self._custom_instructions:
@@ -280,10 +286,10 @@ class BattlefieldAgent:
 
         self._patch_single_tool_guard(agent)
         self._patch_executor_output_limit(agent)
-        self._patch_executor_timeout(agent)
+        self._patch_executor_timeout(agent, timeout_seconds=exec_timeout)
         return agent
 
-    def _patch_executor_timeout(self, code_agent, timeout_seconds: int = 300):
+    def _patch_executor_timeout(self, code_agent, timeout_seconds: int = 180):
         """
         Python executor의 코드 블록 실행 타임아웃을 늘린다.
 
@@ -296,7 +302,7 @@ class BattlefieldAgent:
             if _exec is None:
                 continue
             patched = False
-            for _attr in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+            for _attr in ("timeout_seconds", "timeout", "max_execution_time", "_timeout", "execution_timeout"):
                 if hasattr(_exec, _attr):
                     cur = getattr(_exec, _attr)
                     setattr(_exec, _attr, timeout_seconds)
@@ -321,7 +327,7 @@ class BattlefieldAgent:
                 _orig_call = _exec.__call__
 
                 def _timeout_patched_call(code, *a, _e=_exec, _t=timeout_seconds, _orig=_orig_call, **kw):
-                    for _n in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+                    for _n in ("timeout_seconds", "timeout", "max_execution_time", "_timeout", "execution_timeout"):
                         try:
                             setattr(_e, _n, _t)
                         except Exception:
