@@ -524,18 +524,14 @@ class WargameEngine:
                                 logger.error(f"on_new_opfor_detection 콜백 오류: {_cb_err}")
                 else:
                     if entry.get("ever_detected"):
-                        # 한 번이라도 탐지된 부대: 탐지 상실 없이 Dead Reckoning으로 위치 추정 유지
-                        vx, vy = self._unit_velocity.get(enemy.id, (0.0, 0.0))
-                        entry["known_x"] = max(0.0, min(29_999.0,
-                            entry["known_x"] + vx * dt))
-                        entry["known_y"] = max(0.0, min(29_999.0,
-                            entry["known_y"] + vy * dt))
-                        tsl = entry.get("ticks_since_lost", 0)
-                        if tsl > 0:  # 시야 이탈 후 시간 경과에 따라 미약한 위치 오차 누적
-                            noise = min(tsl * _DR_NOISE_PER_TICK * 0.3, 800.0)
-                            entry["known_x"] += random.uniform(-noise, noise)
-                            entry["known_y"] += random.uniform(-noise, noise)
-                        entry["ticks_since_lost"] = tsl + 1
+                        # 한 번이라도 탐지된 부대: 지속 추적 —
+                        # 실제 위치·전투력을 매 틱 동기화하여
+                        # 지도 마커·패널 게이지·공중지원 목표 좌표가 실제와 일치하도록 유지
+                        entry["known_x"] = enemy.x
+                        entry["known_y"] = enemy.y
+                        entry["combat_power"] = round(enemy.combat_power, 1)
+                        entry["unit_type"] = enemy.unit_type
+                        entry["ticks_since_lost"] = 0
                         entry["status"] = "detected"  # 탐지 상태 유지
                     elif entry["status"] == "detected":
                         entry["status"] = "lost"
@@ -1182,31 +1178,49 @@ class WargameEngine:
             # ③ 이미 결정된 임무 재실행 (주기적 갱신)
             self._execute_opfor_strategy(active_opfor, detected_blu)
 
+    def _blufor_centroid(self) -> Tuple[float, float]:
+        """생존 BLUFOR 부대의 중심 좌표. 없으면 배치 구역 추정 중심을 반환."""
+        alive = [u for u in self.units if u.side == "BLUFOR" and u.is_active()]
+        if not alive:
+            return _BLUFOR_APPROX_CX, _BLUFOR_APPROX_CY
+        return (
+            sum(u.x for u in alive) / len(alive),
+            sum(u.y for u in alive) / len(alive),
+        )
+
     def _opfor_recon_phase(self, active_opfor: list):
         """
         정찰 단계.
         - 정찰부대(max_speed ≥ 4.0): BLUFOR 방향으로 전진
         - 자주포: 간접사격 진지 유지
         - 그 외: 현위치 경계
+
+        기동 목표는 생존 BLUFOR 중심 방향으로 잡되, 남은 거리 이상으로
+        전진하지 않도록 제한하여 목표점 주변 왕복(오버슈트)을 방지한다.
         """
+        blu_cx, blu_cy = self._blufor_centroid()
+
         for u in active_opfor:
             if u.unit_type == "자주포":
-                self._ai_standoff(u, _BLUFOR_APPROX_CX, _BLUFOR_APPROX_CY, "OPFOR_AI")
+                self._ai_standoff(u, blu_cx, blu_cy, "OPFOR_AI")
                 continue
 
             if u.max_speed >= 4.0:  # 정찰부대
                 # 기존 경로 완주 여부 확인 후 새 경유지 부여
                 if u.waypoints and u.current_action == "recon":
                     continue  # 이미 기동 중
-                angle  = math.atan2(_BLUFOR_APPROX_CY - u.y, _BLUFOR_APPROX_CX - u.x)
-                # 현재 위치에서 BLUFOR 방향으로 6~10 km 전진
-                adv    = random.uniform(6_000, 10_000)
+                dist_to_blu = math.hypot(blu_cx - u.x, blu_cy - u.y)
+                angle  = math.atan2(blu_cy - u.y, blu_cx - u.x)
+                # BLUFOR 방향으로 전진 — 남은 거리(2km 여유)를 넘지 않도록 제한
+                adv    = min(random.uniform(6_000, 10_000),
+                             max(dist_to_blu - 2_000, 2_000))
                 rx     = max(0, min(29_999, u.x + math.cos(angle) * adv))
                 ry     = max(0, min(29_999, u.y + math.sin(angle) * adv))
-                # 측방 변화를 주어 지그재그 정찰
+                # 측방 변화를 주어 지그재그 정찰 (전진 거리에 비례해 축소)
                 perp   = angle + random.choice([-1, 1]) * math.pi / 4
-                rx    += math.cos(perp) * random.uniform(0, 2_000)
-                ry    += math.sin(perp) * random.uniform(0, 2_000)
+                zig    = min(2_000, adv * 0.25)
+                rx    += math.cos(perp) * random.uniform(0, zig)
+                ry    += math.sin(perp) * random.uniform(0, zig)
                 rx, ry = max(0, min(29_999, rx)), max(0, min(29_999, ry))
                 u.waypoints      = [[rx, ry]]
                 u.current_action = "recon"
@@ -1264,9 +1278,10 @@ class WargameEngine:
         non_spg = [u for u in active_opfor if u.unit_type != "자주포"]
         spg     = [u for u in active_opfor if u.unit_type == "자주포"]
 
-        # 자주포: 후방 간접사격 진지 유지
+        # 자주포: 후방 간접사격 진지 유지 (실제 BLUFOR 중심 방향 기준)
+        blu_cx, blu_cy = self._blufor_centroid()
         for u in spg:
-            self._ai_standoff(u, _BLUFOR_APPROX_CX, _BLUFOR_APPROX_CY, "OPFOR_AI")
+            self._ai_standoff(u, blu_cx, blu_cy, "OPFOR_AI")
 
         # 방어 위치 최초 할당
         if not self._opfor_defend_positions:
