@@ -1,27 +1,33 @@
 """
 EXAONE Deep 전략/전술 전문 모델 로더
 
-smolagents VLLMModel은 trust_remote_code를 vLLM 엔진에 전달하지 못하는 버그가 있어,
-vllm.LLM을 직접 사용하는 커스텀 래퍼(StrategyVLLMModel)로 구현합니다.
+vLLM 서빙 구조: 모델은 별도 프로세스의 vLLM 서버(`vllm serve`)가 로드하고,
+이 모듈은 OpenAI 호환 API 클라이언트만 생성합니다.
+서버 기동: python scripts/launch_vllm_servers.py
 
-주의: temperature, max_tokens는 __init__()에 전달하지 않고 __call__() 시 전달합니다.
+strategy_advisor_tool에서 model(messages, temperature, max_tokens) 형태로 호출됩니다.
 """
 import yaml
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
+
+from agent.vllm_client import VLLMServerClient, resolve_base_url
 
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "models_config.yaml"
 
+STRATEGY_BASE_URL_ENV = "C2_STRATEGY_VLLM_BASE_URL"
+STRATEGY_DEFAULT_PORT = 8001
 
-class StrategyVLLMModel:
+
+class StrategyServedModel:
     """
-    EXAONE Deep 전용 vLLM 직접 래퍼.
+    EXAONE Deep vLLM 서빙 클라이언트 래퍼.
 
-    smolagents VLLMModel이 trust_remote_code를 vLLM 엔진에 전달하지 못하는
-    문제를 해결하기 위해 vllm.LLM을 직접 사용합니다.
+    vLLM 서버(OpenAI 호환 API)에 Chat Completions 요청을 보냅니다.
+    채팅 템플릿 적용은 서버가 수행하므로 tokenizer 로딩이 필요 없습니다.
 
     strategy_advisor_tool에서 model(messages, temperature, max_tokens) 형태로 호출됩니다.
     """
@@ -29,87 +35,28 @@ class StrategyVLLMModel:
     def __init__(
         self,
         model_id: str,
-        tensor_parallel_size: int = 1,
-        gpu_memory_utilization: float = 0.55,
-        dtype: str = "bfloat16",
-        max_model_len: int = 32768,
+        base_url: str,
+        served_model_name: Optional[str] = None,
+        api_key: str = "EMPTY",
+        request_timeout: float = 600.0,
         generation_kwargs: Optional[Dict] = None,
-        **extra_llm_kwargs,
     ):
-        from vllm import LLM
-        from transformers import AutoTokenizer
-
         self.model_id = model_id
         self._strategy_generation_kwargs = generation_kwargs or {}
 
-        logger.info(f"Initializing vllm.LLM directly for: {model_id}")
+        served_name = served_model_name or model_id
         logger.info(
-            f"LLM kwargs: tensor_parallel_size={tensor_parallel_size}, "
-            f"gpu_memory_utilization={gpu_memory_utilization}, "
-            f"dtype={dtype}, max_model_len={max_model_len}, trust_remote_code=True"
+            f"Connecting to vLLM server for EXAONE Deep: {base_url} "
+            f"(served model: {served_name})"
         )
-
-        self._llm = LLM(
-            model=model_id,
-            trust_remote_code=True,
-            tensor_parallel_size=tensor_parallel_size,
-            gpu_memory_utilization=gpu_memory_utilization,
-            dtype=dtype,
-            max_model_len=max_model_len,
-            enforce_eager=True,
-            **extra_llm_kwargs,
+        self._client = VLLMServerClient(
+            base_url=base_url,
+            served_model_name=served_name,
+            api_key=api_key,
+            timeout=request_timeout,
         )
-
-        logger.info(f"Loading tokenizer for chat template: {model_id}")
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-        )
-        logger.info("StrategyVLLMModel ready")
-
-    @staticmethod
-    def _normalize_messages(messages) -> List[Dict[str, str]]:
-        """smolagents MessageRole enum → plain dict 변환 (EXAONE Deep용)."""
-        normalized = []
-        for msg in messages:
-            if hasattr(msg, "role"):
-                role_raw = msg.role
-                role_str = role_raw.value if hasattr(role_raw, "value") else str(role_raw)
-            elif isinstance(msg, dict):
-                role_str = str(msg.get("role", "user"))
-            else:
-                continue
-
-            if hasattr(msg, "content"):
-                content = msg.content
-            elif isinstance(msg, dict):
-                content = msg.get("content", "")
-            else:
-                content = str(msg)
-
-            if isinstance(content, list):
-                parts = [
-                    c.get("text", str(c)) if isinstance(c, dict) else str(c)
-                    for c in content
-                ]
-                content = "\n".join(parts)
-            content = str(content) if content is not None else ""
-
-            r = role_str.lower().replace("-", "_").replace(".", "_")
-            if "system" in r:
-                normalized.append({"role": "system", "content": content})
-            elif "assistant" in r:
-                normalized.append({"role": "assistant", "content": content})
-            elif "tool_response" in r or "tool_result" in r:
-                normalized.append({"role": "user", "content": f"[Tool Result]\n{content}"})
-            elif "tool_call" in r:
-                if normalized and normalized[-1]["role"] == "assistant":
-                    normalized[-1]["content"] += f"\n{content}"
-                else:
-                    normalized.append({"role": "assistant", "content": content})
-            else:
-                normalized.append({"role": "user", "content": content})
-        return normalized
+        self._client.check_health()
+        logger.info("StrategyServedModel ready")
 
     def __call__(
         self,
@@ -118,46 +65,42 @@ class StrategyVLLMModel:
         max_tokens: int = 8192,
         **kwargs,
     ) -> str:
-        from vllm import SamplingParams
-
-        normalized = self._normalize_messages(messages)
-        prompt = self._tokenizer.apply_chat_template(
-            normalized,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        sampling_params = SamplingParams(
+        logger.debug(f"Generating strategy response (max_tokens={max_tokens}, temp={temperature})")
+        result = self._client.chat(
+            messages,
             temperature=temperature,
             max_tokens=max_tokens,
         )
-
-        logger.debug(f"Generating strategy response (max_tokens={max_tokens}, temp={temperature})")
-        outputs = self._llm.generate([prompt], sampling_params)
-        result = outputs[0].outputs[0].text.strip()
         logger.debug(f"Strategy response length: {len(result)} chars")
         return result
 
 
-def load_strategy_model(config: Optional[Dict[str, Any]] = None) -> StrategyVLLMModel:
+# 하위 호환 별칭 (기존 코드에서 StrategyVLLMModel 이름을 참조하는 경우)
+StrategyVLLMModel = StrategyServedModel
+
+
+def load_strategy_model(config: Optional[Dict[str, Any]] = None) -> StrategyServedModel:
     if config is None:
         config = load_strategy_model_config()
 
     model_id = config.get("model_id", "LGAI-EXAONE/EXAONE-Deep-7.8B")
     generation_cfg = config.get("generation", {})
+    serving_cfg = config.get("serving", {})
 
-    logger.info(f"Loading EXAONE Deep strategy model: {model_id}")
-    return StrategyVLLMModel(
+    base_url = resolve_base_url(serving_cfg, STRATEGY_BASE_URL_ENV, STRATEGY_DEFAULT_PORT)
+
+    logger.info(f"Loading EXAONE Deep served model client: {model_id} @ {base_url}")
+    return StrategyServedModel(
         model_id=model_id,
-        tensor_parallel_size=config.get("tensor_parallel_size", 1),
-        gpu_memory_utilization=config.get("gpu_memory_utilization", 0.55),
-        dtype=config.get("dtype", "bfloat16"),
-        max_model_len=config.get("max_model_len", 32768),
+        base_url=base_url,
+        served_model_name=serving_cfg.get("served_model_name"),
+        api_key=serving_cfg.get("api_key", "EMPTY"),
+        request_timeout=serving_cfg.get("request_timeout", 600.0),
         generation_kwargs=generation_cfg,
     )
 
 
-def load_strategy_model_from_config_file() -> StrategyVLLMModel:
+def load_strategy_model_from_config_file() -> StrategyServedModel:
     config = load_strategy_model_config()
     return load_strategy_model(config)
 

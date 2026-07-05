@@ -9,8 +9,11 @@ accelerate
 # ─── smolagents (Agent Framework) ────────────────────────────
 smolagents>=1.0.0
 
-# ─── LLM Inference (EXAONE4 & EXAONE Deep via vLLM) ──────────
+# ─── LLM Inference (EXAONE4 & EXAONE Deep via vLLM serving) ──
+# 모델은 별도 프로세스의 vLLM 서버로 기동 (scripts/launch_vllm_servers.py)
+# vllm은 서버 기동 머신에만 필요, 앱은 openai SDK로 서버에 요청
 vllm>=0.7.0
+openai>=1.0.0
 
 # ─── Computer Vision ──────────────────────────────────────────
 # supervision pulls opencv-python; headless declared to prefer server build

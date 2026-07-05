@@ -31,22 +31,26 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 def preload_models(skip_strategy: bool = False):
-    """EXAONE4와 EXAONE Deep을 순서대로 로드합니다."""
+    """EXAONE4와 EXAONE Deep의 vLLM 서버 클라이언트를 생성합니다.
+
+    모델은 별도 프로세스의 vLLM 서버에서 동작합니다.
+    서버 기동: python scripts/launch_vllm_servers.py
+    """
     from agent.model_loader import load_model_from_config_file
     from agent.strategy_model_loader import load_strategy_model_from_config_file
 
-    logger.info("=== 모델 로딩 시작 ===")
-    logger.info("EXAONE4 (메인 에이전트 모델) 로딩 중...")
+    logger.info("=== vLLM 서버 클라이언트 초기화 시작 ===")
+    logger.info("EXAONE4 (메인 에이전트 모델) 서버 연결 중...")
     exaone4_model = load_model_from_config_file()
-    logger.info("EXAONE4 로딩 완료")
+    logger.info("EXAONE4 클라이언트 준비 완료")
 
     strategy_model = None
     if not skip_strategy:
-        logger.info("EXAONE Deep (전략/전술 전문 모델) 로딩 중...")
+        logger.info("EXAONE Deep (전략/전술 전문 모델) 서버 연결 중...")
         strategy_model = load_strategy_model_from_config_file()
-        logger.info("EXAONE Deep 로딩 완료")
+        logger.info("EXAONE Deep 클라이언트 준비 완료")
 
-    logger.info("=== 모델 로딩 완료 ===")
+    logger.info("=== vLLM 서버 클라이언트 초기화 완료 ===")
     return exaone4_model, strategy_model
 
 
@@ -192,12 +196,55 @@ def cmd_check_env(args):
     except ImportError:
         print("[FAIL] smolagents 미설치")
 
-    # vllm
+    # openai SDK (vLLM 서버 클라이언트)
+    try:
+        import openai
+        print(f"[OK] openai SDK {openai.__version__}")
+    except ImportError:
+        print("[FAIL] openai 미설치 - vLLM 서버 호출 불가 (pip install openai)")
+
+    # vllm (서버 기동용 — 클라이언트 전용 머신에서는 없어도 됨)
     try:
         import vllm
-        print(f"[OK] vllm {vllm.__version__}")
+        print(f"[OK] vllm {vllm.__version__} (서버 기동 가능)")
     except ImportError:
-        print("[FAIL] vllm 미설치 - EXAONE4/EXAONE Deep 모델 실행 불가")
+        print("[WARN] vllm 미설치 - 이 머신에서 vLLM 서버 기동 불가 (원격 서버 사용 시 무관)")
+
+    # vLLM 서버 연결 확인
+    def _check_vllm_server(name: str, base_url: str):
+        import urllib.request
+        health_url = base_url.rsplit("/v1", 1)[0] + "/health"
+        try:
+            with urllib.request.urlopen(health_url, timeout=3) as resp:
+                ok = resp.status == 200
+        except Exception:
+            ok = False
+        if ok:
+            print(f"[OK] {name} vLLM 서버 연결됨: {base_url}")
+        else:
+            print(f"[WARN] {name} vLLM 서버 미응답: {base_url} "
+                  f"(기동: python scripts/launch_vllm_servers.py)")
+
+    try:
+        from agent.vllm_client import resolve_base_url
+        from agent.model_loader import (
+            load_exaone_model_config, AGENT_BASE_URL_ENV, AGENT_DEFAULT_PORT,
+        )
+        from agent.strategy_model_loader import (
+            load_strategy_model_config, STRATEGY_BASE_URL_ENV, STRATEGY_DEFAULT_PORT,
+        )
+        agent_cfg = load_exaone_model_config()
+        strategy_cfg = load_strategy_model_config()
+        _check_vllm_server(
+            "EXAONE4",
+            resolve_base_url(agent_cfg.get("serving", {}), AGENT_BASE_URL_ENV, AGENT_DEFAULT_PORT),
+        )
+        _check_vllm_server(
+            "EXAONE Deep",
+            resolve_base_url(strategy_cfg.get("serving", {}), STRATEGY_BASE_URL_ENV, STRATEGY_DEFAULT_PORT),
+        )
+    except Exception as e:
+        print(f"[WARN] vLLM 서버 설정 확인 실패: {e}")
 
     # 기타 패키지
     packages = ["gradio", "transformers", "cv2", "numpy", "faiss"]

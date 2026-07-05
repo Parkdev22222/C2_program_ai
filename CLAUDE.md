@@ -18,8 +18,12 @@ wargame/          # 워게임 엔진 코어
 
 agent/
   battlefield_agent.py   # BattlefieldAgent 래퍼 (intent 분류, 지시사항 주입)
-  model_loader.py        # EXAONE4 모델 로더
-  strategy_model_loader.py # EXAONE Deep 로더
+  vllm_client.py         # vLLM 서빙 공용 클라이언트 (OpenAI 호환 API)
+  model_loader.py        # EXAONE4 서빙 클라이언트 로더 (기본 :8000)
+  strategy_model_loader.py # EXAONE Deep 서빙 클라이언트 로더 (기본 :8001)
+
+scripts/
+  launch_vllm_servers.py # vLLM 서버 기동 스크립트 (모델은 별도 프로세스에서 서빙)
 
 tools/
   wargame_query_tool.py       # get_wargame_situation, get_wargame_battle_log 등
