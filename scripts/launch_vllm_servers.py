@@ -82,12 +82,25 @@ def build_strategy_command(cfg: dict) -> tuple:
     return cmd, host, port
 
 
-def wait_until_ready(name: str, host: str, port: int, timeout_s: int = READY_TIMEOUT_S) -> bool:
-    """서버 /health 엔드포인트가 응답할 때까지 대기합니다."""
+def wait_until_ready(
+    name: str, host: str, port: int,
+    proc: "subprocess.Popen" = None,
+    timeout_s: int = READY_TIMEOUT_S,
+) -> bool:
+    """서버 /health 엔드포인트가 응답할 때까지 대기합니다.
+
+    대기 중 서버 프로세스가 죽으면 즉시 실패를 반환합니다.
+    """
     url = f"http://{host}:{port}/health"
     deadline = time.time() + timeout_s
     print(f"[{name}] 서버 준비 대기 중... ({url})")
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            print(
+                f"[{name}] 서버 프로세스가 기동 중 종료됨 (exit code {proc.returncode}). "
+                f"위 로그의 에러를 확인하세요 (CUDA OOM이면 gpu_memory_utilization/max_model_len 조정)."
+            )
+            return False
         try:
             with urllib.request.urlopen(url, timeout=3) as resp:
                 if resp.status == 200:
@@ -148,15 +161,14 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    # 순차 기동: 두 서버가 동시에 GPU 메모리를 프로파일링하면 가용량 계산이
+    # 어긋나 OOM이 날 수 있으므로, 앞 서버가 준비된 후 다음 서버를 기동한다.
     for name, cmd, host, port in targets:
         print(f"[{name}] 기동: {' '.join(cmd)}")
-        procs.append((name, subprocess.Popen(cmd)))
-
-    if not args.no_wait:
-        for (name, cmd, host, port), (_, proc) in zip(targets, procs):
-            if not wait_until_ready(name, host, port):
-                if proc.poll() is not None:
-                    print(f"[{name}] 서버 프로세스가 종료됨 (exit code {proc.returncode})")
+        proc = subprocess.Popen(cmd)
+        procs.append((name, proc))
+        if not args.no_wait:
+            if not wait_until_ready(name, host, port, proc):
                 shutdown()
 
     print("\n모든 vLLM 서버가 기동되었습니다. 애플리케이션을 실행하세요: python main.py ui")
