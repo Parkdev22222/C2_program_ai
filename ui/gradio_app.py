@@ -1235,9 +1235,7 @@ def wargame_request_recon_plan(history: List = None):
     _base_recon_result = recommend_recon_routes()
     if _base_recon_result.get("status") == "no_recon_units":
         msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-        history[-1] = (history[-1][0], msg)
-        if was_running:
-            eng.start()
+        history.append(("🔍 정찰 임무계획 요청", msg))
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, "", fig, damage_fig, status, log_text, ""
     _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
