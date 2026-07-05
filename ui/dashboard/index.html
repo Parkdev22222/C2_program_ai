@@ -555,7 +555,7 @@ function updateMap(state) {
         intelMarkers[e.unit_id].uncircle.setLatLng(latlng);
       } else {
         const unc = L.circle(latlng, {
-          radius: 3000, color: '#ffa726', weight: 1,
+          radius: 1000, color: '#ffa726', weight: 1,
           fillColor: '#ffa726', fillOpacity: 0.06, dashArray: '4,4',
         }).addTo(map);
         if (!intelMarkers[e.unit_id]) intelMarkers[e.unit_id] = {};
