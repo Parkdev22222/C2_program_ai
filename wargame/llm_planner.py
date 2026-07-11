@@ -137,13 +137,11 @@ def build_mission_query(state: dict) -> str:
     BattlefieldAgent.run()에 전달할 공격 임무계획 쿼리 문자열 생성.
 
     에이전트 툴 활용 순서:
-      (전장 상황은 [현재 전장 상황] 블록으로 자동 주입됨 — situation_result로 사용)
-      1. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
-      2. recommend_recon_routes()        → Delta 정찰부대 경로 생성
-      3. get_optimal_attack_positions()  → detected OPFOR 기준 최적 공격 위치 추천
-      4. 최종 임무계획 JSON 생성         → 3번 결과 기반 직접 결정, detected OPFOR만 목표
-      5. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      6. 응답에 JSON 블록 출력
+      1. recommend_recon_routes()        → Delta 정찰부대 경로 생성
+      2. get_optimal_attack_positions()  → detected OPFOR 기준 최적 공격 위치 추천
+      3. 최종 임무계획 JSON 생성         → 2번 결과 기반 직접 결정, detected OPFOR만 목표
+      4. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      5. 응답에 JSON 블록 출력
 
     ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
@@ -167,18 +165,17 @@ def build_mission_query(state: dict) -> str:
 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
 ⚠️ 코드 첫 줄에 반드시 `import json` 을 실행하라. json 없이 json.dumps() 호출 시 NameError 발생.
 
-※ 전장 상황(situation_result)은 위 [현재 전장 상황] 블록의 JSON 데이터(키: "units" 배열 등)를 그대로 사용한다. 별도 상황 조회 툴 호출은 없다.
+※ situation_result 는 자동 주입된 [현재 전장 상황] 블록의 JSON을 그대로 사용한다(별도 조회 툴 없음).
+  키: situation_result["units"] = 부대 리스트, 각 원소에 "unit_id"/"side"("BLUFOR"|"OPFOR")/"combat_power"/"status"/"lat"/"lon".
 
 [필수 툴 호출 순서]
-1. assess_recon_need()
-   → 결과를 assess_result에 저장. OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
-2. recommend_recon_routes()
+1. recommend_recon_routes()
    → Delta 정찰부대의 경로 생성 → recon_result에 저장
    → recon_result["mission_plans"]의 첫 번째 항목을 Delta 임무로 사용
    → status가 "no_recon_units"이면 Delta 임무 제외, 나머지는 항상 포함
-3. get_optimal_attack_positions()
+2. get_optimal_attack_positions()
    → detected OPFOR 기준 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-4. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
+3. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
 
    import json
 
@@ -221,8 +218,9 @@ def build_mission_query(state: dict) -> str:
 
    # ③ 공중지원 계획 — detected OPFOR의 known_lat/known_lon 사용
    air_support_plans = []
-   # assess_result["opfor_summary"]의 detected 목표에만 공중지원 할당
-   # target 좌표는 반드시 assess_result의 detected OPFOR known_lat/known_lon 사용
+   # detected OPFOR 목표에만 공중지원 할당
+   # target 좌표는 attack_positions_result의 대상 OPFOR 위치 또는
+   #   situation_result["units"] 중 side=="OPFOR" 부대의 lat/lon 사용
 
    final_plan = {{
        "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",
@@ -230,7 +228,7 @@ def build_mission_query(state: dict) -> str:
        "air_support_plans": air_support_plans
    }}
 
-5. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
+4. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 작전지역=철원(DMZ인근), 좌표=위경도(WGS84), lat=북위(38.0~38.27), lon=동경(127.0~127.34)
