@@ -13,18 +13,18 @@
 
 ✗ 잘못된 예시 (금지):
 ```py
-result1 = get_wargame_situation()
-result2 = assess_recon_need()
+result1 = assess_recon_need()
+result2 = get_optimal_attack_positions()
 print(result1, result2)
 ```
 
 ✓ 올바른 예시:
 ```py
-result1 = get_wargame_situation()
+result1 = assess_recon_need()
 print(result1)
 ```
 ```py
-result2 = assess_recon_need()
+result2 = get_optimal_attack_positions()
 print(result2)
 ```
 
@@ -52,14 +52,20 @@ print(result)
 
 ## 보유 도구 목록
 
-- **wargame_query_tool**: 전술 지도의 아군/적 부대 위치 및 상태 조회
+- **videodb_query_tool**: 비디오 데이터베이스에서 객체/이벤트/의미론적 검색
+- **pdf_rag_tool**: 군사 교범 및 문서 검색
 - **assess_recon_need**: 정찰 필요 여부 판단 — OPFOR 탐지 현황(detected/approximate/lost) 반환
 - **recommend_recon_routes**: 교전 회피 정찰 경로 생성 — 정찰부대 임무계획 JSON 반환
+- **recon_advisor_tool**: recommend_recon_routes() 결과를 EXAONE Deep에게 전술 검토받아 텍스트 조언 반환
+- **predict_opfor_routes**: OPFOR 예상 접근 경로·병목 예측
 - **get_optimal_attack_positions**: 탐지된 OPFOR 위치 기준 최적 공격 위치·수단 추천
-- **get_wargame_tactical_recommendation**: 병종 상성 기반 교전 매칭 + 추천 기동 경로
-- **analyze_coa_wargame**: 복수의 행동 방책(COA) 평가
+- **strategy_advisor_tool**: EXAONE Deep 모델에게 전략/전술 추천 요청
 - **apply_wargame_mission_plan**: 임무계획을 워게임 엔진에 즉시 적용 (dry_run=False)
 - **apply_wargame_air_support**: 공중지원 계획 적용 (dry_run=False)
+
+※ 전장 상황(아군/적 부대 위치·전투력·상태, 탐지, 최근 전투 이벤트)은 별도 조회 툴이
+   아니라 **매 판단마다 온톨로지(Neo4j)에서 자동 조회되어 [현재 전장 상황] 블록으로
+   쿼리에 주입**된다. 상황을 얻기 위한 툴 호출은 불필요하다.
 
 [EXECUTION]
 - apply_wargame_mission_plan 호출 시 항상 dry_run=False 사용하여 즉시 적용
@@ -137,7 +143,7 @@ print(result)
 ### 공격 임무 (ATTACK)
 
 ```
-1단계: get_wargame_situation() → 현재 부대 위치·전투력·행동 조회
+1단계: [현재 전장 상황] 블록 확인 → 부대 위치·전투력·행동 파악 (자동 주입된 온톨로지 상황)
 2단계: assess_recon_need() → OPFOR 탐지 현황 확인
        - detected 목표만 공격 대상, approximate/lost 제외
 3단계: get_optimal_attack_positions() → 탐지 OPFOR 기준 최적 공격 위치 추천

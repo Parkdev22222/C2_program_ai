@@ -130,21 +130,34 @@ class BattlefieldAgent:
         tools = []
 
         try:
-            from tools.wargame_query_tool import (
-                get_wargame_situation, get_wargame_unit_detail,
-                get_wargame_battle_log, get_intelligence_report,
+            from tools.videodb_query_tool import (
+                get_selected_contexts, query_video_semantic, query_video_by_object,
+                query_video_by_event, get_video_summary, get_segment_details, set_active_videos,
             )
-            tools.extend([get_wargame_situation, get_wargame_unit_detail,
-                          get_wargame_battle_log, get_intelligence_report])
-            logger.info("Wargame simulator query tools loaded")
+            tools.extend([get_selected_contexts, query_video_semantic, query_video_by_object,
+                          query_video_by_event, get_video_summary, get_segment_details, set_active_videos])
+            logger.info("VideoDB query tools loaded")
         except Exception as e:
-            logger.warning(f"Failed to load wargame simulator query tools: {e}")
+            logger.warning(f"Failed to load videodb tools: {e}")
 
         try:
+            from tools.pdf_rag_tool import pdf_rag_search, add_pdf_to_rag
+            tools.extend([pdf_rag_search, add_pdf_to_rag])
+            logger.info("PDF RAG tools loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load PDF RAG tools: {e}")
+
+        # 전장 상황(situation)은 별도 조회 툴이 아니라, 매 판단(agent.run)마다
+        # 온톨로지(Neo4j)를 자동 검색해 쿼리에 주입한다(_session_run 래퍼 참조).
+        # → get_wargame_situation 등 상태 스냅샷 조회 툴은 에이전트에 등록하지 않는다.
+
+        # 실행(apply) 계열 툴은 유지 — 생성된 방책을 워게임에 반영하기 위함.
+        # (상태 조회용 get_wargame_engine_status 는 제외)
+        try:
             from tools.wargame_mission_tool import (
-                apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status,
+                apply_wargame_mission_plan, apply_wargame_air_support,
             )
-            tools.extend([apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status])
+            tools.extend([apply_wargame_mission_plan, apply_wargame_air_support])
             logger.info("Wargame mission execution tools loaded")
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
@@ -158,20 +171,8 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load mission plan validator tools: {e}")
 
-        try:
-            from tools.coa_analysis_tool import analyze_coa_wargame
-            tools.append(analyze_coa_wargame)
-            logger.info("COA analysis tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load COA analysis tool: {e}")
-
-        try:
-            from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
-            tools.append(get_wargame_tactical_recommendation)
-            logger.info("Wargame tactical recommendation tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load wargame strategy tool: {e}")
-
+        # 전술 판단용 도구는 유지한다 (사용자 요청). 아래 4종은 워게임 상태를 참조하지만
+        # 방책 수립에 필요한 전술 계산을 제공하므로 에이전트 툴셋에 포함한다.
         try:
             from tools.wargame_opfor_routes_tool import predict_opfor_routes
             tools.append(predict_opfor_routes)
@@ -192,6 +193,11 @@ class BattlefieldAgent:
             logger.info("Wargame recon tools loaded")
         except Exception as e:
             logger.warning(f"Failed to load recon tools: {e}")
+
+        # 제외 유지: get_wargame_situation / get_intelligence_report /
+        # get_wargame_battle_log / get_wargame_unit_detail / get_wargame_engine_status /
+        # get_wargame_tactical_recommendation / analyze_coa_wargame
+        # (상황은 온톨로지 자동 주입으로 대체)
 
         try:
             from tools.graph_rag_tool import graph_rag_military_query
@@ -371,15 +377,32 @@ class BattlefieldAgent:
 
         logger.info(f"[SingleToolGuard] {patched_count}/{len(self._tools)} 도구 forward() 패치 완료")
 
-        # ── 3) agent.run() 래핑: agent.run() 시작 시 세션 레벨 추적 초기화 ──
+        # ── 3) agent.run() 래핑: 세션 추적 초기화 + 온톨로지 상황 자동 주입 ──
+        # 매 판단(agent.run)마다 온톨로지(Neo4j)를 검색해 현재 전장 상황을 쿼리 앞에
+        # 자동으로 붙인다 → 상황 조회를 툴로 두지 않고 판단 시점마다 실행하는 효과.
         _orig_run = code_agent.run
+
+        def _inject_ontology(task):
+            try:
+                from tools.ontology_query_tool import ontology_situation_block
+                block = ontology_situation_block()
+            except Exception as e:
+                logger.debug(f"[OntologyInject] 상황 주입 실패 (무시): {e}")
+                block = ""
+            if block and isinstance(task, str):
+                return block + "\n" + task
+            return task
 
         def _session_run(*args, **kwargs):
             _guard_session_start()
+            if args:
+                args = (_inject_ontology(args[0]),) + tuple(args[1:])
+            elif "task" in kwargs:
+                kwargs["task"] = _inject_ontology(kwargs["task"])
             return _orig_run(*args, **kwargs)
 
         code_agent.run = _session_run
-        logger.info("[SingleToolGuard] agent.run() 세션 레벨 추적 패치 완료")
+        logger.info("[SingleToolGuard] agent.run() 세션 추적 + 온톨로지 자동 주입 패치 완료")
 
     def _append_custom_prompt(self, agent):
         try:
