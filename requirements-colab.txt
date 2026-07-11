@@ -33,21 +33,15 @@ smolagents>=1.0.0
 gradio>=4.0.0
 plotly>=5.0.0
 
-# Embeddings & Search
-faiss-cpu>=1.7.4
-open_clip_torch
+# vLLM 서버 클라이언트 (OpenAI 호환 API)
+openai>=1.0.0
 
 # Computer Vision (headless — Colab은 디스플레이 없음)
 opencv-python-headless>=4.8.0
-supervision>=0.20.0
 
 # Graph RAG / Ontology
 rdflib>=6.0.0
 num2words
 
-# PDF Processing
-PyPDF2>=3.0.0
-
 # Utilities
 huggingface-hub>=0.20.0
-anthropic>=0.25.0

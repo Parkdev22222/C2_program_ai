@@ -142,11 +142,9 @@ def build_mission_query(state: dict) -> str:
       3. predict_opfor_routes()          → 탐지된 OPFOR 예상 기동 경로 분석
       4. get_optimal_attack_positions(opfor_routes_json=<3번 predicted_routes JSON>)
                                          → 경로 차단 보너스 반영 최적 공격 위치 추천
-      5. strategy_advisor_tool(query=..., additional_context=<1~4번 모든 결과>)
-                                         → EXAONE Deep이 전체 툴 결과 검토·조언
-      6. 최종 임무계획 JSON 생성         → 4번+5번 종합, detected OPFOR만 목표
-      7. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      8. 응답에 JSON 블록 출력
+      5. 최종 임무계획 JSON 생성         → 4번 결과 기반 직접 결정, detected OPFOR만 목표
+      6. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      7. 응답에 JSON 블록 출력
 
     ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
@@ -185,18 +183,7 @@ def build_mission_query(state: dict) -> str:
    → import json; opfor_routes_json = json.dumps(opfor_routes_result["predicted_routes"])
 5. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
    → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-6. strategy_advisor_tool(
-     query="탐지된 OPFOR에 대한 공격 임무계획 전술 검토를 요청합니다. 적 예상 기동 경로와 공격 위치 추천 결과를 바탕으로 최적 기동 방향, 경로 차단 위치, 공중지원 배치, 우선순위를 조언해주세요. 또한 Delta 정찰부대의 정찰 경로(recon_result의 waypoints)가 공격 임무를 효과적으로 지원하는지, 경로 개선이 필요한지도 검토해주세요.",
-     additional_context=(
-         "[전장 상황 — get_wargame_situation]\n" + json.dumps(situation_result, ensure_ascii=False) +
-         "\n\n[OPFOR 탐지 현황 — assess_recon_need]\n" + json.dumps(assess_result, ensure_ascii=False) +
-         "\n\n[Delta 정찰 경로 — recommend_recon_routes]\n" + json.dumps(recon_result, ensure_ascii=False) +
-         "\n\n[OPFOR 예상 기동 경로 — predict_opfor_routes]\n" + json.dumps(opfor_routes_result, ensure_ascii=False) +
-         "\n\n[최적 공격 위치 — get_optimal_attack_positions]\n" + json.dumps(attack_positions_result, ensure_ascii=False)
-     )
-   )
-   → EXAONE Deep 전술 조언 수집 (결과를 deep_advice에 저장)
-7. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
+6. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
 
    import json
 
@@ -212,12 +199,11 @@ def build_mission_query(state: dict) -> str:
            "objective": delta_mp.get("objective", "정찰")
        }})
 
-   # ② BLUFOR 공격부대 임무 — deep_advice와 attack_positions_result를 종합하여 직접 결정
+   # ② BLUFOR 공격부대 임무 — attack_positions_result를 근거로 직접 결정
    #    attack_positions_result["attack_recommendations"] 에서 각 OPFOR 목표별 최적 공격 위치(lat/lon) 참조
    #    situation_result["blufor_units"] 에서 각 부대 ID·전투력 참조
    #    • CP >= 30% → attack 또는 flank (attack_positions_result 권고 반영)
    #    • CP < 30%  → defend 또는 withdraw
-   #    • deep_advice 내 기동 방향 조언 반드시 반영
    for unit in situation_result["blufor_units"]:
        if unit["unit_id"] == "Delta" or unit["status"] == "destroyed":
            continue
@@ -226,10 +212,12 @@ def build_mission_query(state: dict) -> str:
            continue
        # attack_positions_result에서 이 부대에 권고된 공격 위치 찾기
        # (recommended_units에 부대 ID가 포함된 항목 우선)
-       # deep_advice 조언을 반영해 mission_type·waypoints·objective 직접 결정
+       # ★ attack/flank 임무는 담당할 적 부대를 target_unit_id로 반드시 명시 ★
+       #   (detected OPFOR unit_id). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
        mission_plans.append({{
            "company_id": unit["unit_id"],
-           "mission_type": "<deep_advice·attack_positions_result 기반으로 직접 결정: attack|flank|defend|withdraw|hold>",
+           "mission_type": "<attack_positions_result 기반으로 직접 결정: attack|flank|defend|withdraw|hold>",
+           "target_unit_id": "<담당 detected OPFOR unit_id — attack/flank일 때 필수, 그 외 생략>",
            "waypoints": [[<attack_positions_result의 lat>, <lon>], ...],  # 위경도 소수점6자리
            "objective": "<detected OPFOR unit_id 목표 또는 방어 목표>"
        }})
@@ -240,12 +228,12 @@ def build_mission_query(state: dict) -> str:
    # target 좌표는 반드시 assess_result 또는 situation_result의 known_lat/known_lon 사용
 
    final_plan = {{
-       "reasoning": "<deep_advice 핵심 + EXAONE4 전략 판단 근거 — 한국어>",
+       "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",
        "mission_plans": mission_plans,
        "air_support_plans": air_support_plans
    }}
 
-8. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
+7. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 작전지역=철원(DMZ인근), 좌표=위경도(WGS84), lat=북위(38.0~38.27), lon=동경(127.0~127.34)
@@ -265,6 +253,11 @@ def build_mission_query(state: dict) -> str:
    조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
    예: Red1 위치가 known_lat=37.074775, known_lon=127.141013 이면 → "target": [37.074775, 127.141013]
+⚠️ [담당 표적 지정 규칙]
+   • mission_type이 attack 또는 flank인 부대는 "target_unit_id"에 담당할 detected OPFOR unit_id를 반드시 명시
+   • 부대는 waypoints(경유지)를 통과한 뒤 target_unit_id 부대의 현재 위치를 지속 추격·공격한다
+   • waypoints는 표적으로의 은밀·유리한 접근 경로(경유지)이고, 최종 교전 위치는 표적 실시간 위치로 자동 갱신됨
+   • defend/withdraw/hold/recon 부대는 target_unit_id 생략
 [규칙] 좌표는 반드시 위경도(WGS84) 소수점 6자리, WP 3~5개, CP<30%→defend/withdraw, 고지선점·측방기동 고려
 ⚠️ [공중지원 적극 활용 규칙] 교전 초반 위치 확인(detected) 적에게 공중지원 적극 투사
    - 공중지원 잔여 횟수>0이면 detected OPFOR 1개 이상에 반드시 air_support_plans 할당
@@ -278,7 +271,8 @@ def build_mission_query(state: dict) -> str:
 {{"reasoning":"툴 조회 결과 기반 한국어 판단근거",
 "mission_plans":[
   {{"company_id":"Delta","mission_type":"recon","waypoints":[[위도소수,경도소수]],"objective":"측방 관측·추적 또는 미탐지 부대 확인"}},
-  {{"company_id":"실제부대ID","mission_type":"attack|defend|flank|withdraw|hold","waypoints":[[위도소수,경도소수]],"objective":"목표"}}
+  {{"company_id":"실제부대ID","mission_type":"attack|flank","target_unit_id":"담당 detected OPFOR ID","waypoints":[[위도소수,경도소수]],"objective":"목표"}},
+  {{"company_id":"실제부대ID","mission_type":"defend|withdraw|hold","waypoints":[[위도소수,경도소수]],"objective":"목표"}}
 ],
 "air_support_plans":[{{"call_sign":"호출부호","support_type":"cas|strike|artillery|helicopter","target":[위도소수,경도소수],"radius":반경m정수,"delay":지연초정수}}]}}
 ```"""

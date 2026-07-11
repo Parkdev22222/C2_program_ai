@@ -79,7 +79,6 @@ def _convert_latlon_plan_to_meters(plan: dict) -> dict:
     return plan
 
 CONFIG_DIR = Path(__file__).parent.parent / "config"
-SAMPLES_DIR = Path(__file__).parent.parent / "samples"
 
 
 def _load_ui_config() -> dict:
@@ -88,9 +87,6 @@ def _load_ui_config() -> dict:
 
 
 _agent = None
-_video_analysis_system = None
-_analyzed_videos: List[dict] = []
-_active_video_ids: List[str] = []
 _last_situation_analysis: str = ""
 
 _wg_engine: Optional["WargameEngine"] = None
@@ -189,103 +185,16 @@ def _is_situation_analysis_response(response: str) -> bool:
     return matched >= 2
 
 
-def _update_situation_memory_if_needed(response: str, video_ids: List[str] = None):
+def _update_situation_memory_if_needed(response: str):
     global _last_situation_analysis
     if _is_situation_analysis_response(response):
         _last_situation_analysis = response
         try:
             from tools.strategy_advisor_tool import update_situation_memory
-            update_situation_memory(response, video_ids or _active_video_ids)
+            update_situation_memory(response)
             logger.info("Situation memory updated from EXAONE4 analysis response")
         except Exception as e:
             logger.warning(f"Failed to update situation memory: {e}")
-
-
-def _is_strategy_query(text: str) -> bool:
-    try:
-        from agent.battlefield_agent import is_strategy_query
-        return is_strategy_query(text)
-    except Exception:
-        strategy_kw = ["전략", "전술", "작전", "기동", "대응방안", "추천", "제안",
-                       "strategy", "tactics", "maneuver", "recommend"]
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in strategy_kw)
-
-
-def analyze_video(video_file, collection_name: str, progress=gr.Progress()):
-    global _video_analysis_system, _analyzed_videos, _active_video_ids
-    choices = _get_video_list_choices()
-    if video_file is None:
-        return "영상 파일을 먼저 업로드하세요.", gr.update(choices=choices, value=choices)
-    try:
-        progress(0.1, desc="영상 분석 시스템 초기화 중...")
-        if _video_analysis_system is None:
-            from core_src.video_analysis_system import VideoAnalysisSystem
-            _video_analysis_system = VideoAnalysisSystem(collection_name=collection_name or "default")
-        progress(0.3, desc="비디오 분석 중...")
-        summary = _video_analysis_system.analyze_video(
-            video_path=video_file.name if hasattr(video_file, "name") else str(video_file),
-        )
-        video_id = summary["video_id"]
-        _analyzed_videos.append({"video_id": video_id, "filename": Path(video_file.name if hasattr(video_file, "name") else str(video_file)).name, "summary": summary})
-        _active_video_ids = [v["video_id"] for v in _analyzed_videos]
-        try:
-            from tools.videodb_query_tool import set_selected_video_ids, register_videodb_manager, register_video_collection
-            set_selected_video_ids(_active_video_ids)
-            register_videodb_manager(collection_name or "default", _video_analysis_system.videodb)
-            register_video_collection(video_id, collection_name or "default")
-        except Exception as e:
-            logger.warning(f"Failed to update tool context: {e}")
-        if _agent:
-            _agent.set_video_context(_active_video_ids)
-        progress(1.0, desc="분석 완료!")
-        total_dets = summary.get("total_detections", 0)
-        result_msg = (f"✓ 영상 분석 완료\n  - 비디오 ID: {video_id}\n  - 총 길이: {summary.get('duration', 0):.1f}초\n  - 세그먼트 수: {summary.get('segment_count', 0)}개\n  - 탐지된 객체 수: {total_dets}건\n\n이제 채팅창에서 영상에 대해 질문하거나 전략/전술 추천을 요청할 수 있습니다.")
-        new_choices = _get_video_list_choices()
-        return result_msg, gr.update(choices=new_choices, value=new_choices)
-    except Exception as e:
-        logger.error(f"Video analysis error: {e}", exc_info=True)
-        choices = _get_video_list_choices()
-        return f"분석 오류: {e}", gr.update(choices=choices, value=choices)
-
-
-def _get_video_list_choices() -> list:
-    return [f"{v['video_id']} - {v['filename']}" for v in _analyzed_videos]
-
-
-def _get_sample_video_choices() -> list:
-    SAMPLES_DIR.mkdir(exist_ok=True)
-    exts = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-    return sorted(p.name for p in SAMPLES_DIR.iterdir() if p.suffix.lower() in exts)
-
-
-def analyze_sample_video(sample_name: str, collection_name: str, progress=gr.Progress()):
-    if not sample_name:
-        choices = _get_video_list_choices()
-        return "예시 영상을 선택하세요.", gr.update(choices=choices, value=choices)
-    sample_path = SAMPLES_DIR / sample_name
-    if not sample_path.exists():
-        choices = _get_video_list_choices()
-        return f"파일을 찾을 수 없습니다: {sample_name}", gr.update(choices=choices, value=choices)
-    class _FileLike:
-        def __init__(self, path): self.name = str(path)
-    return analyze_video(_FileLike(sample_path), collection_name, progress)
-
-
-def update_active_videos(selected_items: List[str]) -> str:
-    global _active_video_ids
-    _active_video_ids = []
-    for item in (selected_items or []):
-        vid = item.split(" - ")[0].strip()
-        _active_video_ids.append(vid)
-    try:
-        from tools.videodb_query_tool import set_selected_video_ids
-        set_selected_video_ids(_active_video_ids)
-    except Exception as e:
-        logger.warning(f"Failed to update video context: {e}")
-    if _agent:
-        _agent.set_video_context(_active_video_ids)
-    return f"활성 비디오: {len(_active_video_ids)}개 선택됨"
 
 
 def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]:
@@ -295,28 +204,17 @@ def chat(message: str, history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[
     if agent is None:
         history.append((message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요."))
         return "", history
-    is_strategy = _is_strategy_query(message)
-    if is_strategy and not _last_situation_analysis:
-        warning = ("[안내] 전략/전술 추천을 위해서는 먼저 군사 영상을 분석하는 것을 권장합니다.\n")
-        history.append((message, warning + "처리 중..."))
-    else:
-        history.append((message, "처리 중..."))
+    history.append((message, "처리 중..."))
     try:
         response = agent.run(message)
         response_text = str(response)
-        _update_situation_memory_if_needed(response_text, _active_video_ids)
-        if is_strategy:
-            response_text = _annotate_dual_model_response(response_text)
+        _update_situation_memory_if_needed(response_text)
         history[-1] = (message, response_text)
     except Exception as e:
         logger.error(f"Agent run error: {e}", exc_info=True)
         history[-1] = (message, f"처리 중 오류가 발생했습니다: {e}")
     _save_ui_state(main_history=history)
     return "", history
-
-
-def _annotate_dual_model_response(response: str) -> str:
-    return response + "\n\n---\n*이 응답은 EXAONE4(상황 분석) + EXAONE Deep(전략/전술 추천)의 협업으로 생성되었습니다.*"
 
 
 _MARKER_SYMBOL = {"infantry": "circle", "apc": "square", "armor": "diamond", "helicopter": "triangle-up", "aircraft": "triangle-up", "vehicle": "square", "truck": "square", "unknown": "circle"}
@@ -481,6 +379,7 @@ def wargame_apply_custom_scenario(scenario_config: dict) -> dict:
         _wg_engine.on_new_opfor_detection = _detection_enqueue
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
         _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+        _wg_engine.on_target_moved        = _target_moved_enqueue
         _wg_last_plan = {}
 
         logger.info("사용자 정의 시나리오 적용 완료: BLUFOR %d개, OPFOR %d개",
@@ -528,6 +427,13 @@ def _air_hit_enqueue(unit_id: str, unit_type: str,
     _ontology_flush()
 
 
+def _target_moved_enqueue(unit_id: str, unit_type: str,
+                          target_id: str, moved_dist: float):
+    """담당 표적이 1km+ 이동 시 엔진 틱 스레드에서 호출 — 공격 재계획 큐잉."""
+    _detection_queue.put_nowait(("target_moved", unit_id, unit_type,
+                                 target_id, moved_dist))
+
+
 def _execute_auto_attack_plan(event_type: str, *args):
     """
     신규 OPFOR 탐지 / BLUFOR CP 임계값 / BLUFOR 공중지원 피격 시 공격임무계획 재수립.
@@ -536,6 +442,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
     event_type == "detection"    : args = (enemy_id, unit_type, x, y)
     event_type == "cp_threshold" : args = (unit_id, unit_type, threshold_pct, current_cp)
     event_type == "air_hit"      : args = (unit_id, unit_type, call_sign, current_cp)
+    event_type == "target_moved" : args = (unit_id, unit_type, target_id, moved_dist)
     """
     eng = _wg_engine
     if eng is None:
@@ -569,6 +476,20 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"다른 부대로 임무를 인계할지 전술적으로 판단하여 최적 임무계획을 조언해주세요."
         )
         log_tag = f"CP 임계값: {unit_id}({unit_type}) {threshold_pct:.0f}% 이하 (현재 {current_cp:.1f}%)"
+    elif event_type == "target_moved":
+        unit_id, unit_type, target_id, moved_dist = args
+        trigger_desc = (
+            f"⚠️ [표적 이동 트리거] 아군 {unit_id}({unit_type})의 담당 표적 "
+            f"{target_id}이(가) 임무 발령 시점 대비 {moved_dist/1000:.1f}km 이동했다.\n"
+            f"기존 경유지가 표적 현위치와 어긋났으니 공격 임무계획을 재판단하라."
+        )
+        strategy_hint = (
+            f"아군 {unit_id}({unit_type})의 담당 표적 {target_id}이(가) "
+            f"{moved_dist/1000:.1f}km 이동하여 기존 접근 경로가 유효하지 않습니다. "
+            f"{target_id}의 현재 탐지 위치를 기준으로 {unit_id}의 접근 경유지·공격 방향을 "
+            f"재산정하고, 필요 시 담당 표적 재지정 여부도 판단하여 조언해주세요."
+        )
+        log_tag = f"표적 이동: {unit_id}({unit_type}) 담당표적 {target_id} {moved_dist/1000:.1f}km 이동"
     else:  # air_hit
         unit_id, unit_type, call_sign, current_cp = args
         trigger_desc = (
@@ -848,6 +769,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 _cur_eng.on_new_opfor_detection = _detection_enqueue
                 _cur_eng.on_blufor_cp_threshold = _cp_threshold_enqueue
                 _cur_eng.on_blufor_air_hit      = _air_hit_enqueue
+                _cur_eng.on_target_moved        = _target_moved_enqueue
         except Exception:
             pass
         if was_running and not eng.running:
@@ -1286,13 +1208,11 @@ def wargame_request_recon_plan(history: List = None):
     Step 2. recommend_recon_routes()
             └─ 정찰부대(unit_type=정찰) 경로 생성
                → apply_json, summary, mission_plans 반환
-    Step 3. recon_advisor_tool(recon_routes_json=..., recon_summary=...)   [선택]
-            └─ EXAONE Deep 전술 검토 — 경로 개선 의견 수신
-    Step 4. 최종 정찰 임무계획 JSON 직접 생성
-            └─ Step 2·3 결과 종합 / unit_type=정찰 부대만 포함
-    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+    Step 3. 최종 정찰 임무계획 JSON 직접 생성
+            └─ Step 2 결과 기반 / unit_type=정찰 부대만 포함
+    Step 4. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 사용 금지)
-    Step 6. 응답에 최종 JSON 블록 출력
+    Step 5. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
     금지: validate/approve 툴 호출, 공격부대(Alpha/Bravo/Charlie/Echo) 임무 부여,
           정찰+공격 임무 동시 생성
@@ -1336,8 +1256,7 @@ def wargame_request_recon_plan(history: List = None):
     # 에이전트가 아래 tool을 순서대로 호출하여 직접 조회한다:
     #   1) assess_recon_need()        → OPFOR 탐지 현황 및 정찰 필요 여부
     #   2) recommend_recon_routes()   → 교전 회피 정찰 경로 + apply_json
-    #   3) recon_advisor_tool(...)    → EXAONE Deep 전술 검토
-    #   4) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
+    #   3) apply_wargame_mission_plan(plan_json=..., dry_run=False) → 즉시 적용
     #
     # [생성 예시]
     # ┌─────────────────────────────────────────────────────────────────┐
@@ -1367,20 +1286,12 @@ def wargame_request_recon_plan(history: List = None):
     _base_recon_result = recommend_recon_routes()
     if _base_recon_result.get("status") == "no_recon_units":
         msg = f"**⚠️ 사용 가능한 정찰부대(unit_type=정찰)가 없습니다.**\n\n{assessment.get('reason', '')}\n\n→ **⚔️ 공격 임무계획** 버튼을 사용하거나 채팅창에서 전술 조언을 요청하세요."
-        history[-1] = (history[-1][0], msg)
-        if was_running:
-            eng.start()
+        history.append(("🔍 정찰 임무계획 요청", msg))
         fig, damage_fig, status, log_text = wargame_refresh()
         return history, "", fig, damage_fig, status, log_text, ""
     _base_apply_json = _base_recon_result.get("apply_json", "")
-    _base_summary    = _base_recon_result.get("summary", "")
     _assess_json_str = _json.dumps(assessment, ensure_ascii=False)
     _recon_json_str  = _json.dumps(_base_recon_result, ensure_ascii=False, indent=2)
-
-    _tool_context_for_deep = (
-        f"[assess_recon_need 결과]\n{_assess_json_str}\n\n"
-        f"[recommend_recon_routes 결과]\n{_recon_json_str}"
-    )
 
     recon_query = (
         f"[정찰 임무계획 수립]\n\n"
@@ -1390,27 +1301,13 @@ def wargame_request_recon_plan(history: List = None):
         f"[툴 활용 순서]\n"
         f"1. (완료) assess_recon_need() — 위 결과 참조\n"
         f"2. (완료) recommend_recon_routes() — 위 apply_json 참조\n"
-        f"3. recon_advisor_tool 호출 — 아래 예시 코드를 그대로 사용:\n"
-        f'```py\n'
-        f'_apply_json = """\n{_base_apply_json}\n"""\n'
-        f'_summary = """\n{_base_summary}\n"""\n'
-        f'_ctx = """\n{_tool_context_for_deep}\n"""\n'
-        f'deep_advice = recon_advisor_tool(\n'
-        f'    recon_routes_json=_apply_json,\n'
-        f'    recon_summary=_summary,\n'
-        f'    tool_results_context=_ctx,\n'
-        f')\n'
-        f'print(deep_advice)\n'
-        f'```\n'
-        f"   → EXAONE Deep에게 정찰 경로 전술 검토 요청 — 이전 툴 결과 전체를 함께 제공\n\n"
-        f"4. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
-        f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로, EXAONE Deep 조언(Step 3)을 반영하여\n"
-        f"      EXAONE4가 최종 mission_plans JSON을 직접 작성한다.\n"
+        f"3. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
+        f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로 최종 mission_plans JSON을 직접 작성한다.\n"
         f"   → unit_id·waypoints 좌표는 recommend_recon_routes() 결과에서 가져올 것 (임의 좌표 금지)\n"
         f"   → mission_type은 반드시 'recon', 공격부대(Alpha/Bravo/Charlie/Echo) 포함 금지\n"
-        f"5. apply_wargame_mission_plan(plan_json=<Step 4에서 생성한 JSON>, dry_run=False)\n"
+        f"4. apply_wargame_mission_plan(plan_json=<Step 3에서 생성한 JSON>, dry_run=False)\n"
         f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
-        f"6. 응답에 최종 JSON 블록 출력\n\n"
+        f"5. 응답에 최종 JSON 블록 출력\n\n"
         f"[RECON 규칙]\n{recon_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules}"
         f"{learned_suffix}"
@@ -1473,11 +1370,7 @@ def wargame_request_recon_plan(history: List = None):
         plans = applied_plan.get("mission_plans", [])
         plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
         unit_lines = "\n".join(f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)" for p in plans)
-        deep_review = ""
-        review_match = _re.search(r"### 정찰 임무계획 검토 의견\\s*(.*?)(?=###|\\Z)", agent_response_text, _re.DOTALL)
-        if review_match:
-            deep_review = f"**EXAONE Deep 검토 의견:**\n{review_match.group(1).strip()[:600]}\n\n"
-        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n{deep_review}**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
+        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
         history[-1] = (history[-1][0], result_msg)
         _save_ui_state(wg_history=history, plan_box=plan_text)
         fig, damage_fig, status, log_text = wargame_refresh()
@@ -1935,7 +1828,7 @@ def get_situation_memory_status() -> str:
             ts = memory.get("analysis_timestamp", "")
             preview = memory["situation_analysis"][:200] + "..."
             return f"상황 분석 메모리 활성 (분석 시각: {ts})\n\n미리보기:\n{preview}"
-        return "상황 분석 메모리가 비어 있습니다. 먼저 영상 분석을 수행하세요."
+        return "상황 분석 메모리가 비어 있습니다. 채팅으로 전장 상황 분석을 먼저 요청하세요."
     except Exception as e:
         return f"메모리 상태 조회 오류: {e}"
 
@@ -2264,43 +2157,29 @@ def create_app(agent=None) -> gr.Blocks:
         # ── Header ─────────────────────────────────────────────────────
         gr.HTML(f"""
         <div class="c2-header">
-            <h1>⚔ C2 지휘통제 AI — {ui_cfg.get('title', 'EXAONE4 + EXAONE Deep')}</h1>
-            <p>{ui_cfg.get('description', '듀얼 모델 아키텍처 | EXAONE4: 상황 분석 · 응답 생성 &nbsp;|&nbsp; EXAONE Deep: 전략/전술 자문')}</p>
+            <h1>⚔ C2 지휘통제 AI — {ui_cfg.get('title', 'EXAONE4')}</h1>
+            <p>{ui_cfg.get('description', 'EXAONE4: 상황 분석 · 전략/전술 추천 · 임무계획 수립')}</p>
         </div>
         """)
         with gr.Tabs():
           with gr.Tab("🎖️ AI 에이전트"):
             with gr.Row():
               with gr.Column(scale=1):
-                gr.Markdown("### 영상 분석")
-                gr.Markdown("##### 직접 업로드")
-                video_upload = gr.File(label="군사 영상 업로드 (mp4, avi, mov)", file_types=[".mp4", ".avi", ".mov", ".mkv"])
-                collection_input = gr.Textbox(label="콜렉션명", value="default", placeholder="콜렉션 이름 입력")
-                analyze_btn = gr.Button("영상 분석 시작", variant="primary")
-                gr.Markdown("##### 예시 영상")
-                sample_dropdown = gr.Dropdown(label="예시 영상 선택", choices=_get_sample_video_choices(), value=None, interactive=True)
-                with gr.Row():
-                    sample_refresh_btn = gr.Button("목록 새로고침", scale=1)
-                    sample_analyze_btn = gr.Button("예시 영상 분석", variant="primary", scale=2)
-                analysis_status = gr.Textbox(label="분석 상태", lines=6, interactive=False)
-                gr.Markdown("### 분석된 영상 목록")
-                video_list = gr.CheckboxGroup(label="쿼리할 영상 선택", choices=[], value=[])
-                video_select_status = gr.Textbox(label="선택 상태", value="선택된 비디오 없음", interactive=False)
                 gr.Markdown("### 상황 분석 메모리")
                 memory_status_btn = gr.Button("메모리 상태 확인")
                 memory_status_box = gr.Textbox(label="EXAONE4 상황 분석 메모리", lines=5, interactive=False)
               with gr.Column(scale=2):
                 gr.Markdown("### AI 에이전트 채팅")
-                gr.Markdown("영상 분석 및 전략/전술 관련 질문을 입력하세요. 전략/전술 쿼리는 자동으로 **EXAONE Deep** 모델이 추가 분석합니다.")
+                gr.Markdown("전략/전술 관련 질문을 입력하세요.")
                 chatbot = gr.Chatbot(label="대화", height=500, show_copy_button=True)
                 with gr.Row():
-                    query_input = gr.Textbox(label="쿼리 입력", placeholder="예: '영상에서 탐지된 적 기갑부대를 분석해줘' 또는 '현재 상황에서 방어 전술을 추천해줘'", lines=2, scale=5)
+                    query_input = gr.Textbox(label="쿼리 입력", placeholder="예: '현재 상황에서 방어 전술을 추천해줘'", lines=2, scale=5)
                     send_btn = gr.Button("전송", variant="primary", scale=1)
                 with gr.Row():
                     clear_btn = gr.Button("대화 초기화", variant="secondary")
                     clear_status = gr.Textbox(label="", value="", interactive=False, scale=3)
                 gr.Markdown("### 예시 쿼리")
-                example_queries = ui_cfg.get("examples", ["영상에서 탐지된 적 전력을 분석해줘", "현재 전장 상황에 대한 전략적 대응 방안을 추천해줘", "적 기갑부대에 대한 전술적 대응 방안을 제안해줘", "아군 방어 진지 구축을 위한 전략을 수립해줘"])
+                example_queries = ui_cfg.get("examples", ["현재 전장 상황에 대한 전략적 대응 방안을 추천해줘", "적 기갑부대에 대한 전술적 대응 방안을 제안해줘", "아군 방어 진지 구축을 위한 전략을 수립해줘"])
                 gr.Examples(examples=[[q] for q in example_queries], inputs=[query_input], label="클릭하여 예시 쿼리 입력")
           with gr.Tab("⚔️ 워게임 시뮬레이터"):
             if not _WARGAME_OK:
@@ -2372,10 +2251,6 @@ def create_app(agent=None) -> gr.Blocks:
                     map_refresh_btn = gr.Button("🔄 새로고침", variant="primary")
                     gr.Markdown("**마커 범례**\n- 🔵 원 = BLUFOR 보병\n- 🔵 사각 = BLUFOR APC/차량\n- 🔵 다이아 = BLUFOR 장갑\n- 🔴 원 = OPFOR 보병\n- 🔴 사각 = OPFOR APC/차량\n- 🔴 다이아 = OPFOR 장갑\n- 큰 다이아 = 그룹 지휘관 위치\n\n**좌표계**\nx = 동쪽(m), y = 북쪽(m)\nAltis 맵 기준 (0 ~ 30,000m)")
             map_timer = gr.Timer(value=10)
-        analyze_btn.click(fn=analyze_video, inputs=[video_upload, collection_input], outputs=[analysis_status, video_list])
-        sample_analyze_btn.click(fn=analyze_sample_video, inputs=[sample_dropdown, collection_input], outputs=[analysis_status, video_list])
-        sample_refresh_btn.click(fn=lambda: gr.update(choices=_get_sample_video_choices()), outputs=[sample_dropdown])
-        video_list.change(fn=update_active_videos, inputs=[video_list], outputs=[video_select_status])
         send_btn.click(fn=chat, inputs=[query_input, chatbot], outputs=[query_input, chatbot])
         query_input.submit(fn=chat, inputs=[query_input, chatbot], outputs=[query_input, chatbot])
         clear_btn.click(fn=clear_chat_history, outputs=[chatbot, clear_status])

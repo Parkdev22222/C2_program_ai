@@ -1,48 +1,11 @@
-# ===== 객체 탐지 및 추적 (SAM3) =====
-object_detection:
-  # SAM3 가중치 경로 (로컬 디렉토리 또는 HuggingFace 모델 ID)
-  # ★ 실제 사용 중인 경로로 수정하세요 ★
-  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights"
-  device: "cuda"
-  dtype: "bfloat16"
-  target_classes:
-    - "soldier"
-    - "military soldier"
-    - "tank"
-    - "military tank"
-    - "armored vehicle"
-    - "military truck"
-    - "helicopter"
-    - "military helicopter"
-    - "artillery"
-    - "military vehicle"
-  confidence_threshold: 0.01
-  iou_threshold: 0.5
-  # 추적 시 최소 마스크 면적 비율 (전체 픽셀 대비)
-  min_mask_area_ratio: 0.001
-  # SAM3를 N 프레임마다 한 번 실행 (메모리 절약, 기본 5)
-  # 30fps 영상 기준: 5→6fps 탐지, 10→3fps 탐지
-  detection_frame_step: 5
-
-# ===== 임베딩 모델 =====
-embedding:
-  model_name: "apple/MobileCLIP-S2"
-  image_size: 336
-  embedding_dim: 512        # open_clip MobileCLIP-S2: 512 / CLIP-ViT-L/14 fallback: 768
-  device: "cuda"
-  batch_size: 8
-
-# ===== 이벤트 설명 모델 (경량 VLM) =====
-event_description:
-  model_name: "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-  device: "cuda"
-  temperature: 0.7
-  max_new_tokens: 512
-  batch_size: 4
-
 # ===== EXAONE4 메인 에이전트 모델 =====
-# 상황 분석, 비디오 이해, 최종 응답 생성 담당
+# 상황 분석, 최종 응답 생성 담당
 # AWQ 4bit → 실사용 ~18GB
+#
+# vLLM 서빙 구조: 모델은 별도 프로세스의 vLLM 서버가 로드하고,
+# 애플리케이션은 serving.base_url(또는 host:port)로 OpenAI 호환 API 요청만 보냄.
+# 서버 기동: python scripts/launch_vllm_servers.py
+# 엔진 파라미터(gpu_memory_utilization 등)는 서버 기동 스크립트가 사용함.
 agent_model:
   model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
   quantization: "awq"
@@ -58,34 +21,15 @@ agent_model:
   generation:
     temperature: 0.1
     max_tokens: 4096
-
-# ===== EXAONE Deep 전략/전술 전문 모델 =====
-# 군사 전략 및 전술 추천 생성 전담
-# 7.8B BF16 → 실사용 ~16GB
-# EXAONE4 AWQ 수정 후: 80GB - 24GB = 56GB 여유 → 7.8B 충분히 로딩 가능
-strategy_model:
-  model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
-  tensor_parallel_size: 1
-  gpu_memory_utilization: 0.45
-  dtype: "bfloat16"
-  max_model_len: 32768             # KV 에러 시 gpu_memory_utilization을 높이거나 줄이기 (최소 4096)
-  generation:
-    temperature: 0.2
-    max_tokens: 8192
+  serving:
+    host: "127.0.0.1"
+    port: 8000
+    # base_url을 지정하면 host/port보다 우선함 (예: "http://gpu-server:8000/v1")
+    # 환경변수 C2_AGENT_VLLM_BASE_URL이 최우선
+    base_url: ""
+    served_model_name: "exaone4-agent"
+    api_key: "EMPTY"
+    request_timeout: 600
 
 # ===== A100 80GB 단일 GPU 예상 메모리 사용량 =====
-# EXAONE4 AWQ 32B:       24GB  (gpu_util 0.30)
-# EXAONE Deep 7.8B BF16: 28GB  (gpu_util 0.35)
-# SmolVLM2 2.2B:          5GB
-# CLIP/embedding:          2GB
-# ─────────────────────────────
-# 합계:                  ~59GB  (80GB 중 74% → 여유 21GB)
-#
-# ===== GPU 증설 시 더 큰 모델 사용 =====
-# A100 80GB × 2장:
-#   strategy_model.model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
-#   tensor_parallel_size: 2, gpu_memory_utilization: 0.80
-#
-# A100 80GB × 4장:
-#   agent_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.45
-#   strategy_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.80
+# EXAONE4 AWQ 32B: 24GB (gpu_util 0.30) — 단일 모델이므로 gpu_util을 더 올려도 됨

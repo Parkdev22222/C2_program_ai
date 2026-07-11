@@ -3,7 +3,7 @@
 ## 프로젝트 개요
 EXAONE4 기반 C2(지휘통제) 군사 AI 시스템.
 - **워게임 시뮬레이터**: Python 기반 5 vs 5 대대급 시뮬레이터 (SQLite 이벤트 DB)
-- **LLM 에이전트**: smolagents CodeAgent (EXAONE4 메인 + EXAONE Deep 전술 자문)
+- **LLM 에이전트**: smolagents CodeAgent (EXAONE4 단일 모델, vLLM 서빙)
 - **UI**: Gradio + Plotly 실시간 전장 지도
 
 ## 디렉토리 구조
@@ -18,8 +18,11 @@ wargame/          # 워게임 엔진 코어
 
 agent/
   battlefield_agent.py   # BattlefieldAgent 래퍼 (intent 분류, 지시사항 주입)
-  model_loader.py        # EXAONE4 모델 로더
-  strategy_model_loader.py # EXAONE Deep 로더
+  vllm_client.py         # vLLM 서빙 공용 클라이언트 (OpenAI 호환 API)
+  model_loader.py        # EXAONE4 서빙 클라이언트 로더 (기본 :8000)
+
+scripts/
+  launch_vllm_servers.py # vLLM 서버 기동 스크립트 (모델은 별도 프로세스에서 서빙)
 
 tools/
   wargame_query_tool.py       # get_wargame_situation, get_wargame_battle_log 등
@@ -29,7 +32,7 @@ tools/
   wargame_opfor_routes_tool.py    # predict_opfor_routes
   wargame_strategy_tool.py        # get_wargame_tactical_recommendation
   mission_plan_validator.py       # Pydantic 스키마 검증 (MissionPlanRequest)
-  strategy_advisor_tool.py        # EXAONE Deep 전술 자문 툴
+  strategy_advisor_tool.py        # 상황 분석 세션 메모리 (자문 툴은 제거됨)
 
 ui/
   gradio_app.py   # Gradio UI + 자동 재계획 워커 스레드
@@ -55,15 +58,16 @@ config/
 
 ## 자동 재계획 이벤트 시스템
 
-세 가지 이벤트가 `_detection_queue`로 들어가고 `_detection_worker` 스레드가 처리한다.
+네 가지 이벤트가 `_detection_queue`로 들어가고 `_detection_worker` 스레드가 처리한다.
 
 ```
-("detection",    enemy_id, unit_type, x, y)         # 신규 OPFOR 탐지
-("cp_threshold", unit_id, unit_type, threshold, cp)  # BLUFOR CP 70%/30% 이하
-("air_hit",      unit_id, unit_type, call_sign, cp)  # BLUFOR OPFOR 공중지원 피격
+("detection",    enemy_id, unit_type, x, y)             # 신규 OPFOR 탐지
+("cp_threshold", unit_id, unit_type, threshold, cp)      # BLUFOR CP 70%/30% 이하
+("air_hit",      unit_id, unit_type, call_sign, cp)      # BLUFOR OPFOR 공중지원 피격
+("target_moved", unit_id, unit_type, target_id, dist_m)  # 담당 표적 1km+ 이동 (접근 중)
 ```
 
-**콜백 등록 규칙**: `wargame_reset_sim()` 에서 항상 세 콜백을 재등록한다.
+**콜백 등록 규칙**: `wargame_reset_sim()` 에서 항상 네 콜백을 재등록한다.
 새 이벤트 유형 추가 시 → `wargame_reset_sim()` 의 콜백 등록 블록에도 추가 필요.
 
 ## WargameEngine 주요 메서드
@@ -80,7 +84,18 @@ engine.get_intelligence_report(side)     # 탐지 인텔 보고서
 engine.on_new_opfor_detection: Callable  # (enemy_id, unit_type, x, y)
 engine.on_blufor_cp_threshold: Callable  # (unit_id, unit_type, threshold_pct, current_cp)
 engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, current_cp)
+engine.on_target_moved: Callable         # (unit_id, unit_type, target_id, moved_dist_m)
 ```
+
+## BLUFOR 표적 추격 (target_unit_id)
+
+- 임무계획의 `mission_plans[].target_unit_id`로 각 공격부대(attack/flank)가 담당할 적 부대 지정
+- `apply_mission_plan()`에서 부대에 `target_unit_id` 저장 + 발령 시점 표적 인지 위치를 `target_ref_x/y`에 스냅샷
+- **경유지(waypoints) 완주 후** `_on_waypoints_empty()`가 표적의 현재 인지 위치로 지속 추격 (`_PURSUE_REACQUIRE_M`=60m 이상 이동 시 재기동), `u.pursuing=True`
+- 추격 중에는 `_blufor_llm_units` 유지 + `pursuing` 플래그로 룰 AI 개입 차단
+- 표적이 격멸/탐지상실(lost)되면 추격 종료 → hold 전환
+- **접근 중(추격 전, waypoints 남음)** 표적이 `_TARGET_MOVE_REPLAN_M`=1000m 이상 이동하면 `_check_target_moved()`가 `on_target_moved` 콜백을 부대별 1회 발동 → LLM 공격 재계획
+- 표적 위치는 아군 인텔(`detected`/`approximate`)의 `known_x/known_y` 기준 (FOW 준수)
 
 ## BLUFOR LLM 임무 잠금
 
@@ -88,6 +103,15 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 - 30틱 동안 룰 기반 AI 개입 차단
 - **잠금 해제 후에도** `_blufor_llm_units`에 있고 `waypoints`가 남아 있으면 AI 개입 차단 (경로 덮어쓰기 방지)
 - 모든 waypoint 완주 시 `_blufor_llm_units`에서 제거
+
+## BLUFOR 은밀 기동 경로 확장
+
+- `apply_mission_plan()`에서 BLUFOR 부대의 LLM waypoint를 `_stealth_expand_waypoints()`로 확장
+- LLM이 준 **목표 지점(원본 WP)은 항상 유지**하고, 각 구간(현위치→A, A→B, …)만 발각 위험이 낮은 우회 경로로 치환
+- 발각 위험 = 엔진 탐지 모델과 동일 요소: 적과의 거리 / LOS 차폐(`_los_quality`) / 지형 엄폐(`cover_factor`)
+- 위협원 = 아군 인텔의 OPFOR(`detected`/`approximate`) — 적 정찰(`_DETECT_RANGE` 8km)이 자동으로 넓게 회피됨
+- 인지된 적이 없으면 원본 waypoint 그대로 사용, OPFOR·룰기반 이동에는 미적용
+- 파라미터: `engine.py:_STEALTH_*` (샘플 간격, 우회 후보 크기, 재귀 깊이 등)
 
 ## 공중지원 처리 주의사항
 
@@ -104,6 +128,7 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
     {
       "company_id": "Alpha",
       "mission_type": "attack|defend|flank|withdraw|hold|recon",
+      "target_unit_id": "Red1",
       "waypoints": [[x_m, y_m], ...],
       "objective": "임무 목표 설명"
     }
@@ -121,6 +146,7 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 ```
 
 - `waypoints`는 `[x, y]` 리스트 또는 `{"x": x, "y": y}` 딕셔너리 모두 허용 (validator에서 자동 변환)
+- `target_unit_id` (선택): attack/flank 부대가 담당·추격할 적 부대 ID. 경유지 완주 후 이 표적을 지속 추격
 - `target` 좌표는 반드시 `get_wargame_situation()`에서 조회한 탐지된 OPFOR 실제 좌표 사용
 - `apply_mission_plan()`은 `mission_plans`에 포함된 부대만 업데이트 (선택적 재배정)
 
@@ -148,6 +174,6 @@ engine.on_blufor_air_hit: Callable       # (unit_id, unit_type, call_sign, curre
 
 - `wargame_reset_sim()` 수정 시 콜백 재등록 블록 반드시 유지
 - `waypoints` 좌표는 반드시 미터(m) 정수 (9000 O, 9 X)
-- 에이전트 자동 재계획 쿼리에서 `recommend_recon_routes` / `recon_advisor_tool` 호출 금지
+- 에이전트 자동 재계획 쿼리에서 `recommend_recon_routes` 호출 금지
 - `apply_mission_plan()` 이중 호출 금지 (툴로 적용 완료 후 UI에서 재적용 X)
 - `_wg_ensure_engine()` 대신 `wargame_reset_sim()` 에서 콜백을 관리하므로 콜백 등록 로직을 `_wg_ensure_engine()`에 추가하지 말 것

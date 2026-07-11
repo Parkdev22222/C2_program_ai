@@ -107,22 +107,11 @@ class BattlefieldAgent:
     def __init__(
         self,
         exaone4_model=None,
-        strategy_model=None,
-        videodb_manager=None,
-        embedding_generator=None,
-        pdf_rag_system=None,
     ):
         self._agent_config = _load_agent_config()
         self._custom_instructions = _load_custom_instructions()
-        self._videodb_manager = videodb_manager
-        self._embedding_generator = embedding_generator
-        self._pdf_rag_system = pdf_rag_system
-
-        self._selected_video_ids: List[str] = []
-        self._selected_pdf_ids: List[str] = []
 
         self._exaone4_model = exaone4_model or self._load_exaone4()
-        self._strategy_model = strategy_model or self._load_strategy_model()
 
         self._tools = self._build_tools()
         self._prepend_instructions = False
@@ -136,14 +125,6 @@ class BattlefieldAgent:
         except Exception as e:
             logger.error(f"Failed to load EXAONE4 model: {e}")
             raise
-
-    def _load_strategy_model(self):
-        try:
-            from agent.strategy_model_loader import load_strategy_model_from_config_file
-            return load_strategy_model_from_config_file()
-        except Exception as e:
-            logger.warning(f"Failed to load EXAONE Deep model: {e}. Strategy tool will fail if used.")
-            return None
 
     def _build_tools(self) -> list:
         tools = []
@@ -219,27 +200,11 @@ class BattlefieldAgent:
         # (상황은 온톨로지 자동 주입으로 대체)
 
         try:
-            from tools.strategy_advisor_tool import create_strategy_advisor_tool
-            strategy_tool = create_strategy_advisor_tool(self._strategy_model)
-            tools.append(strategy_tool)
-            logger.info("Strategy advisor tool (EXAONE Deep) loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load strategy advisor tool: {e}")
-
-        try:
             from tools.graph_rag_tool import graph_rag_military_query
             tools.append(graph_rag_military_query)
             logger.info("Graph RAG military ontology tool loaded")
         except Exception as e:
             logger.warning(f"Failed to load graph RAG tool: {e}")
-
-        try:
-            from tools.strategy_advisor_tool import create_recon_advisor_tool
-            recon_advisor = create_recon_advisor_tool(self._strategy_model)
-            tools.append(recon_advisor)
-            logger.info("Recon advisor tool (EXAONE Deep route review) loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load recon advisor tool: {e}")
 
         return tools
 
@@ -249,6 +214,7 @@ class BattlefieldAgent:
 
         ca_cfg = self._agent_config.get("code_agent", {})
         valid_params = inspect.signature(CodeAgent.__init__).parameters
+        exec_timeout = ca_cfg.get("execution_timeout", 180)
 
         kwargs = {
             "tools": self._tools,
@@ -261,6 +227,11 @@ class BattlefieldAgent:
         if "stream_outputs" in valid_params:
             kwargs["stream_outputs"] = ca_cfg.get("stream_outputs", False)
 
+        # smolagents ≥1.16: executor_kwargs로 LocalPythonExecutor(timeout_seconds=...)에
+        # 직접 전달하는 것이 정식 경로 (기본 MAX_EXECUTION_TIME_SECONDS=30초)
+        if "executor_kwargs" in valid_params:
+            kwargs["executor_kwargs"] = {"timeout_seconds": exec_timeout}
+
         agent = CodeAgent(**kwargs)
 
         if self._custom_instructions:
@@ -268,15 +239,14 @@ class BattlefieldAgent:
 
         self._patch_single_tool_guard(agent)
         self._patch_executor_output_limit(agent)
-        self._patch_executor_timeout(agent)
+        self._patch_executor_timeout(agent, timeout_seconds=exec_timeout)
         return agent
 
-    def _patch_executor_timeout(self, code_agent, timeout_seconds: int = 300):
+    def _patch_executor_timeout(self, code_agent, timeout_seconds: int = 180):
         """
         Python executor의 코드 블록 실행 타임아웃을 늘린다.
 
-        smolagents 기본값은 30초인데, recon_advisor_tool / strategy_advisor_tool이
-        EXAONE Deep 추론을 동기 호출하므로 쉽게 초과된다.
+        smolagents 기본값은 30초인데, 툴 실행 시간이 이를 쉽게 초과할 수 있다.
         버전별로 속성명이 다를 수 있으므로 알려진 이름을 모두 시도한다.
         """
         for _exec_attr in ("python_executor", "python_interpreter", "_executor"):
@@ -284,7 +254,7 @@ class BattlefieldAgent:
             if _exec is None:
                 continue
             patched = False
-            for _attr in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+            for _attr in ("timeout_seconds", "timeout", "max_execution_time", "_timeout", "execution_timeout"):
                 if hasattr(_exec, _attr):
                     cur = getattr(_exec, _attr)
                     setattr(_exec, _attr, timeout_seconds)
@@ -309,7 +279,7 @@ class BattlefieldAgent:
                 _orig_call = _exec.__call__
 
                 def _timeout_patched_call(code, *a, _e=_exec, _t=timeout_seconds, _orig=_orig_call, **kw):
-                    for _n in ("timeout", "max_execution_time", "_timeout", "execution_timeout"):
+                    for _n in ("timeout_seconds", "timeout", "max_execution_time", "_timeout", "execution_timeout"):
                         try:
                             setattr(_e, _n, _t)
                         except Exception:
@@ -557,33 +527,6 @@ class BattlefieldAgent:
 
         return query
 
-    def set_video_context(self, video_ids: List[str]):
-        self._selected_video_ids = video_ids
-        try:
-            from tools.videodb_query_tool import set_selected_video_ids
-            set_selected_video_ids(video_ids)
-        except Exception as e:
-            logger.warning(f"Failed to update videodb tool context: {e}")
-        logger.info(f"Video context set: {video_ids}")
-
-    def set_pdf_context(self, pdf_ids: List[str]):
-        self._selected_pdf_ids = pdf_ids
-        try:
-            from tools.pdf_rag_tool import set_selected_pdfs
-            set_selected_pdfs(pdf_ids)
-        except Exception as e:
-            logger.warning(f"Failed to update PDF tool context: {e}")
-        logger.info(f"PDF context set: {pdf_ids}")
-
-    def add_pdf(self, pdf_path: str) -> str:
-        try:
-            from tools.pdf_rag_tool import add_pdf_to_rag
-            result = add_pdf_to_rag(pdf_path)
-            return str(result)
-        except Exception as e:
-            logger.error(f"Failed to add PDF: {e}")
-            return f"PDF 추가 실패: {e}"
-
     def get_situation_memory(self) -> dict:
         from tools.strategy_advisor_tool import get_situation_memory
         return get_situation_memory()
@@ -622,7 +565,3 @@ class BattlefieldAgent:
     @property
     def exaone4_model(self):
         return self._exaone4_model
-
-    @property
-    def strategy_model(self):
-        return self._strategy_model
