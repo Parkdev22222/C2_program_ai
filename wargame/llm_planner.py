@@ -137,14 +137,13 @@ def build_mission_query(state: dict) -> str:
     BattlefieldAgent.run()에 전달할 공격 임무계획 쿼리 문자열 생성.
 
     에이전트 툴 활용 순서:
-      1. get_wargame_situation()         → 부대 위치·전투력·행동 조회
-      2. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
-      3. predict_opfor_routes()          → 탐지된 OPFOR 예상 기동 경로 분석
-      4. get_optimal_attack_positions(opfor_routes_json=<3번 predicted_routes JSON>)
-                                         → 경로 차단 보너스 반영 최적 공격 위치 추천
-      5. 최종 임무계획 JSON 생성         → 4번 결과 기반 직접 결정, detected OPFOR만 목표
-      6. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      7. 응답에 JSON 블록 출력
+      (전장 상황은 [현재 전장 상황] 블록으로 자동 주입됨 — situation_result로 사용)
+      1. assess_recon_need()             → OPFOR 탐지 현황 (detected 목표만 공격)
+      2. recommend_recon_routes()        → Delta 정찰부대 경로 생성
+      3. get_optimal_attack_positions()  → detected OPFOR 기준 최적 공격 위치 추천
+      4. 최종 임무계획 JSON 생성         → 3번 결과 기반 직접 결정, detected OPFOR만 목표
+      5. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      6. 응답에 JSON 블록 출력
 
     ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
     """
@@ -168,22 +167,18 @@ def build_mission_query(state: dict) -> str:
 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
 ⚠️ 코드 첫 줄에 반드시 `import json` 을 실행하라. json 없이 json.dumps() 호출 시 NameError 발생.
 
+※ 전장 상황(situation_result)은 위 [현재 전장 상황] 블록의 JSON 데이터(키: "units" 배열 등)를 그대로 사용한다. 별도 상황 조회 툴 호출은 없다.
+
 [필수 툴 호출 순서]
-1. get_wargame_situation()
-   → 결과를 situation_result에 저장. 이미 [현재 전장 상황]으로 제공된 경우 호출 생략하고 해당 데이터를 situation_result로 사용.
-2. assess_recon_need()
+1. assess_recon_need()
    → 결과를 assess_result에 저장. OPFOR 탐지 현황 확인. detected 부대만 공격 목표로 사용
-3. recommend_recon_routes()
+2. recommend_recon_routes()
    → Delta 정찰부대의 경로 생성 → recon_result에 저장
    → recon_result["mission_plans"]의 첫 번째 항목을 Delta 임무로 사용
    → status가 "no_recon_units"이면 Delta 임무 제외, 나머지는 항상 포함
-4. predict_opfor_routes()
-   → 탐지된 OPFOR 부대의 예상 기동 경로(정면/우측우회/좌측우회) 분석
-   → 결과를 opfor_routes_result에 저장
-   → import json; opfor_routes_json = json.dumps(opfor_routes_result["predicted_routes"])
-5. get_optimal_attack_positions(opfor_routes_json=opfor_routes_json)
-   → 적 예상 경로 차단 보너스가 반영된 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-6. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
+3. get_optimal_attack_positions()
+   → detected OPFOR 기준 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
+4. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
 
    import json
 
@@ -201,13 +196,15 @@ def build_mission_query(state: dict) -> str:
 
    # ② BLUFOR 공격부대 임무 — attack_positions_result를 근거로 직접 결정
    #    attack_positions_result["attack_recommendations"] 에서 각 OPFOR 목표별 최적 공격 위치(lat/lon) 참조
-   #    situation_result["blufor_units"] 에서 각 부대 ID·전투력 참조
+   #    situation_result["units"] 중 side=="BLUFOR" 에서 각 부대 ID·전투력 참조
    #    • CP >= 30% → attack 또는 flank (attack_positions_result 권고 반영)
    #    • CP < 30%  → defend 또는 withdraw
-   for unit in situation_result["blufor_units"]:
+   for unit in situation_result["units"]:
+       if unit.get("side") != "BLUFOR":
+           continue
        if unit["unit_id"] == "Delta" or unit["status"] == "destroyed":
            continue
-       cp = unit["combat_power_pct"]
+       cp = unit["combat_power"]
        if cp <= 5:
            continue
        # attack_positions_result에서 이 부대에 권고된 공격 위치 찾기
@@ -225,7 +222,7 @@ def build_mission_query(state: dict) -> str:
    # ③ 공중지원 계획 — detected OPFOR의 known_lat/known_lon 사용
    air_support_plans = []
    # assess_result["opfor_summary"]의 detected 목표에만 공중지원 할당
-   # target 좌표는 반드시 assess_result 또는 situation_result의 known_lat/known_lon 사용
+   # target 좌표는 반드시 assess_result의 detected OPFOR known_lat/known_lon 사용
 
    final_plan = {{
        "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",
@@ -233,7 +230,7 @@ def build_mission_query(state: dict) -> str:
        "air_support_plans": air_support_plans
    }}
 
-7. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
+5. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 작전지역=철원(DMZ인근), 좌표=위경도(WGS84), lat=북위(38.0~38.27), lon=동경(127.0~127.34)
@@ -249,7 +246,7 @@ def build_mission_query(state: dict) -> str:
 {air_limit_line}
 [공중지원유형] cas(근접항공,반경1500m,6s지연) strike(정밀타격,400m,12s) artillery(포병,2500m,30s) helicopter(헬기,1000m,60s)
 ⚠️ [공중지원·포격 목표 좌표 강제 규칙]
-   air_support_plans 의 target 좌표는 반드시 get_wargame_situation() 또는 assess_recon_need() 에서
+   air_support_plans 의 target 좌표는 반드시 [현재 전장 상황] 또는 assess_recon_need() 에서
    조회한 탐지된(detected) OPFOR 부대의 known_lat, known_lon 값을 그대로 사용해야 합니다.
    임의 추정 좌표·waypoint 중간점·아군 위치 등을 target으로 사용 절대 금지.
    예: Red1 위치가 known_lat=37.074775, known_lon=127.141013 이면 → "target": [37.074775, 127.141013]
