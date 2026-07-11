@@ -313,7 +313,10 @@ def get_optimal_attack_positions(
       2) 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치
 
     후보 위치 다수·점수 세부내역·온톨로지 컨텍스트는 반환하지 않는다.
-    top_n / opfor_routes_json 인자는 하위호환용으로 남겨두며 사용하지 않는다.
+
+    Args:
+        top_n: (미사용, 하위호환) 이전 버전에서 타겟별 반환하던 위치 수. 현재 무시된다.
+        opfor_routes_json: (미사용, 하위호환) predict_opfor_routes() 결과 JSON 문자열. 현재 무시된다.
 
     Returns:
         {
