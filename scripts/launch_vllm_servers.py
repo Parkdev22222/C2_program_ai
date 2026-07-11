@@ -66,11 +66,19 @@ def build_agent_command(cfg: dict) -> tuple:
         "--served-model-name", serving.get("served_model_name", model_id),
         "--trust-remote-code",
         "--tensor-parallel-size", str(cfg.get("tensor_parallel_size", 1)),
-        "--gpu-memory-utilization", str(cfg.get("gpu_memory_utilization", 0.30)),
+        "--gpu-memory-utilization", str(cfg.get("gpu_memory_utilization", 0.90)),
         "--dtype", cfg.get("dtype", "float16"),
         "--max-model-len", str(cfg.get("max_model_len", 32768)),
-        "--enforce-eager",
     ]
+    # 추론 속도 최적화 플래그 (config에서 제어)
+    # enforce_eager=false(기본) → CUDA 그래프 사용으로 디코드 가속.
+    if cfg.get("enforce_eager", False):
+        cmd += ["--enforce-eager"]
+    if cfg.get("enable_prefix_caching", False):
+        cmd += ["--enable-prefix-caching"]
+    max_num_seqs = cfg.get("max_num_seqs")
+    if max_num_seqs:
+        cmd += ["--max-num-seqs", str(max_num_seqs)]
     quantization = cfg.get("quantization")
     if quantization:
         cmd += ["--quantization", quantization]

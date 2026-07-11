@@ -54,13 +54,20 @@ python main.py ui
 
 ```bash
 # EXAONE4 (:8000) → out1.log
+# 단일 모델 전용 GPU이므로 gpu-memory-utilization을 크게 잡아 KV 캐시를 확보하고,
+# --enforce-eager 를 넣지 않아 CUDA 그래프로 디코드를 가속한다.
 nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
   --served-model-name exaone4-agent --trust-remote-code \
   --quantization awq_marlin --dtype float16 \
-  --gpu-memory-utilization 0.43 --max-model-len 33768 \
-  --enable-prefix-caching \
+  --gpu-memory-utilization 0.90 --max-model-len 32768 \
+  --enable-prefix-caching --max-num-seqs 64 \
   > out1.log 2>&1 &
 ```
+
+> `scripts/launch_vllm_servers.py`는 위 값을 `config/models_config.yaml`의
+> `agent_model`(gpu_memory_utilization / enforce_eager / enable_prefix_caching /
+> max_num_seqs / quantization)에서 읽어 동일하게 구성합니다. VRAM 사용량을 조절하려면
+> `gpu_memory_utilization`을(를) 낮추세요(예: 40GB GPU는 0.90 유지 + `max_model_len` 하향).
 
 ```bash
 # 로딩 진행 확인 (Ctrl+C는 tail만 종료)
