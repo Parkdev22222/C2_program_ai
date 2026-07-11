@@ -42,16 +42,33 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
             }
         )
 
+    def _uid(node_id: str) -> str:
+        return node_id.replace("KGN-UNIT-", "")
+
     # 탐지 관계 (observes 엣지)
     detections = [
         {
-            "observer": e.source_node_id.replace("KGN-UNIT-", ""),
-            "target": e.target_node_id.replace("KGN-UNIT-", ""),
+            "observer": _uid(e.source_node_id),
+            "target": _uid(e.target_node_id),
             "observed_at": e.observed_at,
         }
         for e in kg_edges
         if e.relation == "observes"
     ]
+
+    # 적↔아군 관계 (observes=탐지 / engages=교전 / threatens=위협)
+    _FORCE_RELS = {"observes", "engages", "threatens"}
+    force_relations = [
+        {
+            "source": _uid(e.source_node_id),
+            "target": _uid(e.target_node_id),
+            "relation": e.relation,
+            "observed_at": e.observed_at,
+        }
+        for e in kg_edges
+        if e.relation in _FORCE_RELS
+    ]
+    force_relations.sort(key=lambda r: r.get("observed_at") or "")
 
     # 전투 이벤트 (Event 노드 — BattleEvent 페이로드)
     events = []
@@ -80,14 +97,20 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
 
     blufor = [u for u in units if u["side"] == "BLUFOR"]
     detected_targets = {d["target"] for d in detections}
+    engagements = [r for r in force_relations if r["relation"] == "engages"]
+    threats = [r for r in force_relations if r["relation"] == "threatens"]
     return {
         "units": units,
         "detections": detections,
+        # 적↔아군 관계: observes(탐지) / engages(교전) / threatens(위협)
+        "force_relations": force_relations[-60:],
         "events": events[-30:],
         "evidence": evidence[-30:],
         "summary": {
             "blufor_units": len(blufor),
             "detected_targets": len(detected_targets),
             "recent_events": len(events),
+            "engagements": len(engagements),
+            "threats": len(threats),
         },
     }
