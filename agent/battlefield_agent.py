@@ -166,22 +166,22 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load PDF RAG tools: {e}")
 
+        # 워게임 현재 상태를 직접 받아오는 조회 툴(get_wargame_situation 등)은
+        # 에이전트에서 제외한다. 상황 인식은 실시간 적재된 온톨로지(Neo4j) 조회로 대체.
         try:
-            from tools.wargame_query_tool import (
-                get_wargame_situation, get_wargame_unit_detail,
-                get_wargame_battle_log, get_intelligence_report,
-            )
-            tools.extend([get_wargame_situation, get_wargame_unit_detail,
-                          get_wargame_battle_log, get_intelligence_report])
-            logger.info("Wargame simulator query tools loaded")
+            from tools.ontology_query_tool import get_coa_situation_from_ontology
+            tools.append(get_coa_situation_from_ontology)
+            logger.info("Ontology (Neo4j) COA situation tool loaded")
         except Exception as e:
-            logger.warning(f"Failed to load wargame simulator query tools: {e}")
+            logger.warning(f"Failed to load ontology query tool: {e}")
 
+        # 실행(apply) 계열 툴은 유지 — 생성된 방책을 워게임에 반영하기 위함.
+        # (상태 조회용 get_wargame_engine_status 는 제외)
         try:
             from tools.wargame_mission_tool import (
-                apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status,
+                apply_wargame_mission_plan, apply_wargame_air_support,
             )
-            tools.extend([apply_wargame_mission_plan, apply_wargame_air_support, get_wargame_engine_status])
+            tools.extend([apply_wargame_mission_plan, apply_wargame_air_support])
             logger.info("Wargame mission execution tools loaded")
         except Exception as e:
             logger.warning(f"Failed to load wargame mission tools: {e}")
@@ -195,40 +195,11 @@ class BattlefieldAgent:
         except Exception as e:
             logger.warning(f"Failed to load mission plan validator tools: {e}")
 
-        try:
-            from tools.coa_analysis_tool import analyze_coa_wargame
-            tools.append(analyze_coa_wargame)
-            logger.info("COA analysis tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load COA analysis tool: {e}")
-
-        try:
-            from tools.wargame_strategy_tool import get_wargame_tactical_recommendation
-            tools.append(get_wargame_tactical_recommendation)
-            logger.info("Wargame tactical recommendation tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load wargame strategy tool: {e}")
-
-        try:
-            from tools.wargame_opfor_routes_tool import predict_opfor_routes
-            tools.append(predict_opfor_routes)
-            logger.info("OPFOR predicted routes tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load opfor routes tool: {e}")
-
-        try:
-            from tools.wargame_attack_advisor_tool import get_optimal_attack_positions
-            tools.append(get_optimal_attack_positions)
-            logger.info("Wargame attack position advisor tool loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load attack advisor tool: {e}")
-
-        try:
-            from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
-            tools.extend([assess_recon_need, recommend_recon_routes])
-            logger.info("Wargame recon tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load recon tools: {e}")
+        # analyze_coa_wargame / get_wargame_tactical_recommendation /
+        # predict_opfor_routes / get_optimal_attack_positions /
+        # assess_recon_need / recommend_recon_routes 는 모두 워게임 현재 상태를
+        # get_state() 로 직접 받아오는 툴이므로 에이전트 툴셋에서 제외한다.
+        # (UI 정찰 버튼 등 비-에이전트 경로에서는 계속 사용됨)
 
         try:
             from tools.strategy_advisor_tool import create_strategy_advisor_tool
