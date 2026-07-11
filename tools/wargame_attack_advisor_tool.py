@@ -308,64 +308,26 @@ def get_optimal_attack_positions(
     opfor_routes_json: str = "",
 ) -> dict:
     """
-    BLUFOR 인텔에 탐지된 OPFOR 유닛의 위치·고도·엄폐를 분석하여,
-    아군 피해를 최소화하면서 적군 피해를 극대화할 수 있는
-    최적 공격 위치와 공격 수단을 반환합니다.
+    detected OPFOR를 기준으로 두 가지만 계산해 간결하게 반환한다(컨텍스트 절약):
+      1) 공중지원 우선순위 스케줄 — 잔여 공중지원 횟수 내에서 목표 우선순위
+      2) 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치
 
-    predict_opfor_routes() 결과를 opfor_routes_json으로 전달하면
-    예상 적 기동 경로를 차단할 수 있는 위치에 보너스 점수가 추가됩니다.
-
-    후보 위치 평가 기준:
-      - 고도 우위 (공격자 위치가 높을수록 유리, 가중치 30%)
-      - 아군 엄폐 (공격 위치의 엄폐 양호할수록 아군 피해 감소, 25%)
-      - 적 노출 (목표 위치 엄폐 낮을수록 적 피해 증가, 20%)
-      - 교전 효율 (유효 사거리 내 교전 가능성, 15%)
-      - 시선(LOS) 품질 (지형 차폐 없을수록 유리, 10%)
-      - 경로 차단 보너스 (predict_opfor_routes 제공 시, 최대 +25점)
-
-    Args:
-        top_n:             타겟별 반환할 최적 위치 수 (기본 3)
-        opfor_routes_json: predict_opfor_routes() 반환값의 predicted_routes 리스트를
-                           JSON 직렬화한 문자열 (선택, 없으면 경로 차단 보너스 미적용)
+    후보 위치 다수·점수 세부내역·온톨로지 컨텍스트는 반환하지 않는다.
+    top_n / opfor_routes_json 인자는 하위호환용으로 남겨두며 사용하지 않는다.
 
     Returns:
         {
-            "status": "success" | "engine_not_ready" | "no_detected_targets",
+            "status": "success" | "engine_not_ready" | "no_detected_targets" | "error",
             "game_time": str,
-            "attack_recommendations": [
-                {
-                    "target": {
-                        "unit_id": str,
-                        "unit_type": str,
-                        "x_m": int,
-                        "y_m": int,
-                        "elevation_m": float,
-                        "cover": float,
-                        "combat_power": float | None,
-                        "detection_status": str
-                    },
-                    "optimal_positions": [
-                        {
-                            "rank": int,
-                            "x_m": int,
-                            "y_m": int,
-                            "elevation_m": float,
-                            "cover": float,
-                            "distance_m": int,
-                            "elevation_advantage": float,
-                            "engagement_factor": float,
-                            "los_quality": float,
-                            "score": float,               # 0~125 (경로 차단 보너스 포함)
-                            "route_interdict_bonus": float,
-                            "score_breakdown": dict,
-                            "attack_methods": [
-                                {"method": str, "priority": str, "reason": str}, ...
-                            ],
-                            "recommended_units": [str, ...]
-                        }, ...
-                    ],
-                    "summary": str   # 한줄 공격 권고 요약
-                }, ...
+            "air_remaining": int,
+            "air_support_schedule": [
+                {"priority": int, "target_unit_id": str, "target_type": str,
+                 "target": [lat, lon], "method": "cas|strike|helicopter", "reason": str}, ...
+            ],
+            "unit_key_highground": [
+                {"unit_id": str, "unit_type": str, "target_unit_id": str,
+                 "position": [lat, lon], "x_m": int, "y_m": int,
+                 "elevation_m": float, "elevation_advantage": float}, ...
             ]
         }
     """
@@ -442,145 +404,82 @@ def get_optimal_attack_positions(
             "terrain": _terrain_ctx,
         }
 
-        # ── 후보 위치 생성: 16방향 × 4거리 ─────────────────────────
-        # 거리: 1.2km / 2.0km / 3.0km / 4.5km (근거리~원거리 포병)
+        # ── 후보 위치 생성: 16방향 × 4거리 (고지 계산용) ────────────
         CANDIDATE_DISTANCES = [1_200, 2_000, 3_000, 4_500]
         CANDIDATE_ANGLES = [i * (360 / 16) for i in range(16)]  # 22.5° 간격
 
-        recommendations = []
+        def _air_method_for(unit_type):
+            ut = unit_type or ""
+            if "전차" in ut or "장갑" in ut or "기갑" in ut:
+                return "helicopter"   # 기갑 목표 → 헬기
+            if "자주포" in ut or "포병" in ut:
+                return "strike"       # 포병 → 정밀타격
+            return "cas"              # 그 외 → 근접항공지원
 
-        for target_entry in detected_targets:
-            ox = target_entry["known_x"]
-            oy = target_entry["known_y"]
-            target_unit_type = target_entry.get("unit_type") or "미확인"
-            target_cover = _t.cover_factor(ox, oy)
-            target_elev  = _t.elevation(ox, oy)
-
-            # ── 후보 위치 평가 ───────────────────────────────────
-            candidates = []
+        def _best_highground(ox, oy):
+            """타겟(ox,oy) 주변 후보 중 고지대 우위가 가장 큰 사격 위치."""
+            tcover = _t.cover_factor(ox, oy)
+            best = None
             for dist_m in CANDIDATE_DISTANCES:
                 for angle_deg in CANDIDATE_ANGLES:
-                    angle_rad = math.radians(angle_deg)
-                    cx = ox + math.cos(angle_rad) * dist_m
-                    cy = oy + math.sin(angle_rad) * dist_m
-                    cx = max(0.0, min(29_999.0, cx))
-                    cy = max(0.0, min(29_999.0, cy))
-
-                    score, detail = _score_attack_position(cx, cy, ox, oy, target_cover, _current_context)
+                    ar = math.radians(angle_deg)
+                    cx = max(0.0, min(29_999.0, ox + math.cos(ar) * dist_m))
+                    cy = max(0.0, min(29_999.0, oy + math.sin(ar) * dist_m))
+                    score, detail = _score_attack_position(cx, cy, ox, oy, tcover, _current_context)
                     if score < 0:
                         continue
+                    key = (detail.get("elevation_advantage", 0.0), score)
+                    if best is None or key > best[0]:
+                        best = (key, cx, cy, detail)
+            return best
 
-                    # 경로 차단 보너스 (predict_opfor_routes 결과 활용)
-                    route_bonus = _route_interdict_bonus(cx, cy, predicted_routes)
-                    total_score = score + route_bonus
-
-                    pos_lat, pos_lon = xy_to_latlon(cx, cy)
-                    candidates.append({
-                        "lat":   pos_lat,
-                        "lon":   pos_lon,
-                        "x_m":   int(cx),
-                        "y_m":   int(cy),
-                        "score": round(total_score, 1),
-                        "route_interdict_bonus": round(route_bonus, 1),
-                        **detail,
-                    })
-
-            if not candidates:
-                continue
-
-            # 점수 기준 정렬 → 상위 top_n
-            candidates.sort(key=lambda c: c["score"], reverse=True)
-            top_candidates = candidates[:top_n]
-
-            # ── 각 후보 위치에 공격 수단·권고 부대 추가 ──────────
-            optimal_positions = []
-            for rank, cand in enumerate(top_candidates, 1):
-                methods = _recommend_attack_methods(
-                    cand, target_unit_type, target_cover,
-                    target_elev, blufor_active
-                )
-                units = _recommend_units(target_unit_type, blufor_active)
-                optimal_positions.append({
-                    "rank": rank,
-                    **cand,
-                    "attack_methods": methods,
-                    "recommended_units": units,
-                })
-
-            # ── 탐지 신뢰도 계수 (위치 불확실 시 우선순위 감소) ────
-            det_status = target_entry["status"]
-            if det_status == "detected":
-                confidence = 1.0
-                attack_priority = "높음"
-                position_note = ""
-            else:  # approximate
-                confidence = 0.5
-                attack_priority = "낮음 (위치 불확실 — 정찰 후 재평가 권고)"
-                position_note = " ⚠️ 추정 위치 기반 — 실제 위치 오차 있음"
-
-            # ── 공중지원 가용 보너스 ─────────────────────────────
-            # detected 타겟에 공중지원 잔여 횟수가 있으면 우선순위 상향
-            # 잔여 횟수 1개당 +5점, 최대 +20점 (approximate 타겟에는 적용 안 함)
-            air_bonus = 0.0
-            air_support_recommended = False
-            if det_status == "detected" and air_remaining > 0:
-                air_bonus = min(air_remaining * 5.0, 20.0)
-                air_support_recommended = True
-                if attack_priority == "높음":
-                    attack_priority = f"높음 (공중지원 {air_remaining}회 가용 — 선제 타격 권고)"
-
-            # ── 요약 문자열 ──────────────────────────────────────
-            best = optimal_positions[0]
-            best_method = best["attack_methods"][0]["method"] if best["attack_methods"] else "직접 공격"
-            elev_note = (
-                f"고지대 우위 ×{best['elevation_advantage']:.2f}"
-                if best["elevation_advantage"] >= 1.10
-                else "고도 불리 — 측방/간접화력 권고"
-            )
-            air_note = f" / ✈ 공중지원 {air_remaining}회 가용" if air_support_recommended else ""
-            summary = (
-                f"{target_entry['unit_id']}({target_unit_type}) 공략: "
-                f"최적 위치 (lat={best['lat']}, lon={best['lon']}) "
-                f"고도{best['elevation_m']:.0f}m / {elev_note} / "
-                f"권고 수단: {best_method} / 종합점수 {best['score']:.0f}점"
-                f"{air_note}{position_note}"
-            )
-
-            tgt_lat, tgt_lon = xy_to_latlon(ox, oy)
-            recommendations.append({
-                "target": {
-                    "unit_id":              target_entry["unit_id"],
-                    "unit_type":            target_unit_type,
-                    "lat":                  tgt_lat,
-                    "lon":                  tgt_lon,
-                    "x_m":                  int(ox),
-                    "y_m":                  int(oy),
-                    "elevation_m":          round(target_elev, 1),
-                    "cover":                round(target_cover, 3),
-                    "combat_power":         target_entry.get("combat_power"),
-                    "detection_status":     det_status,
-                    "attack_priority":      attack_priority,
-                    "position_confidence":  confidence,
-                    "air_support_recommended": air_support_recommended,
-                    "air_support_remaining":   air_remaining,
-                },
-                "optimal_positions": optimal_positions,
-                "summary": summary,
-                "_sort_score": (best["score"] if optimal_positions else 0) * confidence + air_bonus,
+        # ① 공중지원 우선순위 스케줄 — detected 타겟을 전투력 높은 순으로 잔여 횟수만큼
+        detected_only = [e for e in detected_targets if e["status"] == "detected"]
+        detected_only.sort(key=lambda e: (e.get("combat_power") or 0.0), reverse=True)
+        air_support_schedule = []
+        for i, tgt in enumerate(detected_only[:air_remaining], 1):
+            t_lat, t_lon = xy_to_latlon(tgt["known_x"], tgt["known_y"])
+            air_support_schedule.append({
+                "priority": i,
+                "target_unit_id": tgt["unit_id"],
+                "target_type": tgt.get("unit_type") or "미확인",
+                "target": [t_lat, t_lon],
+                "method": _air_method_for(tgt.get("unit_type")),
+                "reason": f"전투력 {tgt.get('combat_power')} — 우선순위 {i}/{air_remaining}",
             })
 
-        # 탐지 신뢰도가 반영된 점수 기준 정렬
-        # detected(×1.0) > approximate(×0.5) — 위치 불확실 타겟은 후순위
-        recommendations.sort(key=lambda r: r["_sort_score"], reverse=True)
-        for r in recommendations:
-            del r["_sort_score"]
+        # ② 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치
+        unit_key_highground = []
+        for u in blufor_active:
+            if u.get("unit_type") == "정찰":
+                continue
+            ux, uy = float(u.get("x", 0)), float(u.get("y", 0))
+            tgt = min(
+                detected_targets,
+                key=lambda e: (e["known_x"] - ux) ** 2 + (e["known_y"] - uy) ** 2,
+            )
+            best = _best_highground(tgt["known_x"], tgt["known_y"])
+            if best is None:
+                continue
+            _key, cx, cy, detail = best
+            p_lat, p_lon = xy_to_latlon(cx, cy)
+            unit_key_highground.append({
+                "unit_id": u["id"],
+                "unit_type": u.get("unit_type", ""),
+                "target_unit_id": tgt["unit_id"],
+                "position": [p_lat, p_lon],
+                "x_m": int(cx),
+                "y_m": int(cy),
+                "elevation_m": detail.get("elevation_m"),
+                "elevation_advantage": detail.get("elevation_advantage"),
+            })
 
         return {
             "status": "success",
             "game_time": state.get("game_time_str", "00:00:00"),
-            "total_targets": len(recommendations),
-            "attack_recommendations": recommendations,
-            "ontology_context": _get_attack_ontology_ctx(),
+            "air_remaining": air_remaining,
+            "air_support_schedule": air_support_schedule,
+            "unit_key_highground": unit_key_highground,
         }
 
     except Exception as e:

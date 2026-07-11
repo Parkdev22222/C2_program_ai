@@ -191,11 +191,12 @@ def build_mission_query(state: dict) -> str:
            "objective": delta_mp.get("objective", "정찰")
        }})
 
-   # ② BLUFOR 공격부대 임무 — attack_positions_result를 근거로 직접 결정
-   #    attack_positions_result["attack_recommendations"] 에서 각 OPFOR 목표별 최적 공격 위치(lat/lon) 참조
+   # ② BLUFOR 공격부대 임무 — attack_positions_result["unit_key_highground"] 근거로 직접 결정
+   #    각 원소: {{"unit_id","target_unit_id","position":[lat,lon],"elevation_m","elevation_advantage"}}
+   #    → 부대별 주요 고지(position)를 waypoint로, 담당 타겟(target_unit_id)을 그대로 사용
    #    situation_result["units"] 중 side=="BLUFOR" 에서 각 부대 ID·전투력 참조
-   #    • CP >= 30% → attack 또는 flank (attack_positions_result 권고 반영)
-   #    • CP < 30%  → defend 또는 withdraw
+   #    • CP >= 30% → attack 또는 flank   • CP < 30% → defend 또는 withdraw
+   highground = {{h["unit_id"]: h for h in attack_positions_result.get("unit_key_highground", [])}}
    for unit in situation_result["units"]:
        if unit.get("side") != "BLUFOR":
            continue
@@ -204,23 +205,21 @@ def build_mission_query(state: dict) -> str:
        cp = unit["combat_power"]
        if cp <= 5:
            continue
-       # attack_positions_result에서 이 부대에 권고된 공격 위치 찾기
-       # (recommended_units에 부대 ID가 포함된 항목 우선)
        # ★ attack/flank 임무는 담당할 적 부대를 target_unit_id로 반드시 명시 ★
-       #   (detected OPFOR unit_id). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
+       #   (highground[unit_id]["target_unit_id"]). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
+       hg = highground.get(unit["unit_id"])
        mission_plans.append({{
            "company_id": unit["unit_id"],
-           "mission_type": "<attack_positions_result 기반으로 직접 결정: attack|flank|defend|withdraw|hold>",
-           "target_unit_id": "<담당 detected OPFOR unit_id — attack/flank일 때 필수, 그 외 생략>",
-           "waypoints": [[<attack_positions_result의 lat>, <lon>], ...],  # 위경도 소수점6자리
-           "objective": "<detected OPFOR unit_id 목표 또는 방어 목표>"
+           "mission_type": "<CP·전황 기반 직접 결정: attack|flank|defend|withdraw|hold>",
+           "target_unit_id": "<hg['target_unit_id'] — attack/flank일 때 필수, 그 외 생략>",
+           "waypoints": [hg["position"]] if hg else [],  # 위경도 소수점6자리 (주요 고지)
+           "objective": "<담당 OPFOR 공략 또는 방어 목표>"
        }})
 
-   # ③ 공중지원 계획 — detected OPFOR의 known_lat/known_lon 사용
+   # ③ 공중지원 계획 — attack_positions_result["air_support_schedule"] 사용
    air_support_plans = []
-   # detected OPFOR 목표에만 공중지원 할당
-   # target 좌표는 attack_positions_result의 대상 OPFOR 위치 또는
-   #   situation_result["units"] 중 side=="OPFOR" 부대의 lat/lon 사용
+   # 각 원소: {{"priority","target_unit_id","target_type","target":[lat,lon],"method"}}
+   # → 잔여 공중지원 횟수 내에서 우선순위대로 target·method(cas|strike|helicopter) 그대로 사용
 
    final_plan = {{
        "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",

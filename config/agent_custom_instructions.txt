@@ -58,7 +58,7 @@ print(result)
 - **recommend_recon_routes**: 교전 회피 정찰 경로 생성 — 정찰부대 임무계획 JSON 반환
 - **recon_advisor_tool**: recommend_recon_routes() 결과를 EXAONE Deep에게 전술 검토받아 텍스트 조언 반환
 - **predict_opfor_routes**: OPFOR 예상 접근 경로·병목 예측
-- **get_optimal_attack_positions**: 탐지된 OPFOR 위치 기준 최적 공격 위치·수단 추천
+- **get_optimal_attack_positions**: 공중지원 우선순위 스케줄 + 각 BLUFOR 부대별 주요 고지 반환 (간결)
 - **strategy_advisor_tool**: EXAONE Deep 모델에게 전략/전술 추천 요청
 - **apply_wargame_mission_plan**: 임무계획을 워게임 엔진에 즉시 적용 (dry_run=False)
 - **apply_wargame_air_support**: 공중지원 계획 적용 (dry_run=False)
