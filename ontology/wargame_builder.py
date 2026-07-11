@@ -141,6 +141,13 @@ class WargameOntologyBuilder:
                 "unit_type": u.get("unit_type", ""),
                 "branch": _UNIT_TYPE_BRANCH.get(u.get("unit_type", ""), "infantry"),
                 "color": u.get("color", ""),
+                # 최신 상태를 앵커에 스냅샷(매 스냅샷 MERGE로 갱신) — 1-hop 제한으로
+                # Observation 노드를 못 불러와도 부대 현재 위치/전투력/상태가 유지되도록.
+                "combat_power": u.get("combat_power"),
+                "status": u.get("status", ""),
+                "current_action": u.get("current_action", ""),
+                "x_m": u.get("x"),
+                "y_m": u.get("y"),
             },
         )
 

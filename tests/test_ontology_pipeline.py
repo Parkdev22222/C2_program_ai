@@ -90,6 +90,35 @@ def test_build_ingest_retrieve_serialize():
     assert alpha["combat_power"] == 70.0
 
 
+def test_per_seed_limit_bounds_context_over_turns():
+    """턴이 누적돼도 부대별 1-hop 5개 제한 + 관계 압축으로 컨텍스트가 고정된다."""
+    from collections import Counter
+
+    store = build_graph_store()
+    builder = WargameOntologyBuilder()
+
+    for t in range(1, 41):
+        store.ingest(*builder.build(_state(t, t * 30.0, 4000 + t * 100, 100 - t), []))
+    store.ingest(*builder.build(_state(41, 1230.0, 8100, 59), _EVENTS[:1]))
+
+    seeds = store.unit_entity_ids(scenario_id=WARGAME_SCENARIO_ID, side="BLUFOR")
+    kg_nodes, kg_edges, evidences = retrieve_graph_context(
+        store, seeds, scenario_id=WARGAME_SCENARIO_ID, per_seed_limit=5, edge_limit=500
+    )
+    # 부대(seed)별 로드 노드 ≤ 5
+    per_unit = Counter(n.entity_id for n in kg_nodes)
+    for s in seeds:
+        assert per_unit.get(s, 0) <= 5
+
+    sit = serialize_situation(kg_nodes, kg_edges, evidences)
+    # 관계는 (source,target,relation) 유니크로 압축 — 틱 수(40+)에 비례하지 않음
+    assert len(sit["force_relations"]) <= 6
+    # 앵커에 실린 최신 상태가 반영됨 (41턴: Alpha cp=59, x=8100)
+    alpha = next(u for u in sit["units"] if u["unit_id"] == "Alpha")
+    assert alpha["combat_power"] == 59
+    assert alpha["x_m"] == 8100
+
+
 def test_schema_fields_match_reference():
     """KG 노드/엣지/근거가 원본 스키마 필드를 갖는지 확인."""
     from ontology.models import Evidence, KnowledgeEdge, KnowledgeNode
@@ -114,5 +143,6 @@ if __name__ == "__main__":
 
     test_fallback_store_when_no_neo4j(_MP())
     test_build_ingest_retrieve_serialize()
+    test_per_seed_limit_bounds_context_over_turns()
     test_schema_fields_match_reference()
     print("✅ ontology pipeline tests passed")

@@ -29,6 +29,7 @@ class GraphStore(Protocol):
         since: str | None = None,
         until: str | None = None,
         scenario_id: str | None = None,
+        newest_first: bool = False,
     ) -> tuple[KnowledgeNode, ...]: ...
     def edges_for_nodes(
         self,
@@ -65,28 +66,47 @@ def retrieve_graph_context(
     as_of: str | None = None,
     node_limit: int = 10,
     edge_limit: int = 20,
+    per_seed_limit: int | None = None,
 ) -> tuple[tuple[KnowledgeNode, ...], tuple[KnowledgeEdge, ...], tuple[Evidence, ...]]:
     """seed entity_ids 로 Neo4j(또는 폴백)에서 KG 이웃·엣지·근거를 검색한다.
 
     호출 순서와 soft-fallback 은 원본 ``RetrieveContextNode.invoke`` 와 동일하다.
+
+    per_seed_limit 을 주면 seed(부대)별로 1-hop 이웃을 per_seed_limit 개까지만(최신 우선)
+    수집한다. 턴이 누적돼도 부대당 정보량이 고정되어 컨텍스트가 무한정 늘지 않는다.
     """
     since, until = _as_of_window(as_of)
 
-    kg_nodes = graph_store.neighborhood(
-        entity_ids,
-        limit=node_limit,
-        since=since,
-        until=until,
-        scenario_id=scenario_id,
-    )
-    if since is not None and entity_ids and not kg_nodes:
-        # 요청 일자에 KG 타임라인이 없으면 무시간 재조회로 degrade (원본 동일).
-        since = until = None
+    if per_seed_limit:
+        # 부대(seed)별로 최근 per_seed_limit 개의 1-hop 노드만 수집 후 합집합
+        collected: dict[str, KnowledgeNode] = {}
+        for eid in entity_ids:
+            for node in graph_store.neighborhood(
+                (eid,),
+                limit=per_seed_limit,
+                since=since,
+                until=until,
+                scenario_id=scenario_id,
+                newest_first=True,
+            ):
+                collected[node.kg_node_id] = node
+        kg_nodes: tuple[KnowledgeNode, ...] = tuple(collected.values())
+    else:
         kg_nodes = graph_store.neighborhood(
             entity_ids,
             limit=node_limit,
+            since=since,
+            until=until,
             scenario_id=scenario_id,
         )
+        if since is not None and entity_ids and not kg_nodes:
+            # 요청 일자에 KG 타임라인이 없으면 무시간 재조회로 degrade (원본 동일).
+            since = until = None
+            kg_nodes = graph_store.neighborhood(
+                entity_ids,
+                limit=node_limit,
+                scenario_id=scenario_id,
+            )
     kg_edges = graph_store.edges_for_nodes(
         tuple(node.kg_node_id for node in kg_nodes),
         limit=edge_limit,

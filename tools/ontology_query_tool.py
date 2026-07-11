@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 _graph_store = None
 _scenario_id = WARGAME_SCENARIO_ID
 
-# 세션 내 관측이 누적되므로 최신 관측을 놓치지 않도록 넉넉히 조회
-_NODE_LIMIT = 1000
-_EDGE_LIMIT = 2000
+# 부대(seed)별 1-hop 이웃을 최신 우선으로 이만큼만 조회 → 턴이 쌓여도 컨텍스트 고정
+_PER_SEED_LIMIT = 5
+_EDGE_LIMIT = 500
 
 
 def register_graph_store(store, scenario_id: str = WARGAME_SCENARIO_ID) -> None:
@@ -41,7 +41,8 @@ def register_graph_store(store, scenario_id: str = WARGAME_SCENARIO_ID) -> None:
 def get_ontology_situation() -> dict:
     """실시간 적재된 온톨로지(Neo4j)에서 아군 방책 판단용 전장 상황을 조회한다.
 
-    아군(BLUFOR) 모든 부대의 entity_id 를 seed 로 one-hop 이웃까지 검색한다.
+    아군(BLUFOR) 모든 부대의 entity_id 를 seed 로, 부대별 1-hop 이웃을 최신 5개까지만
+    검색한다(턴이 누적돼도 컨텍스트가 고정되도록 제한).
 
     Returns:
         dict — status / source / scenario_id / units / detections / events /
@@ -62,7 +63,7 @@ def get_ontology_situation() -> dict:
             _graph_store,
             seeds,
             scenario_id=_scenario_id,
-            node_limit=_NODE_LIMIT,
+            per_seed_limit=_PER_SEED_LIMIT,
             edge_limit=_EDGE_LIMIT,
         )
         result = serialize_situation(kg_nodes, kg_edges, evidences)
