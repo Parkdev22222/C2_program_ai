@@ -13,7 +13,7 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 
 | 레이어 | 색상 | 구성 요소 |
 |--------|------|-----------|
-| **UI Layer** | 파랑 | Gradio 웹 인터페이스 — AI 채팅, 워게임 시뮬레이터, 전장 지도 탭 |
+| **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`ui/web_api.py`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
 | **Agent / Planner** | 초록 | `BattlefieldAgent` (smolagents CodeAgent, EXAONE4) + `MissionPlanner` + `DetectionWorker` |
 | **Tools** | 주황·청록·보라 | 에이전트가 코드로 호출하는 도구 레이어 — 17개 도구, 스텝당 1개 제한 |
 | **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
@@ -36,11 +36,11 @@ pip install -r requirements.txt
 # 1) vLLM 서버 기동 (EXAONE4, 별도 터미널)
 python scripts/launch_vllm_servers.py
 
-# 2) AI 시스템 기동 (Gradio UI)
+# 2) AI 시스템 기동 (웹 대시보드 UI — FastAPI + Leaflet)
 python main.py ui
 ```
 
-브라우저에서 출력된 Gradio URL에 접속합니다.
+브라우저에서 출력된 주소(기본 `http://localhost:7860`)에 접속합니다.
 
 > LLM은 애플리케이션 프로세스 내부가 아닌 별도 vLLM 서버(OpenAI 호환 API)에서 동작합니다.
 > 서버 주소는 `config/models_config.yaml`의 `agent_model.serving`(기본 `127.0.0.1:8000`)
@@ -521,7 +521,8 @@ C2_program_ai/
 │   ├── single_tool_guard.py       # 스텝당 1 도구 제한 가드
 │   └── coord_utils.py             # 좌표 변환 유틸리티
 ├── ui/
-│   └── gradio_app.py              # Gradio 웹 인터페이스 + 자동 재계획 워커
+│   ├── web_api.py                 # FastAPI 웹 대시보드 서버 (UI 진입점, Leaflet 지도)
+│   └── gradio_app.py              # 워게임 UI 로직 + 자동 재계획 워커 (web_api에서 사용)
 ├── config/
 │   ├── agent_config.yaml          # 에이전트 설정
 │   ├── agent_custom_instructions.txt  # 에이전트 시스템 프롬프트
