@@ -688,44 +688,15 @@ def _execute_auto_attack_plan(event_type: str, *args):
         _recon_id_str = ", ".join(_recon_ids) if _recon_ids else "정찰부대"
         base_query = build_mission_query(state)
 
-        # 실시간 적재된 온톨로지(Neo4j)에서 상황을 미리 조회해 쿼리에 포함
-        # → 에이전트의 상황 인식은 워게임 직접 조회가 아닌 Neo4j 검색 결과에 기반한다.
-        _sit_block = ""
-        try:
-            import json as _sit_j
-            from tools.ontology_query_tool import get_coa_situation_from_ontology as _get_sit_fn
-            _precomputed_sit = _get_sit_fn()
-            _sit_block = (
-                "\n[현재 전장 상황 — 온톨로지(Neo4j)에서 미리 조회됨]\n"
-                "아래 데이터를 situation 변수로 간주하고 get_coa_situation_from_ontology() 호출 생략.\n"
-                f"```json\n{_sit_j.dumps(_precomputed_sit, ensure_ascii=False)}\n```\n"
-            )
-        except Exception as _sit_err:
-            logger.debug(f"[자동임무계획] 온톨로지 상황 사전 조회 실패 (무시): {_sit_err}")
-
-        # 정찰 경로는 UI에서 미리 계산해 주입 (recommend_recon_routes 는 에이전트 툴셋에서 제거됨)
-        _recon_block = ""
-        try:
-            import json as _recon_j
-            from tools.wargame_recon_tool import recommend_recon_routes as _reco_fn
-            _precomputed_recon = _reco_fn()
-            _recon_block = (
-                "\n[정찰 경로 — 미리 계산됨]\n"
-                "아래 recommend_recon_routes 결과의 unit_id·waypoints를 정찰 임무에 그대로 사용.\n"
-                f"```json\n{_recon_j.dumps(_precomputed_recon, ensure_ascii=False)}\n```\n"
-            )
-        except Exception as _recon_err:
-            logger.debug(f"[자동임무계획] 정찰 경로 사전 계산 실패 (무시): {_recon_err}")
-
+        # 전장 상황은 매 판단마다 온톨로지(Neo4j)에서 자동 조회되어 쿼리 앞에 주입된다
+        # (agent/battlefield_agent.py 의 _session_run 래퍼). 여기서 별도 주입하지 않는다.
         full_query = (
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
             f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
-            f"3. recommend_recon_routes / recon_advisor_tool 호출 금지 — {_recon_id_str} 정찰 경로는 아래 [정찰 경로]에 이미 제공됨.\n"
-            f"4. get_coa_situation_from_ontology() 호출 금지 — 전장 상황이 아래 [현재 전장 상황]에 이미 제공됨.\n"
+            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
+            f"4. 전장 상황은 자동 주입된 [현재 전장 상황](온톨로지)을 사용 — 별도 상황 조회 툴은 없음.\n"
             f"5. apply_wargame_mission_plan(dry_run=False) 호출 후 즉시 final_answer() 호출하고 종료. 추가 툴 호출 절대 금지.\n"
-            f"{_sit_block}\n"
-            f"{_recon_block}\n"
             + base_query
             + f"\n\n{trigger_desc}\n\n"
             f"[현재 BLUFOR 부대별 임무 현황]\n"
@@ -1525,26 +1496,24 @@ def wargame_request_recon_plan(history: List = None):
 
 def wargame_request_attack_plan(history: List = None):
     """
-    공격 임무계획 수립 — 상황·정찰은 UI에서 미리 계산해 주입, 에이전트는 방책만 생성
+    공격 임무계획 수립 — 전장 상황은 매 판단마다 온톨로지(Neo4j)에서 자동 주입됨
     ─────────────────────────────────────────────
-    사전 주입(UI, 비-에이전트):
-      • 온톨로지(Neo4j) 상황  ← get_coa_situation_from_ontology() [현재 전장 상황]
-      • 정찰 필요 판단        ← assess_recon_need()               [사전 계산 결과]
-      • 정찰 경로             ← recommend_recon_routes()          [정찰 경로]
-    에이전트 단계:
-      Step 1. [현재 전장 상황]에서 detected OPFOR 파악 (상황 조회 툴 호출 없음)
-      Step 2. strategy_advisor_tool(query=..., additional_context=<상황 요약>)
-              └─ EXAONE Deep 전술 조언
-      Step 3. 최종 임무계획 JSON 생성
-              detected OPFOR만 목표 / 공중지원도 detected 위치에만
-              CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
-              정찰부대는 [정찰 경로]의 waypoints로 recon 임무 포함
-      Step 4. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
-              └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
-      Step 5. 응답에 최종 JSON 블록 출력
+    전장 상황: [현재 전장 상황](온톨로지) 자동 주입 — 별도 상황 조회 툴 없음
+    Step 1. assess_recon_need() → OPFOR 탐지 현황(detected/approximate/lost)
+            → detected 목표만 공격 대상 (사전 계산 결과가 제공되면 재호출 불필요)
+    Step 2. get_optimal_attack_positions() → 탐지 OPFOR 기준 최적 공격 위치·기동 방향
+            → 결과를 Step 3 additional_context 로 전달
+    Step 3. strategy_advisor_tool(query="공격 임무계획 전술 검토", additional_context=<Step 2 결과>)
+            └─ EXAONE Deep 전술 조언
+    Step 4. 최종 임무계획 JSON 생성
+            detected OPFOR만 목표 / 공중지원도 detected 위치에만
+            CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
+            정찰부대는 recommend_recon_routes() waypoints 로 recon 임무 포함
+    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+            └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
+    Step 6. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
-    금지: validate/approve 툴 호출, 상황 조회/정찰 툴 재호출(사전 제공됨),
-          approximate/lost OPFOR 공중지원 목표 지정,
+    금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
           정찰부대(unit_type=정찰) 공격/flank 임무 부여 (recon 임무는 필수 포함)
     """
     global _wg_last_plan
@@ -1598,40 +1567,13 @@ def wargame_request_attack_plan(history: List = None):
         )
     except Exception:
         _assess_block = ""
-    # 실시간 적재된 온톨로지(Neo4j)에서 상황을 조회해 쿼리에 포함
-    # → 방책(COA) 생성의 상황 근거는 워게임 직접 조회가 아닌 Neo4j 검색 결과로 한다.
-    _onto_block = ""
-    try:
-        import json as _onto_json
-        from tools.ontology_query_tool import get_coa_situation_from_ontology as _onto_sit_fn
-        _onto_sit = _onto_sit_fn()
-        _onto_block = (
-            f"\n\n[현재 전장 상황 — 온톨로지(Neo4j)에서 조회됨]\n"
-            f"get_coa_situation_from_ontology() 호출 생략, 아래 데이터를 상황으로 간주.\n"
-            f"```json\n{_onto_json.dumps(_onto_sit, ensure_ascii=False)}\n```\n"
-        )
-    except Exception as _onto_err:
-        logger.debug(f"[공격임무계획] 온톨로지 상황 조회 실패 (무시): {_onto_err}")
-    # 정찰 경로는 UI에서 미리 계산해 주입 (recommend_recon_routes 는 에이전트 툴셋에서 제거됨)
-    _atk_recon_block = ""
-    try:
-        import json as _atk_recon_j
-        from tools.wargame_recon_tool import recommend_recon_routes as _atk_reco_fn
-        _atk_precomputed_recon = _atk_reco_fn()
-        _atk_recon_block = (
-            f"\n\n[정찰 경로 — 미리 계산됨]\n"
-            f"아래 recommend_recon_routes 결과의 unit_id·waypoints를 정찰 임무에 그대로 사용.\n"
-            f"```json\n{_atk_recon_j.dumps(_atk_precomputed_recon, ensure_ascii=False)}\n```\n"
-        )
-    except Exception as _atk_recon_err:
-        logger.debug(f"[공격임무계획] 정찰 경로 사전 계산 실패 (무시): {_atk_recon_err}")
+    # 전장 상황은 매 판단마다 온톨로지(Neo4j)에서 자동 조회되어 쿼리 앞에 주입된다
+    # (agent/battlefield_agent.py 의 _session_run 래퍼). 여기서 별도 주입하지 않는다.
     attack_suffix = (
         f"{_assess_block}"
-        f"{_onto_block}"
-        f"{_atk_recon_block}"
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
         f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
-        f"⚠️ {_atk_recon_str}(정찰부대)는 반드시 recon 임무로 포함. 위 [정찰 경로]의 waypoints 사용 (recommend_recon_routes 호출 금지).\n\n"
+        f"⚠️ {_atk_recon_str}(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"
