@@ -73,12 +73,18 @@ def test_build_ingest_retrieve_serialize():
     node_types = {n.node_type for n in kg_nodes}
     relations = {e.relation for e in kg_edges}
     assert {"Unit", "Observation", "Event"} <= node_types
-    assert {"has_observation", "observes", "participates_in"} <= relations
+    # 적↔아군 관계: observes(탐지) / engages(교전) / threatens(위협)
+    assert {"has_observation", "observes", "participates_in", "engages", "threatens"} <= relations
     assert evidences
 
     sit = serialize_situation(kg_nodes, kg_edges, evidences)
     assert sit["summary"]["blufor_units"] == 2
     assert sit["summary"]["detected_targets"] == 1
+    # 교전(engages) 및 위협(threatens) 관계가 상황에 노출되는지
+    assert sit["summary"]["engagements"] >= 1
+    assert sit["summary"]["threats"] >= 1
+    rels = {r["relation"] for r in sit["force_relations"]}
+    assert {"observes", "engages", "threatens"} <= rels
     # 최신 관측(두 번째 스냅샷)의 CP 가 반영되어야 함
     alpha = next(u for u in sit["units"] if u["unit_id"] == "Alpha")
     assert alpha["combat_power"] == 70.0

@@ -295,6 +295,25 @@ class WargameOntologyBuilder:
                         observed_at=iso,
                     )
                 )
+            # 교전(engages) 엣지 — 공격자↔피격자가 적-아군(cross-side)일 때 직접 관계 기록
+            if (
+                attacker in units_by_id
+                and defender in units_by_id
+                and units_by_id[attacker].get("side")
+                != units_by_id[defender].get("side")
+            ):
+                edges.append(
+                    KnowledgeEdge(
+                        kg_edge_id=f"KGE-ENGAGE-{key}",
+                        scenario_id=self.scenario_id,
+                        source_node_id=f"KGN-UNIT-{attacker}",
+                        target_node_id=f"KGN-UNIT-{defender}",
+                        relation="engages",
+                        evidence_ids=(f"EVD-{key}",),
+                        observed_at=iso,
+                    )
+                )
+
             evidences.append(
                 Evidence(
                     evidence_id=f"EVD-{key}",
@@ -308,6 +327,44 @@ class WargameOntologyBuilder:
             )
 
         return nodes, edges, evidences
+
+    # -- 적↔아군 위협(threatens) 엣지 (근접 기반) ---------------------
+    def _threat_edges(self, state: dict, iso: str) -> list[KnowledgeEdge]:
+        """탐지된 OPFOR → 가장 가까운 BLUFOR 부대로 위협 관계를 기록한다.
+
+        FOW 준수: 아군 인텔에 detected/approximate 로 잡힌 OPFOR만 대상으로 한다.
+        엣지 스키마에는 거리 속성이 없으므로 관계와 시각만 남긴다(원본 스키마 유지).
+        """
+        edges: list[KnowledgeEdge] = []
+        units = state.get("units", []) or []
+        blufor = [u for u in units if u.get("side") == "BLUFOR"]
+        if not blufor:
+            return edges
+        tick = state.get("tick", 0)
+        detected = {
+            e.get("unit_id")
+            for e in (state.get("intelligence", {}) or {}).get("BLUFOR", []) or []
+            if e.get("unit_id")
+        }
+        for u in units:
+            if u.get("side") != "OPFOR" or u["id"] not in detected:
+                continue
+            ox, oy = u.get("x", 0), u.get("y", 0)
+            nearest = min(
+                blufor,
+                key=lambda b: (b.get("x", 0) - ox) ** 2 + (b.get("y", 0) - oy) ** 2,
+            )
+            edges.append(
+                KnowledgeEdge(
+                    kg_edge_id=f"KGE-THREAT-{u['id']}-{nearest['id']}-{tick}",
+                    scenario_id=self.scenario_id,
+                    source_node_id=f"KGN-UNIT-{u['id']}",
+                    target_node_id=f"KGN-UNIT-{nearest['id']}",
+                    relation="threatens",
+                    observed_at=iso,
+                )
+            )
+        return edges
 
     # -- 공개 진입점 ---------------------------------------------------
     def build(
@@ -330,6 +387,7 @@ class WargameOntologyBuilder:
             edges.append(obs_edge)
 
         edges.extend(self._detection_edges(state, iso))
+        edges.extend(self._threat_edges(state, iso))
 
         if events:
             ev_nodes, ev_edges, ev_evidences = self._event_records(events, units_by_id)

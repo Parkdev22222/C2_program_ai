@@ -13,7 +13,7 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 
 | 레이어 | 색상 | 구성 요소 |
 |--------|------|-----------|
-| **UI Layer** | 파랑 | Gradio 웹 인터페이스 — AI 채팅, 워게임 시뮬레이터, 전장 지도 탭 |
+| **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`ui/web_api.py`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
 | **Agent / Planner** | 초록 | `BattlefieldAgent` (smolagents CodeAgent, EXAONE4) + `MissionPlanner` + `DetectionWorker` |
 | **Tools** | 주황·청록·보라 | 에이전트가 코드로 호출하는 도구 레이어 — 17개 도구, 스텝당 1개 제한 |
 | **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
@@ -36,11 +36,11 @@ pip install -r requirements.txt
 # 1) vLLM 서버 기동 (EXAONE4, 별도 터미널)
 python scripts/launch_vllm_servers.py
 
-# 2) AI 시스템 기동 (Gradio UI)
+# 2) AI 시스템 기동 (웹 대시보드 UI — FastAPI + Leaflet)
 python main.py ui
 ```
 
-브라우저에서 출력된 Gradio URL에 접속합니다.
+브라우저에서 출력된 주소(기본 `http://localhost:7860`)에 접속합니다.
 
 > LLM은 애플리케이션 프로세스 내부가 아닌 별도 vLLM 서버(OpenAI 호환 API)에서 동작합니다.
 > 서버 주소는 `config/models_config.yaml`의 `agent_model.serving`(기본 `127.0.0.1:8000`)
@@ -54,13 +54,20 @@ python main.py ui
 
 ```bash
 # EXAONE4 (:8000) → out1.log
+# 단일 모델 전용 GPU이므로 gpu-memory-utilization을 크게 잡아 KV 캐시를 확보하고,
+# --enforce-eager 를 넣지 않아 CUDA 그래프로 디코드를 가속한다.
 nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
   --served-model-name exaone4-agent --trust-remote-code \
   --quantization awq_marlin --dtype float16 \
-  --gpu-memory-utilization 0.43 --max-model-len 33768 \
-  --enable-prefix-caching \
+  --gpu-memory-utilization 0.90 --max-model-len 32768 \
+  --enable-prefix-caching --max-num-seqs 64 \
   > out1.log 2>&1 &
 ```
+
+> `scripts/launch_vllm_servers.py`는 위 값을 `config/models_config.yaml`의
+> `agent_model`(gpu_memory_utilization / enforce_eager / enable_prefix_caching /
+> max_num_seqs / quantization)에서 읽어 동일하게 구성합니다. VRAM 사용량을 조절하려면
+> `gpu_memory_utilization`을(를) 낮추세요(예: 40GB GPU는 0.90 유지 + `max_model_len` 하향).
 
 ```bash
 # 로딩 진행 확인 (Ctrl+C는 tail만 종료)
@@ -83,6 +90,125 @@ curl http://127.0.0.1:8000/health
 pkill -f "vllm serve"                      # 종료
 sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재시작
 ```
+
+---
+
+## Google Colab에서 실행
+
+EXAONE4-32B(AWQ)를 **별도 vLLM 서버(OpenAI 호환 API)**로 띄우고, 앱은 그 서버에 접속합니다.
+따라서 Colab에서는 **① vLLM 서버**(포트 8000)와 **② 웹 UI**(포트 7860) 두 프로세스를
+백그라운드로 함께 띄웁니다. 32B 모델이므로 **A100 GPU가 필요**합니다.
+
+| 런타임 | 가능 여부 | 비고 |
+|--------|-----------|------|
+| **A100 80GB** (Colab Pro+) | ✅ 권장 | 기본 설정 그대로 사용 |
+| **A100 40GB** (Colab Pro) | ✅ | `config/models_config.yaml`의 `agent_model.gpu_memory_utilization`/`max_model_len`를 낮춰 조정 |
+| T4 / L4 (무료·기본) | ❌ 불가 | 16~24GB로 32B AWQ 로딩 불가 |
+
+> 런타임 설정: **런타임 → 런타임 유형 변경 → 하드웨어 가속기: A100 GPU**
+
+### 1) 저장소 클론 (비공개 저장소 → 토큰 필요)
+
+```python
+# GitHub Personal Access Token (repo 권한) 사용
+GH_TOKEN = "ghp_..."   # 본인 토큰으로 교체
+!git clone -b claude/repo-access-check-lo2915 https://{GH_TOKEN}@github.com/Parkdev22222/C2_program_ai.git
+%cd C2_program_ai
+```
+
+### 2) 패키지 설치 (설치 순서 준수 — vLLM/transformers 버전 고정)
+
+```python
+# Step 1: 충돌 패키지 제거
+!pip uninstall vllm transformers torchaudio -y -q
+
+# Step 2: vLLM 고정 설치 (torch는 vLLM이 자동 설치)
+!pip install "vllm==0.6.6.post1" -q
+
+# Step 3: Colab 전용 의존성 설치 (openai 클라이언트·neo4j 등 포함)
+!pip install -r requirements-colab.txt -q
+```
+
+> ⚠️ 설치 후 **런타임을 재시작**하세요(런타임 → 세션 다시 시작). 재시작 후 `%cd C2_program_ai`로 다시 이동합니다.
+> `transformers 4.48+` / `vllm ≥ 0.7.0`은 Colab에서 커널 ABI 충돌을 일으키므로 위 버전을 반드시 고정합니다.
+
+### 3) (선택) 온톨로지 Neo4j 연결
+
+워게임 상태는 동일 스키마 온톨로지로 변환되어 실시간 적재됩니다. **환경변수를 설정하지 않으면
+자동으로 in-memory 그래프로 폴백**되므로 Neo4j 없이도 동작합니다. 원격 Neo4j(예: Neo4j Aura)를
+쓰려면 서버 기동 전에 설정하세요.
+
+```python
+import os
+os.environ["OI_NEO4J_URI"]      = "neo4j+s://<your-db>.databases.neo4j.io"
+os.environ["OI_NEO4J_USER"]     = "neo4j"
+os.environ["OI_NEO4J_PASSWORD"] = "<password>"
+```
+
+### 4) vLLM 서버 기동 (백그라운드, 포트 8000)
+
+`scripts/launch_vllm_servers.py`가 `config/models_config.yaml`을 읽어 EXAONE4를
+OpenAI 호환 vLLM 서버로 띄웁니다. Colab에서는 백그라운드 프로세스로 실행하고
+`/health`가 200이 될 때까지 대기합니다(가중치 다운로드 포함 수~수십 분 소요).
+
+```python
+import subprocess, time, urllib.request
+
+# EXAONE4 vLLM 서버를 백그라운드로 기동 (로그: logs/vllm_*.log)
+vllm_proc = subprocess.Popen(["python", "scripts/launch_vllm_servers.py"])
+
+# 서버 준비(/health=200) 대기
+ready = False
+for _ in range(360):  # 최대 ~30분
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3) as r:
+            if r.status == 200:
+                ready = True
+                break
+    except Exception:
+        pass
+    time.sleep(5)
+print("vLLM 서버 준비 완료" if ready else "아직 준비 안 됨 — logs/vllm_*.log 확인")
+```
+
+> 진행 로그 확인: `!tail -n 40 logs/vllm_exaone4-agent.log`
+
+### 5) 웹 UI 기동 + Colab 포트 노출 (포트 7860)
+
+앱은 위 vLLM 서버(:8000)에 접속하는 클라이언트만 만들므로 자체 모델 로딩은 없습니다.
+FastAPI 서버를 백그라운드 스레드로 띄운 뒤 Colab 포트를 노출합니다.
+
+```python
+import threading, time
+from main import init_agent
+from ui.web_api import start_server
+
+# vLLM 서버(:8000)에 연결하는 에이전트 생성
+agent = init_agent()
+
+# FastAPI 대시보드를 백그라운드 스레드로 기동 (포트 7860)
+threading.Thread(
+    target=lambda: start_server(agent=agent, host="0.0.0.0", port=7860),
+    daemon=True,
+).start()
+time.sleep(5)
+
+# Colab 인라인 창으로 대시보드 열기
+from google.colab.output import serve_kernel_port_as_window
+serve_kernel_port_as_window(7860)
+```
+
+> 새 탭 대신 인라인 프레임으로 열려면 `serve_kernel_port_as_window` 자리에
+> `from google.colab.output import serve_kernel_port_as_iframe; serve_kernel_port_as_iframe(7860)`
+> 를 사용하거나, 출력된 링크를 클릭하세요.
+
+### 자주 겪는 문제
+
+- **CUDA OOM**: `config/models_config.yaml`의 `agent_model.gpu_memory_utilization`을 낮추거나 `max_model_len`을 줄이세요(GPU별 권장값은 파일 주석 참고). A100 40GB는 특히 조정이 필요합니다.
+- **`/health`가 계속 실패**: `logs/vllm_exaone4-agent.log`의 마지막 부분을 확인하세요(OOM·다운로드 지연 등). 서버가 죽었으면 4)를 다시 실행합니다.
+- **`No module named 'vllm'` / ABI 오류**: 2)의 버전 고정과 **런타임 재시작**을 다시 확인하세요.
+- **모델 다운로드 지연**: HuggingFace에서 32B 가중치를 받으므로 시간이 걸립니다. 필요 시 `huggingface-cli login`으로 토큰을 등록하세요.
+- **서버 종료**: `vllm_proc.terminate()` 또는 `!pkill -f "vllm serve"` 후 `!nvidia-smi`로 GPU 메모리 반환을 확인하세요.
 
 ---
 
@@ -402,7 +528,8 @@ C2_program_ai/
 │   ├── single_tool_guard.py       # 스텝당 1 도구 제한 가드
 │   └── coord_utils.py             # 좌표 변환 유틸리티
 ├── ui/
-│   └── gradio_app.py              # Gradio 웹 인터페이스 + 자동 재계획 워커
+│   ├── web_api.py                 # FastAPI 웹 대시보드 서버 (UI 진입점, Leaflet 지도)
+│   └── gradio_app.py              # 워게임 UI 로직 + 자동 재계획 워커 (web_api에서 사용)
 ├── config/
 │   ├── agent_config.yaml          # 에이전트 설정
 │   ├── agent_custom_instructions.txt  # 에이전트 시스템 프롬프트
