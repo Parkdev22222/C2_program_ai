@@ -1840,20 +1840,48 @@ class WargameEngine:
                           f"{u.id}(정찰) → 측방 우회 기동")
 
     def _ai_standoff(self, u: Unit, en_cx: float, en_cy: float, log_type: str):
+        """자주포: 후방 간접사격 진지 유지.
+
+        부대 실사거리(indirect_range: K9 40km / 곡산 60km 등)를 기준으로,
+        적이 유효 사거리 안(근접 위험권 밖)이면 **전진하지 않고 후방에서 사격**한다.
+        (기존엔 고정 9km 지점으로 전진시켜 후방 자주포를 근접 위험권으로 끌어냈음)
+        """
         dist_to_en = math.hypot(u.x - en_cx, u.y - en_cy)
-        ideal_dist = _INDIRECT_MAX_RANGE * 0.6
-        if abs(dist_to_en - ideal_dist) < 500:
+        max_range  = getattr(u, "indirect_range", _INDIRECT_MAX_RANGE)
+        # 근접 위험 회피 하한 — 자주포 근거리 취약(_SPG_CLOSE_RANGE) 여유 있게 뒤로
+        safe_min   = max(_SPG_CLOSE_RANGE * 3.0, _INDIRECT_MIN_RANGE * 2.0)
+
+        # ① 유효 사거리 안 + 근접권 밖 → 후방 진지 그대로 유지(전진 금지)
+        if safe_min <= dist_to_en <= max_range:
             u.waypoints      = []
             u.current_action = "hold"
-        else:
-            angle = math.atan2(u.y - en_cy, u.x - en_cx)
+            self.db.log_event(self.tick, self.game_time, log_type,
+                              f"{u.id}(자주포) 후방 사격진지 유지·포격지원 "
+                              f"(거리 {dist_to_en/1000:.1f}km / 사거리 {max_range/1000:.0f}km)")
+            return
+        # ② 적이 너무 가까움(근접 위험) → 후방으로 이탈
+        if dist_to_en < safe_min:
+            angle = math.atan2(u.y - en_cy, u.x - en_cx)   # 적 반대(후방) 방향
+            back  = safe_min + 3_000.0
             u.waypoints = [[
-                max(0, min(29_999, en_cx + math.cos(angle) * ideal_dist)),
-                max(0, min(29_999, en_cy + math.sin(angle) * ideal_dist)),
+                max(0, min(29_999, en_cx + math.cos(angle) * back)),
+                max(0, min(29_999, en_cy + math.sin(angle) * back)),
             ]]
-            u.current_action = "move"
+            u.current_action = "withdraw"
+            self.db.log_event(self.tick, self.game_time, log_type,
+                              f"{u.id}(자주포) 근접 위협({dist_to_en/1000:.1f}km) → 후방 이탈")
+            return
+        # ③ 사거리 밖(너무 멂) → 사거리 내(최대의 85%)로 최소 전진
+        angle    = math.atan2(u.y - en_cy, u.x - en_cx)
+        approach = max_range * 0.85
+        u.waypoints = [[
+            max(0, min(29_999, en_cx + math.cos(angle) * approach)),
+            max(0, min(29_999, en_cy + math.sin(angle) * approach)),
+        ]]
+        u.current_action = "move"
         self.db.log_event(self.tick, self.game_time, log_type,
-                          f"{u.id}(자주포) → 간접사격 진지 유지 (거리{dist_to_en/1000:.1f}km)")
+                          f"{u.id}(자주포) 사거리 확보 이동 (거리 {dist_to_en/1000:.1f}km "
+                          f"> 사거리 {max_range/1000:.0f}km)")
 
     def _ai_armor(self, u: Unit, nearest: Unit, dist: float, log_type: str):
         d_range = _DIRECT_RANGE.get(u.unit_type, 3_000.0)
