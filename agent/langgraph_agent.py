@@ -22,7 +22,7 @@ from agent.battlefield_agent import (
     _load_custom_instructions,
     classify_intent,
 )
-from agent.langgraph_llm import build_chat_llm
+from agent.langgraph_llm import build_chat_llm, describe_llm_target, resolve_provider
 from agent.langgraph_tools import build_langchain_tools
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ class LangGraphBattlefieldAgent:
         self._custom_instructions = _load_custom_instructions()
         self._exaone4_model = exaone4_model
 
+        self._provider = resolve_provider()
         self._llm = build_chat_llm()
         self._tools = build_langchain_tools()
         self._graph = self._build_graph()
@@ -63,6 +64,8 @@ class LangGraphBattlefieldAgent:
         # agent.agent.run(...) 로 호출되는 경로(COA/공격/정찰) 호환
         self.agent = _RawRunner(self)
         self._situation_memory: dict = {}
+        # 활성 LLM 프로바이더를 항상 보이도록 출력 (vllm/gemini 혼동·연결오류 진단용)
+        logger.warning("[C2 LLM] 활성 프로바이더=%s (%s)", self._provider, describe_llm_target())
         logger.info("LangGraphBattlefieldAgent 초기화 완료 (tools=%d)", len(self._tools))
 
     # ── 시스템 프롬프트 / 그래프 ──────────────────────────────────
@@ -104,8 +107,23 @@ class LangGraphBattlefieldAgent:
                 config={"recursion_limit": self._recursion_limit()},
             )
         except Exception as e:
-            logger.error("LangGraph 실행 오류: %s", e, exc_info=True)
-            return f'{{"status": "error", "message": "{e}"}}'
+            import json as _json
+
+            hint = ""
+            if "connection" in str(e).lower():
+                if self._provider in ("gemini", "google"):
+                    hint = (" — Gemini API 연결 실패: GOOGLE_API_KEY/네트워크를 확인하세요.")
+                else:
+                    hint = (
+                        f" — vLLM 서버({describe_llm_target()})에 연결할 수 없습니다. 서버 기동 여부를 "
+                        "확인하거나, Gemini API를 쓰려면 C2_LLM_PROVIDER=gemini + GOOGLE_API_KEY 를 "
+                        "설정하세요."
+                    )
+            logger.error("LangGraph 실행 오류(provider=%s): %s%s", self._provider, e, hint, exc_info=True)
+            return _json.dumps(
+                {"status": "error", "message": f"{e}{hint}", "provider": self._provider},
+                ensure_ascii=False,
+            )
         msgs = result.get("messages", []) if isinstance(result, dict) else []
         if not msgs:
             return ""

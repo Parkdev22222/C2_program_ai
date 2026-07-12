@@ -75,6 +75,15 @@ def _resolve_gemini_api_key(gcfg: dict) -> str:
     )
 
 
+def describe_llm_target() -> str:
+    """현재 프로바이더가 연결할 대상(엔드포인트/모델)을 사람이 읽을 문자열로 반환."""
+    provider = resolve_provider()
+    if provider in ("gemini", "google"):
+        gcfg = _full_cfg().get("gemini_model", {}) or {}
+        return f"gemini model={gcfg.get('model', 'gemini-2.0-flash')}"
+    return f"vllm base_url={resolve_base_url()}"
+
+
 def _build_vllm_llm(temperature: float | None, max_tokens: int | None):
     from langchain_openai import ChatOpenAI
 
