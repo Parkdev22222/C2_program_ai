@@ -392,6 +392,10 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         return None
     if _wg_engine is None:
         units = setup_bn_vs_bn()
+        _bl = [u.id for u in units if u.side == "BLUFOR"]
+        _op = [u.id for u in units if u.side == "OPFOR"]
+        logger.warning("[시나리오] setup_cheorwon_bn 로드 — BLUFOR %d개%s / OPFOR %d개%s",
+                       len(_bl), _bl, len(_op), _op)
         _wg_engine = WargameEngine(units)
         _wg_planner = MissionPlanner()
         _wg_register_engine(_wg_engine)
@@ -1288,6 +1292,10 @@ def wargame_reset_sim():
     if not _WARGAME_OK:
         return "초기화 실패", None, None, "", ""
     units = setup_bn_vs_bn()
+    _bl = [u.id for u in units if u.side == "BLUFOR"]
+    _op = [u.id for u in units if u.side == "OPFOR"]
+    logger.warning("[시나리오] 리셋 — setup_cheorwon_bn: BLUFOR %d개%s / OPFOR %d개%s",
+                   len(_bl), _bl, len(_op), _op)
     if _wg_engine is not None:
         _wg_engine.reset(units)
     else:
@@ -1977,12 +1985,13 @@ def _init_harness_controller():
         return None
     try:
         from wargame.harness import HarnessController
-        from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
+        from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
         from wargame.llm_planner import MissionPlanner
 
         def _engine_factory():
             units = setup_bn_vs_bn()
             eng = WargameEngine(units)
+            eng.full_recon = True  # 철원 시나리오: UAV 완전정찰
             _wg_register_engine(eng)
             return eng
 
