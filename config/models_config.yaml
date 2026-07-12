@@ -7,7 +7,7 @@ llm_provider: "vllm"
 
 # ===== Gemini API 설정 (llm_provider=gemini 일 때 사용) =====
 gemini_model:
-  model: "gemini-2.0-flash"        # 예: gemini-2.0-flash, gemini-1.5-pro
+  model: "gemini-2.5-flash"        # 예: gemini-2.5-flash, gemini-2.5-pro
   # API 키는 이 파일에 직접 넣지 말고 환경변수로 주입하세요.
   #   export GOOGLE_API_KEY="<your-key>"   (또는 GEMINI_API_KEY)
   # 아래는 키가 저장된 "환경변수 이름"일 뿐, 키 값이 아닙니다.

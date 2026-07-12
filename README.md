@@ -165,7 +165,7 @@ python main.py ui
 ```
 
 - 사용 모델은 `config/models_config.yaml`의 `gemini_model.model`에서 지정합니다
-  (기본 `gemini-2.0-flash`, 필요 시 `gemini-1.5-pro` 등으로 변경).
+  (기본 `gemini-2.5-flash`, 필요 시 `gemini-2.5-pro` 등으로 변경).
 - `models_config.yaml`의 `api_key_env`는 **키 값이 아니라 키가 담긴 환경변수 이름**입니다.
   기본값 `GOOGLE_API_KEY`를 쓰면 위 `export`만으로 연동됩니다.
 - Gemini는 tool-calling을 기본 지원하므로 LangGraph 그래프에서 EXAONE4와 **동일한 툴셋·

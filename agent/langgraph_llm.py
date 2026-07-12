@@ -80,7 +80,7 @@ def describe_llm_target() -> str:
     provider = resolve_provider()
     if provider in ("gemini", "google"):
         gcfg = _full_cfg().get("gemini_model", {}) or {}
-        return f"gemini model={gcfg.get('model', 'gemini-2.0-flash')}"
+        return f"gemini model={gcfg.get('model', 'gemini-2.5-flash')}"
     return f"vllm base_url={resolve_base_url()}"
 
 
@@ -113,7 +113,7 @@ def _build_gemini_llm(temperature: float | None, max_tokens: int | None):
             "Gemini API 키가 없습니다. 환경변수로 키를 주입하세요: "
             'export GOOGLE_API_KEY="<your-key>" (또는 GEMINI_API_KEY).'
         )
-    model = gcfg.get("model", "gemini-2.0-flash")
+    model = gcfg.get("model", "gemini-2.5-flash")
     llm = ChatGoogleGenerativeAI(
         model=model,
         google_api_key=api_key,
