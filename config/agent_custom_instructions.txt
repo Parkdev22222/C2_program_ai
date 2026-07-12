@@ -90,14 +90,16 @@ print(result)
 - assess_recon_need()는 탐지 현황 확인 목적으로만 호출 가능
   단, 결과가 "정찰 필요"여도 recommend_recon_routes를 호출하지 말 것
   → detected OPFOR 목록을 파악하는 용도로만 사용
-- 공중지원(cas/strike/artillery/helicopter)은 탐지 상태가 'detected'인 OPFOR 위치에만 할당
-- 탐지 상태가 'approximate' 또는 'lost'인 OPFOR에는 공중지원 사용 금지 — 정찰 후 위치 확인 필수
+- 항공 자산 CAS(cas/strike/helicopter)는 **아군 전용**이며 **5회 제한**. 포병(자주포 부대) 화력지원은
+  별도 상시 지원(횟수 제한 없음, 부대 전멸 전까지)이며 항공 CAS와 **동시 투사** 가능.
+- 공중지원은 탐지 상태가 'detected'인 OPFOR 위치에만 할당 (approximate/lost 금지)
 - 공중지원 목표 좌표는 인텔 데이터의 known_x, known_y (det_status='detected')를 그대로 사용
-- 교전 초반(게임 시작 후 초기 탐지 단계)에 위치가 확인된(detected) 적에 대해 공중지원을 적극 활용하라
+- ★ 아군 부대가 적과 인접(≈1.5km 이내, 근접 교전)한 표적은 **정밀타격(strike, 좁은 반경)** 사용 ★
+  광역 cas 금지(근접 상황 부적합). air_support_schedule의 method가 이미 strike면 그대로 따를 것.
+- 교전 초반 위치가 확인된(detected) 적에 대해 공중지원을 적극 활용하라
   • 초반 탐지 시 항공 타격(cas/strike)으로 선제 화력 투사 → 적 전투력 조기 약화
   • 공중지원 잔여 횟수가 있으면 detected OPFOR 1개 이상에 반드시 공중지원 할당
-  • 포병(artillery)은 넓은 반경(2500m) 활용 — 클러스터 적군에 효과적
-  • 헬기(helicopter)는 기갑 목표(전차·장갑차)에 우선 사용
+  • 헬기(helicopter)는 기갑 목표(전차·장갑차)에 우선 사용, 고가치·근접 표적은 strike(정밀타격)
 
 [STRATEGY]
 - 전략/전술 쿼리 시 get_wargame_situation + get_wargame_tactical_recommendation 결과를 근거로

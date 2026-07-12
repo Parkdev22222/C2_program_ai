@@ -38,6 +38,8 @@ _SUPPRESSION_RANGE = 4_000.0
 _ARTILLERY_RANGE = 8_000.0   # 자주포 간접사격 사거리
 # 이 전투력 이상인 detected 표적은 정밀타격(strike) 대상 — 고가치 점표적 제거
 _STRIKE_CP_THRESHOLD = 80.0
+# 아군 부대가 표적과 이 거리 이내면 근접 교전으로 보고 정밀타격(좁은 반경)을 권고
+_CLOSE_CONTACT_RANGE = 1_500.0
 
 
 def _engagement_factor(dist: float) -> float:
@@ -446,13 +448,26 @@ def get_optimal_attack_positions(
         air_support_schedule = []
         for i, tgt in enumerate(detected_only[:air_remaining], 1):
             t_lat, t_lon = xy_to_latlon(tgt["known_x"], tgt["known_y"])
+            tx, ty = tgt["known_x"], tgt["known_y"]
+            # 아군 부대가 이 표적과 인접(근접 교전)이면 광역 CAS 대신 정밀타격(strike, 좁은 반경)
+            near_friendly = min(
+                (math.hypot(u.get("x", 0) - tx, u.get("y", 0) - ty) for u in blufor_active),
+                default=1e9,
+            )
+            if near_friendly <= _CLOSE_CONTACT_RANGE:
+                method = "strike"
+                reason = (f"아군 근접 {near_friendly:.0f}m — 정밀타격(좁은 반경) 권고 "
+                          f"/ 전투력 {tgt.get('combat_power')}")
+            else:
+                method = _air_method_for(tgt.get("unit_type"), tgt.get("combat_power"))
+                reason = f"전투력 {tgt.get('combat_power')} — 우선순위 {i}/{air_remaining}"
             air_support_schedule.append({
                 "priority": i,
                 "target_unit_id": tgt["unit_id"],
                 "target_type": tgt.get("unit_type") or "미확인",
                 "target": [t_lat, t_lon],
-                "method": _air_method_for(tgt.get("unit_type"), tgt.get("combat_power")),
-                "reason": f"전투력 {tgt.get('combat_power')} — 우선순위 {i}/{air_remaining}",
+                "method": method,
+                "reason": reason,
             })
 
         # ② 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치

@@ -1358,32 +1358,9 @@ class WargameEngine:
         opfor_intel  = self._intelligence["OPFOR"]
         detected_blu = [e for e in opfor_intel.values() if e["status"] == "detected"]
 
-        # ── OPFOR 공중지원 (쿨다운 기반) ─────────────────────────────
-        self._opfor_air_cooldown -= self._OPFOR_AI_INTERVAL
-        if self._opfor_air_cooldown <= 0.0 and detected_blu:
-            self._opfor_air_cooldown = self._OPFOR_AIR_INTERVAL
-            # 탐지된 BLUFOR 중 전투력이 높고 밀집한 위치 선택
-            target_entry = max(detected_blu, key=lambda e: e.get("combat_power", 0))
-            stype = random.choice(["strike", "artillery", "helicopter"])
-            preset = AIR_SUPPORT_PRESETS[stype]
-            air_plan = {
-                "air_support_plans": [{
-                    "call_sign": f"OPFOR-{stype.upper()}-{self.tick}",
-                    "support_type": stype,
-                    "target": [target_entry["known_x"], target_entry["known_y"]],
-                    "radius": preset["radius"],
-                    "damage_rate": preset["damage_rate"],
-                    "duration": preset["duration"],
-                    "delay": preset["delay"],
-                }]
-            }
-            self._apply_air_support_plan_locked(air_plan, side="OPFOR")
-            self.db.log_event(
-                self.tick, self.game_time, "OPFOR_AI",
-                f"OPFOR 공중지원 요청: {stype} → "
-                f"BLUFOR {target_entry['unit_id']} 위치 "
-                f"({target_entry['known_x']/1000:.1f}km, {target_entry['known_y']/1000:.1f}km)"
-            )
+        # ── OPFOR 공중지원(항공 자산 기반 CAS)은 비활성 ──────────────
+        # 헬기 등 항공 자산을 통한 CAS는 아군(BLUFOR) 전용이다. OPFOR는 항공 CAS를
+        # 요청하지 않으며, 화력지원은 온맵 자주포(Red5)의 간접사격으로만 수행한다.
 
         # ① 제압·저하 부대 우선 처리
         for u in opfor_all:

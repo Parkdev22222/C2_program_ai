@@ -216,10 +216,13 @@ def build_mission_query(state: dict) -> str:
            "objective": "<담당 OPFOR 공략 또는 방어 목표>"
        }})
 
-   # ③ 공중지원 계획 — attack_positions_result["air_support_schedule"] 사용
+   # ③ 항공 자산 CAS 계획 — attack_positions_result["air_support_schedule"] 사용 (아군 전용)
    air_support_plans = []
    # 각 원소: {{"priority","target_unit_id","target_type","target":[lat,lon],"method"}}
-   # → 잔여 공중지원 횟수 내에서 우선순위대로 target·method(cas|strike|helicopter) 그대로 사용
+   # → 잔여 공중지원 횟수(air CAS는 5회 제한) 내에서 우선순위대로 target·method 그대로 사용
+   # ★ 아군 부대가 적과 인접(근접 교전)한 표적은 반드시 정밀타격(strike, 좁은 반경) 사용 ★
+   #   (스케줄의 method가 이미 strike로 설정됨 — 광역 cas 사용 금지: 근접 상황 부적합)
+   # 참고: 포병(자주포 부대) 화력지원은 별도 상시 지원(횟수 제한 없음)이며 항공 CAS와 동시 투사됨.
 
    final_plan = {{
        "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",
