@@ -339,14 +339,19 @@ class WargameEngine:
     def _apply_air_support_plan_locked(self, plan: dict, side: str = "BLUFOR"):
         """락 보유 상태에서 공중지원 계획 적용 (BLUFOR/OPFOR 공용)."""
         for sp in plan.get("air_support_plans", []):
-            if self._air_use_count.get(side, 0) >= self._AIR_USE_LIMIT:
-                logger.warning(
-                    f"[공중지원 제한] {side} 공중지원 횟수 초과 "
-                    f"({self._air_use_count[side]}/{self._AIR_USE_LIMIT}) — 요청 무시"
-                )
-                continue
-            self._air_use_count[side] = self._air_use_count.get(side, 0) + 1
             stype  = sp.get("support_type", "cas")
+            # 포병(artillery)은 화력지원으로 횟수 제한 없음(항공 CAS 5회 제한과 무관).
+            # 항공 자산(cas/strike/helicopter)만 _AIR_USE_LIMIT 로 카운트·제한한다.
+            # → 같은 좌표에 공중지원 + 포병 동시 투사 가능(포병은 카운트 소모 없이 등록).
+            is_artillery = (stype == "artillery")
+            if not is_artillery:
+                if self._air_use_count.get(side, 0) >= self._AIR_USE_LIMIT:
+                    logger.warning(
+                        f"[공중지원 제한] {side} 항공 CAS 횟수 초과 "
+                        f"({self._air_use_count[side]}/{self._AIR_USE_LIMIT}) — 요청 무시"
+                    )
+                    continue
+                self._air_use_count[side] = self._air_use_count.get(side, 0) + 1
             preset = AIR_SUPPORT_PRESETS.get(stype, AIR_SUPPORT_PRESETS["cas"])
             target = sp.get("target", [0, 0])
             as_obj = AirSupport(

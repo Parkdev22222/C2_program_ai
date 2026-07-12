@@ -331,6 +331,11 @@ def get_optimal_attack_positions(
                 {"priority": int, "target_unit_id": str, "target_type": str,
                  "target": [lat, lon], "method": "cas|strike|helicopter", "reason": str}, ...
             ],
+            "artillery_support_schedule": [   # 위협도 상위 표적 — 공중지원과 같은 좌표 동시 포병(횟수 무제한)
+                {"priority": int, "target_unit_id": str, "target_type": str,
+                 "target": [lat, lon], "method": "artillery", "concurrent_with_air": True,
+                 "reason": str}, ...
+            ],
             "unit_key_highground": [
                 {"unit_id": str, "unit_type": str, "target_unit_id": str,
                  "position": [lat, lon], "x_m": int, "y_m": int,
@@ -470,6 +475,24 @@ def get_optimal_attack_positions(
                 "reason": reason,
             })
 
+        # ①-b 포병 동시지원 스케줄 — 위협도 상위 표적에는 공중지원과 '같은 좌표'로 포병(artillery)
+        #      병행 투사(화력 집중). artillery 는 항공 CAS 5회 제한과 무관(횟수 제한 없음)하며,
+        #      공중지원과 동시에 투사된다.
+        _ARTY_TOP_N = 2  # 위협도 상위 N개 표적에 공중+포병 동시지원 권고
+        artillery_support_schedule = []
+        for i, tgt in enumerate(detected_only[:_ARTY_TOP_N], 1):
+            t_lat, t_lon = xy_to_latlon(tgt["known_x"], tgt["known_y"])
+            artillery_support_schedule.append({
+                "priority": i,
+                "target_unit_id": tgt["unit_id"],
+                "target_type": tgt.get("unit_type") or "미확인",
+                "target": [t_lat, t_lon],
+                "method": "artillery",
+                "concurrent_with_air": True,
+                "reason": (f"위협도 상위 {i} — 공중지원과 동일 좌표 동시 포병 투사(화력 집중), "
+                           f"전투력 {tgt.get('combat_power')}"),
+            })
+
         # ② 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치
         unit_key_highground = []
         for u in blufor_active:
@@ -501,6 +524,7 @@ def get_optimal_attack_positions(
             "game_time": state.get("game_time_str", "00:00:00"),
             "air_remaining": air_remaining,
             "air_support_schedule": air_support_schedule,
+            "artillery_support_schedule": artillery_support_schedule,
             "unit_key_highground": unit_key_highground,
         }
 
