@@ -1711,6 +1711,42 @@ def wargame_request_attack_plan(history: List = None):
             pass
 
 
+def _apply_chat_plan_if_any(eng, resp_str: str) -> str:
+    """채팅 응답에 air_support_plans/mission_plans JSON이 있으면 실제 엔진에 적용.
+
+    채팅으로 포격/화력지원/타격/임무를 '지시'하면 응답의 계획을 워게임에 반영한다.
+    (일반 질의응답에는 JSON이 없으므로 아무것도 적용하지 않는다.)
+    반환: 적용 요약 문자열(없으면 빈 문자열).
+    """
+    if eng is None or _wg_planner is None:
+        return ""
+    try:
+        plan = _wg_planner._parse_json(resp_str)
+    except Exception:
+        plan = None
+    if not isinstance(plan, dict):
+        return ""
+    has_air     = bool(plan.get("air_support_plans"))
+    has_mission = bool(plan.get("mission_plans"))
+    if not (has_air or has_mission):
+        return ""
+    try:
+        plan = _convert_latlon_plan_to_meters(plan)
+        notes = []
+        if has_mission:
+            eng.apply_mission_plan(plan)
+            notes.append(f"지상임무 {len(plan.get('mission_plans', []))}건")
+        if has_air:
+            eng.apply_air_support_plan(plan)
+            notes.append(f"화력지원 {len(plan.get('air_support_plans', []))}건")
+        logger.info("[채팅] 지시 계획 적용 — %s (running=%s)", ", ".join(notes), eng.running)
+        run_note = "" if eng.running else " (⏸ 시뮬레이션 정지 중 — ▶ 시작 시 투사)"
+        return f"✅ 워게임 적용: {', '.join(notes)}{run_note}"
+    except Exception as e:
+        logger.warning("[채팅] 지시 계획 적용 실패: %s", e)
+        return ""
+
+
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     if not message.strip():
         return history, ""
@@ -1724,6 +1760,16 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
             lat, lon = _xy_to_latlon(u["x"], u["y"])
             return f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% 위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}"
         context = (f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n" + "\n".join(_fmt_unit(u) for u in state["units"]) + "\n\n")
+        # 지시 처리 안내: 사용자가 화력지원/포격/타격/임무를 '지시'하면 실행 가능한 JSON을 출력하게 유도
+        context += (
+            "[지시 처리 규칙] 사용자가 포격·화력지원·공중지원·타격·임무 이동을 '지시'하면, "
+            "실행할 계획을 아래 JSON 블록으로 출력하라(시스템이 워게임에 적용한다). "
+            "support_type: artillery=포병(반경 2500), cas/strike/helicopter=항공. "
+            "target/waypoints 좌표는 위 [현재 워게임 상황]의 대상 OPFOR lat/lon 을 사용. "
+            "단순 질문·상황설명 요청이면 JSON 없이 평문으로 답하라.\n"
+            '형식: ```json\n{"air_support_plans":[{"call_sign":"ARTY-1","support_type":"artillery",'
+            '"target":[위도,경도],"radius":2500,"delay":30}]}\n```\n\n'
+        )
     history.append((message, "처리 중..."))
     if agent is None:
         history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")
@@ -1731,7 +1777,12 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     try:
         full_query = context + message if context else message
         response = agent.run(full_query, reset=False)
-        history[-1] = (message, str(response))
+        resp_str = str(response)
+        # 채팅으로 화력지원/임무를 지시한 경우 → 응답 속 계획을 실제 워게임에 적용
+        applied_note = _apply_chat_plan_if_any(eng, resp_str)
+        if applied_note:
+            resp_str = resp_str + "\n\n" + applied_note
+        history[-1] = (message, resp_str)
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
