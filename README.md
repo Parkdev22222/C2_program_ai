@@ -141,6 +141,37 @@ nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
 > 또는 환경변수 `C2_AGENT_VLLM_BASE_URL`(예: `http://127.0.0.1:8000/v1`)로 지정합니다.
 > smolagents 백엔드는 위 tool-calling 플래그 없이도 동작합니다.
 
+### LLM 프로바이더 선택 — 직접 서빙한 EXAONE4 vs. Gemini API
+
+LangGraph 백엔드(기본)는 LLM을 **직접 서빙한 EXAONE4(vLLM)** 대신 **Google Gemini API**로도
+쓸 수 있습니다. GPU/서버 기동 없이 API 키만 있으면 됩니다. 프로바이더는 환경변수
+`C2_LLM_PROVIDER`(또는 `config/models_config.yaml`의 최상위 `llm_provider`)로 전환합니다.
+
+| `C2_LLM_PROVIDER` | LLM | 필요 조건 |
+|-------------------|-----|-----------|
+| `vllm` (기본) | 직접 서빙한 EXAONE4 | vLLM 서버 기동(위) |
+| `gemini` | Google Gemini API | `GOOGLE_API_KEY` 환경변수 |
+
+**API 키를 어디에 넣나요?** — 코드나 설정 파일이 아니라 **환경변수**에 넣습니다(키 유출 방지).
+[Google AI Studio](https://aistudio.google.com/apikey)에서 발급한 키를 다음처럼 주입하세요.
+
+```bash
+# 1) Gemini API 키를 환경변수로 주입 (필수)
+export GOOGLE_API_KEY="여기에_발급받은_키"     # 또는 GEMINI_API_KEY
+
+# 2) 프로바이더를 gemini 로 전환 후 UI 실행 (vLLM 서버 불필요)
+export C2_LLM_PROVIDER=gemini
+python main.py ui
+```
+
+- 사용 모델은 `config/models_config.yaml`의 `gemini_model.model`에서 지정합니다
+  (기본 `gemini-2.0-flash`, 필요 시 `gemini-1.5-pro` 등으로 변경).
+- `models_config.yaml`의 `api_key_env`는 **키 값이 아니라 키가 담긴 환경변수 이름**입니다.
+  기본값 `GOOGLE_API_KEY`를 쓰면 위 `export`만으로 연동됩니다.
+- Gemini는 tool-calling을 기본 지원하므로 LangGraph 그래프에서 EXAONE4와 **동일한 툴셋·
+  동일한 동작**으로 실행됩니다. (`pip install langchain-google-genai` 필요 — requirements 포함)
+- EXAONE4로 되돌리려면 `unset C2_LLM_PROVIDER`(또는 `C2_LLM_PROVIDER=vllm`).
+
 ---
 
 ## Google Colab에서 실행

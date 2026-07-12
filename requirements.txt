@@ -9,6 +9,8 @@ smolagents>=1.0.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
+# Gemini API 프로바이더 (llm_provider=gemini 일 때 필요)
+langchain-google-genai>=2.0.0
 
 # ─── LLM Inference (EXAONE4 via vLLM serving) ────────────────
 # 모델은 별도 프로세스의 vLLM 서버로 기동 (scripts/launch_vllm_servers.py)
