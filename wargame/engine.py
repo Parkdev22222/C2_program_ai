@@ -1030,6 +1030,12 @@ class WargameEngine:
         if ef <= 0:
             return
 
+        # 정찰 부대(방어자)는 근접(직사 사거리 이내) 교전에서만 피해를 받는다.
+        # 원거리 제압사격 범위(직사~제압 사거리)에서는 피해 없음 — 정찰은 관측이 임무이며
+        # 실제로 교전당하지 않는 한 소모되지 않아야 한다. (아군/적군 정찰 모두 대칭 적용)
+        if defender.unit_type == "정찰" and dist > _DIRECT_RANGE.get(attacker.unit_type, 2_000.0):
+            return
+
         elev_adv = terrain.elevation_advantage(
             attacker.x, attacker.y, defender.x, defender.y
         )
