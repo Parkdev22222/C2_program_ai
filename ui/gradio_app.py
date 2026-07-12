@@ -349,6 +349,7 @@ def _wg_register_engine(engine):
         ("tools.wargame_mission_tool", "register_wargame_engine"),
         ("tools.wargame_strategy_tool", "register_wargame_engine"),
         ("tools.wargame_attack_advisor_tool", "register_wargame_engine"),
+        ("tools.wargame_fire_priority_tool", "register_wargame_engine"),
         ("tools.wargame_recon_tool", "register_wargame_engine"),
         ("tools.wargame_opfor_routes_tool", "register_wargame_engine"),
         ("tools.coa_analysis_tool", "register_wargame_engine"),

@@ -188,6 +188,13 @@ class BattlefieldAgent:
             logger.warning(f"Failed to load attack advisor tool: {e}")
 
         try:
+            from tools.wargame_fire_priority_tool import get_fire_priority_schedule
+            tools.append(get_fire_priority_schedule)
+            logger.info("Wargame fire priority scheduling tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load fire priority tool: {e}")
+
+        try:
             from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
             tools.extend([assess_recon_need, recommend_recon_routes])
             logger.info("Wargame recon tools loaded")
