@@ -10,32 +10,6 @@ from tools.coord_utils import is_latlon_coords, waypoints_latlon_to_xy, latlon_t
 logger = logging.getLogger(__name__)
 
 
-def _raise_final_answer(value):
-    """
-    smolagents CodeAgent를 즉시 종료시키는 예외를 발생시킨다.
-    apply_wargame_mission_plan(dry_run=False) 성공 후 불필요한 추가 LLM 스텝을 제거하기 위해 사용.
-
-    smolagents 버전별로 예외 클래스 위치가 다를 수 있으므로 여러 경로를 순서대로 시도한다.
-    모두 실패하면 조용히 반환 (normal return 으로 폴백).
-    """
-    _candidates = [
-        ("smolagents.local_python_executor", "FinalAnswerException"),
-        ("smolagents.local_python_executor", "ReturnValueException"),
-        ("smolagents.agents",                "AgentFinish"),
-        ("smolagents",                       "FinalAnswerException"),
-    ]
-    for _mod_path, _exc_name in _candidates:
-        try:
-            import importlib as _il
-            _mod = _il.import_module(_mod_path)
-            _exc_cls = getattr(_mod, _exc_name, None)
-            if _exc_cls is not None:
-                logger.info(f"[apply] 조기 종료 트리거: {_mod_path}.{_exc_name}")
-                raise _exc_cls(value)
-        except ImportError:
-            continue
-    logger.debug("[apply] FinalAnswerException 클래스를 찾지 못함 — 일반 반환으로 폴백")
-
 _wargame_engine = None
 _resume_on_apply: bool = False
 _last_apply_time: float = 0.0  # apply_wargame_mission_plan 마지막 호출 시각
@@ -324,8 +298,11 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
         if air_snap_errors:
             result["air_target_warnings"] = air_snap_errors
 
-        # 임무계획 적용 성공 → 추가 LLM 스텝 불필요. CodeAgent 즉시 종료.
-        _raise_final_answer(result)
+        # 성공 결과를 그대로 반환한다.
+        # (과거 _raise_final_answer(result)로 smolagents CodeAgent를 조기 종료시켰으나,
+        #  smolagents 버전에 따라 FinalAnswerException이 에이전트 루프에 안 잡히고 밖으로
+        #  새어나와(BaseException 계열) 트레이스백/중단을 유발 → 제거. 두 백엔드 모두
+        #  반환 dict를 정상 처리한다.)
         return result
     except Exception as e:
         logger.error(f"apply_wargame_mission_plan error: {e}", exc_info=True)
