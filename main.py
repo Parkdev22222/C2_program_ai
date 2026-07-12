@@ -46,12 +46,25 @@ def preload_models():
 # 에이전트 초기화
 # ─────────────────────────────────────────────
 
-def init_agent(exaone4_model=None) -> "BattlefieldAgent":
-    """BattlefieldAgent를 초기화합니다."""
-    from agent.battlefield_agent import BattlefieldAgent
-    logger.info("BattlefieldAgent 초기화 중...")
-    agent = BattlefieldAgent(exaone4_model=exaone4_model)
-    logger.info("BattlefieldAgent 초기화 완료")
+def init_agent(exaone4_model=None):
+    """전장 에이전트를 초기화합니다.
+
+    백엔드 선택(환경변수 C2_AGENT_BACKEND):
+      - "langgraph" (기본, 이 브랜치): LangGraph StateGraph 기반 (agent/langgraph_agent.py)
+      - "smolagents": 기존 smolagents CodeAgent 기반 (agent/battlefield_agent.py)
+    두 백엔드는 동일 툴셋·지시사항·온톨로지 주입을 사용해 기능이 동일하다.
+    """
+    import os
+    backend = os.environ.get("C2_AGENT_BACKEND", "langgraph").strip().lower()
+    if backend == "smolagents":
+        from agent.battlefield_agent import BattlefieldAgent
+        logger.info("BattlefieldAgent(smolagents) 초기화 중...")
+        agent = BattlefieldAgent(exaone4_model=exaone4_model)
+    else:
+        from agent.langgraph_agent import LangGraphBattlefieldAgent
+        logger.info("LangGraphBattlefieldAgent 초기화 중...")
+        agent = LangGraphBattlefieldAgent(exaone4_model=exaone4_model)
+    logger.info("에이전트 초기화 완료 (backend=%s)", backend)
     return agent
 
 

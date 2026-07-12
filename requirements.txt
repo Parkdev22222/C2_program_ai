@@ -2,8 +2,13 @@
 # torch는 check-env의 GPU 확인 및 vLLM 서버 기동 머신에서 사용
 torch>=2.0.0
 
-# ─── smolagents (Agent Framework) ────────────────────────────
+# ─── Agent Frameworks ─────────────────────────────────────────
+# smolagents: 기존 CodeAgent 백엔드 (C2_AGENT_BACKEND=smolagents)
 smolagents>=1.0.0
+# LangGraph: 그래프 기반 ReAct 백엔드 (기본, C2_AGENT_BACKEND=langgraph)
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
 
 # ─── LLM Inference (EXAONE4 via vLLM serving) ────────────────
 # 모델은 별도 프로세스의 vLLM 서버로 기동 (scripts/launch_vllm_servers.py)

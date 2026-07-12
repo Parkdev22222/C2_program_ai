@@ -26,8 +26,13 @@
 transformers>=4.47.0,<4.48.0
 accelerate
 
-# Agent Framework
+# Agent Frameworks
+# smolagents: 기존 CodeAgent 백엔드 (C2_AGENT_BACKEND=smolagents)
 smolagents>=1.0.0
+# LangGraph: 그래프 기반 ReAct 백엔드 (기본, C2_AGENT_BACKEND=langgraph)
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
 
 # Web UI
 gradio>=4.0.0

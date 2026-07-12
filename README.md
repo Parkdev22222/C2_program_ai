@@ -93,6 +93,56 @@ sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재
 
 ---
 
+## 에이전트 백엔드 선택 (LangGraph / smolagents)
+
+동일한 툴셋·시스템 지시사항·온톨로지 자동 주입을 공유하는 두 가지 에이전트 백엔드를
+환경변수 `C2_AGENT_BACKEND`로 전환할 수 있습니다.
+
+| 값 | 백엔드 | 구현 | 도구 호출 방식 |
+|----|--------|------|----------------|
+| `langgraph` (기본) | LangGraph StateGraph(ReAct) | `agent/langgraph_agent.py` | function calling (tool call) |
+| `smolagents` | smolagents CodeAgent | `agent/battlefield_agent.py` | 코드 생성형 |
+
+```bash
+# LangGraph 백엔드로 UI 실행 (기본값이라 생략 가능)
+C2_AGENT_BACKEND=langgraph python main.py ui
+
+# 기존 smolagents 백엔드로 복귀
+C2_AGENT_BACKEND=smolagents python main.py ui
+```
+
+두 백엔드는 다음을 **완전히 동일하게** 공유합니다.
+
+- 툴셋: `build_battlefield_tools()` 단일 소스 (`agent/battlefield_agent.py`)
+  → LangGraph 는 `agent/langgraph_tools.py`가 각 smolagents 툴을 LangChain
+    `StructuredTool`로 감싸 재사용하므로 워게임 엔진 연동·반환 구조가 같습니다.
+- 시스템 지시사항: `config/agent_custom_instructions.txt`
+- 매 판단마다 Neo4j 온톨로지 상황 자동 주입 (`ontology_situation_block()`)
+- 공개 인터페이스: `run()` / `agent.agent.run()` / `reset_memory()` /
+  `get_situation_memory()` / `reload_instructions()`
+
+### LangGraph 사용 시 vLLM 서버 요구사항
+
+LangGraph 백엔드는 **function calling(tool call)** 으로 도구를 호출하므로, vLLM 서버를
+tool-calling 활성화 옵션으로 기동해야 합니다. 위 `vllm serve` 명령에 다음 플래그를
+추가하세요(파서는 모델에 맞춰 선택 — EXAONE4 계열은 `hermes` 파서를 사용).
+
+```bash
+nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
+  --served-model-name exaone4-agent --trust-remote-code \
+  --quantization awq_marlin --dtype float16 \
+  --gpu-memory-utilization 0.90 --max-model-len 32768 \
+  --enable-prefix-caching --max-num-seqs 64 \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  > out1.log 2>&1 &
+```
+
+> 서버 주소는 `config/models_config.yaml`의 `agent_model.serving.base_url`
+> 또는 환경변수 `C2_AGENT_VLLM_BASE_URL`(예: `http://127.0.0.1:8000/v1`)로 지정합니다.
+> smolagents 백엔드는 위 tool-calling 플래그 없이도 동작합니다.
+
+---
+
 ## Google Colab에서 실행
 
 EXAONE4-32B(AWQ)를 **별도 vLLM 서버(OpenAI 호환 API)**로 띄우고, 앱은 그 서버에 접속합니다.
