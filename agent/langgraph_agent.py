@@ -125,10 +125,47 @@ class LangGraphBattlefieldAgent:
                 ensure_ascii=False,
             )
         msgs = result.get("messages", []) if isinstance(result, dict) else []
+        return self._extract_result_text(msgs)
+
+    # ── 결과 텍스트 추출 ──────────────────────────────────────────
+    @staticmethod
+    def _message_text(msg) -> str:
+        """LangChain 메시지의 content 를 평문 문자열로 정규화 (list/dict parts 포함)."""
+        content = getattr(msg, "content", msg)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for p in content:
+                if isinstance(p, str):
+                    parts.append(p)
+                elif isinstance(p, dict):
+                    parts.append(p.get("text") or p.get("content") or "")
+            return "\n".join(x for x in parts if x).strip()
+        return str(content).strip() if content is not None else ""
+
+    def _extract_result_text(self, msgs: list) -> str:
+        """그래프 실행 메시지에서 gradio 가 파싱할 최종 텍스트를 뽑는다.
+
+        Gemini 등 function-calling 모델은 apply 툴 호출 후 **마지막 AIMessage content 가
+        비어 있는** 경우가 흔하다. 이때 계획은 이미 툴이 적용했으므로, 뒤에서부터 스캔해
+        (1) 비어있지 않은 응답 텍스트, 또는 (2) 툴 성공/JSON payload 를 surface 한다.
+        이렇게 해야 gradio 가 mission_plans / '"status": "success"' 를 감지해 폴백을 피한다.
+        """
         if not msgs:
+            logger.warning("[LangGraph] 결과 메시지가 비어 있음")
             return ""
-        content = getattr(msgs[-1], "content", msgs[-1])
-        return str(content)
+        # 1) 뒤에서부터 첫 번째 비어있지 않은 메시지 텍스트
+        for msg in reversed(msgs):
+            text = self._message_text(msg)
+            if text:
+                return text
+        # 2) 모든 메시지가 비어 있으면 마지막 메시지 원본을 문자열화
+        logger.warning(
+            "[LangGraph] 모든 메시지 content 가 비어 있음 (msgs=%d, 마지막=%s)",
+            len(msgs), type(msgs[-1]).__name__,
+        )
+        return str(getattr(msgs[-1], "content", "") or "")
 
     def run(self, query: str, reset: bool = False) -> str:
         try:
