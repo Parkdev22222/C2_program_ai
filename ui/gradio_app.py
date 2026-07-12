@@ -1758,7 +1758,9 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
         state = eng.get_state()
         def _fmt_unit(u):
             lat, lon = _xy_to_latlon(u["x"], u["y"])
-            return f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% 위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}"
+            _utype = u.get("unit_type") or "미상"
+            return (f"  {u['side']} {u['id']}(병종:{_utype}): CP={u['combat_power']:.0f}% "
+                    f"위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}")
         context = (f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n" + "\n".join(_fmt_unit(u) for u in state["units"]) + "\n\n")
         # 지시 처리 안내: 사용자가 화력지원/포격/타격/임무를 '지시'하면 실행 가능한 JSON을 출력하게 유도
         context += (
