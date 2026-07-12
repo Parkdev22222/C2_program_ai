@@ -67,29 +67,47 @@ def retrieve_graph_context(
     node_limit: int = 10,
     edge_limit: int = 20,
     per_seed_limit: int | None = None,
+    hops: int = 1,
 ) -> tuple[tuple[KnowledgeNode, ...], tuple[KnowledgeEdge, ...], tuple[Evidence, ...]]:
     """seed entity_ids 로 Neo4j(또는 폴백)에서 KG 이웃·엣지·근거를 검색한다.
 
     호출 순서와 soft-fallback 은 원본 ``RetrieveContextNode.invoke`` 와 동일하다.
 
-    per_seed_limit 을 주면 seed(부대)별로 1-hop 이웃을 per_seed_limit 개까지만(최신 우선)
+    per_seed_limit 을 주면 seed(부대)별로 이웃을 per_seed_limit 개까지만(최신 우선)
     수집한다. 턴이 누적돼도 부대당 정보량이 고정되어 컨텍스트가 무한정 늘지 않는다.
+
+    hops 로 탐색 깊이를 지정한다(기본 1). hops=2 이면 1-hop 으로 찾은 노드의 entity_id 를
+    다음 프론티어로 삼아 한 번 더 이웃을 확장한다(예: 아군 → 탐지한 적 → 그 적의 관측·관계).
     """
     since, until = _as_of_window(as_of)
 
     if per_seed_limit:
-        # 부대(seed)별로 최근 per_seed_limit 개의 1-hop 노드만 수집 후 합집합
+        # 부대(seed)별로 최근 per_seed_limit 개 이웃을 hops 깊이까지 BFS 로 수집 후 합집합
         collected: dict[str, KnowledgeNode] = {}
-        for eid in entity_ids:
-            for node in graph_store.neighborhood(
-                (eid,),
-                limit=per_seed_limit,
-                since=since,
-                until=until,
-                scenario_id=scenario_id,
-                newest_first=True,
-            ):
-                collected[node.kg_node_id] = node
+        visited_ids: set[str] = set()
+        frontier: list[str] = list(dict.fromkeys(entity_ids))
+        for _hop in range(max(1, hops)):
+            next_ids: list[str] = []
+            for eid in frontier:
+                if not eid or eid in visited_ids:
+                    continue
+                visited_ids.add(eid)
+                for node in graph_store.neighborhood(
+                    (eid,),
+                    limit=per_seed_limit,
+                    since=since,
+                    until=until,
+                    scenario_id=scenario_id,
+                    newest_first=True,
+                ):
+                    if node.kg_node_id not in collected:
+                        collected[node.kg_node_id] = node
+                        # 다음 hop 프론티어: 새로 찾은 노드의 entity_id(아직 미방문)
+                        if node.entity_id and node.entity_id not in visited_ids:
+                            next_ids.append(node.entity_id)
+            frontier = list(dict.fromkeys(next_ids))
+            if not frontier:
+                break
         kg_nodes: tuple[KnowledgeNode, ...] = tuple(collected.values())
     else:
         kg_nodes = graph_store.neighborhood(
