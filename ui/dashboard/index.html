@@ -106,21 +106,40 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .rp-section{border-bottom:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
 .rp-title{font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--amber);text-transform:uppercase;
   padding:8px 12px 4px;flex-shrink:0}
+/* 전술채팅 슬라이드 패널 (X축 기준 화면 40%) */
+#chat-panel{position:fixed;top:44px;right:0;width:40vw;height:calc(100vh - 44px);
+  background:var(--panel);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden;
+  transform:translateX(100%);transition:transform .3s ease;
+  z-index:1200;box-shadow:-10px 0 30px rgba(0,0,0,.45)}
+#chat-panel.open{transform:translateX(0)}
+.cp-header{display:flex;align-items:center;justify-content:space-between;
+  padding:11px 16px;border-bottom:1px solid var(--border);background:#0c1420;flex-shrink:0}
+.cp-title{font-size:15px;font-weight:700;color:var(--blue);letter-spacing:.5px}
+.cp-close{background:#1a0808;border:1px solid var(--red);color:var(--red);
+  border-radius:4px;padding:5px 12px;cursor:pointer;font-size:12px;font-family:inherit}
+.cp-close:hover{background:#2a0c0c}
+/* 전술채팅 토글 버튼 (닫혀 있을 때 지도 우상단 노출) */
+#chat-toggle{position:fixed;top:54px;right:16px;z-index:1100;
+  background:#0c1420;border:1px solid var(--blue);color:var(--blue);
+  border-radius:6px;padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600;
+  font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.45)}
+#chat-toggle:hover{background:#12263c}
+#chat-toggle.active{display:none}
 /* 채팅 */
-#chat-messages{flex:1;overflow-y:auto;padding:6px 10px;display:flex;flex-direction:column;gap:6px;min-height:0}
-#chat-section{flex:0 0 auto;display:flex;flex-direction:column;max-height:38%}
-#chat-messages-wrap{flex:1;overflow:hidden;display:flex;flex-direction:column}
-.msg{padding:5px 8px;border-radius:4px;font-size:12px;line-height:1.5;word-break:break-word}
+#chat-messages{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
+#chat-messages-wrap{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.msg{padding:7px 11px;border-radius:5px;font-size:13px;line-height:1.55;word-break:break-word}
 .msg.user{background:#0d1e35;border-left:3px solid var(--blue);color:var(--text)}
 .msg.bot{background:#0a1620;border-left:3px solid var(--green);color:var(--text);white-space:pre-wrap}
 .msg.sys{background:#1a1200;border-left:3px solid var(--amber);color:var(--amber);font-size:11px}
 .msg.err{background:#1a0808;border-left:3px solid var(--red);color:var(--red);font-size:11px}
-#chat-input-row{display:flex;gap:6px;padding:6px 8px;flex-shrink:0}
+#chat-input-row{display:flex;gap:8px;padding:10px 14px;flex-shrink:0;border-top:1px solid var(--border)}
 #chat-input{flex:1;background:#080d14;border:1px solid var(--border);color:var(--text);
-  border-radius:3px;padding:5px 8px;font-family:'Noto Sans KR',sans-serif;font-size:12px;resize:none}
+  border-radius:4px;padding:8px 10px;font-family:'Noto Sans KR',sans-serif;font-size:13px;resize:none}
 #chat-input:focus{outline:none;border-color:var(--blue)}
-#chat-send{padding:5px 10px;background:#0a2e1e;border:1px solid var(--green);color:var(--green);
-  border-radius:3px;cursor:pointer;font-size:12px;font-family:'Noto Sans KR',sans-serif;white-space:nowrap}
+#chat-send{padding:8px 16px;background:#0a2e1e;border:1px solid var(--green);color:var(--green);
+  border-radius:4px;cursor:pointer;font-size:13px;font-family:'Noto Sans KR',sans-serif;white-space:nowrap}
 #chat-send:hover{background:#143d28}
 /* 임무계획 JSON */
 #plan-section{flex:0 0 auto;max-height:28%}
@@ -148,7 +167,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .unit-mk{display:flex;flex-direction:column;align-items:center;justify-content:center;
   border-radius:3px;font-family:'Courier New',monospace;line-height:1.2;cursor:pointer;
   box-shadow:0 0 6px rgba(0,0,0,.7)}
-.unit-mk .uid{font-size:9px;font-weight:700}
+.unit-mk .uid{font-size:9px;font-weight:700;white-space:nowrap}
 .unit-mk .ucp{font-size:9px}
 
 
@@ -327,18 +346,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
       </div>
     </div>
 
-    <!-- RIGHT: 인텔/채팅 패널 -->
+    <!-- RIGHT: 인텔 패널 -->
     <div id="right-panel">
-      <!-- 채팅 -->
-      <div id="chat-section" class="rp-section">
-        <div class="rp-title">💬 전술 AI 채팅</div>
-        <div id="chat-messages-wrap"><div id="chat-messages"></div></div>
-        <div id="chat-input-row">
-          <textarea id="chat-input" rows="2" placeholder="전술 조언, 상황 분석 등 질문하세요..."></textarea>
-          <button id="chat-send" onclick="sendChat()">전송</button>
-        </div>
-      </div>
-
       <!-- 임무계획 JSON -->
       <div id="plan-section" class="rp-section">
         <div class="rp-title">📄 LLM 임무계획 JSON</div>
@@ -351,6 +360,22 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <div id="log-box">이벤트 없음</div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- 전술 AI 채팅 토글 버튼 -->
+<button id="chat-toggle" onclick="toggleChatPanel()" title="전술 AI 채팅 열기/닫기">💬 전술채팅</button>
+
+<!-- 전술 AI 채팅 슬라이드 패널 -->
+<div id="chat-panel">
+  <div class="cp-header">
+    <span class="cp-title">💬 전술 AI 채팅</span>
+    <button class="cp-close" onclick="toggleChatPanel()" title="닫기 (Esc)">✕ 닫기</button>
+  </div>
+  <div id="chat-messages-wrap"><div id="chat-messages"></div></div>
+  <div id="chat-input-row">
+    <textarea id="chat-input" rows="3" placeholder="전술 조언, 상황 분석 등 질문하세요..."></textarea>
+    <button id="chat-send" onclick="sendChat()">전송</button>
   </div>
 </div>
 
@@ -458,6 +483,52 @@ L.rectangle(MAP_BOUNDS, {
   fill: false, dashArray: '6,4',
 }).addTo(map);
 
+// ── 전술채팅 슬라이드 패널 토글 + 지도 자동 프레이밍 ─────────────────
+// 패널이 열리면 지도에서 패널에 가려지는 우측 폭만큼 padding을 줘서
+// 현재 작전지역(MAP_BOUNDS)이 '가려지지 않는 좌측'에 오도록 재조정한다.
+function fitOperationalArea() {
+  try {
+    const panel = document.getElementById('chat-panel');
+    let padRight = 24;
+    if (panel && panel.classList.contains('open')) {
+      const mapRect   = map.getContainer().getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      // 지도 우측이 패널에 가려지는 픽셀 폭(+여유 16px)
+      padRight = Math.max(24, mapRect.right - panelRect.left + 16);
+    }
+    map.invalidateSize({ animate: false });
+    map.fitBounds(MAP_BOUNDS, {
+      paddingTopRight:   [padRight, 24],
+      paddingBottomLeft: [24, 24],
+      animate: true,
+    });
+  } catch (e) { /* noop */ }
+}
+
+function toggleChatPanel() {
+  const panel = document.getElementById('chat-panel');
+  const btn   = document.getElementById('chat-toggle');
+  const open  = panel.classList.toggle('open');
+  if (btn) btn.classList.toggle('active', open);
+  // CSS 전환(0.3s) 이후 지도 크기 재계산 + 작전지역 재프레이밍
+  setTimeout(fitOperationalArea, 320);
+}
+
+// Esc로 전술채팅 패널 닫기 (지도 위치 선택 중이 아닐 때만)
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const panel = document.getElementById('chat-panel');
+  if (panel && panel.classList.contains('open') && !window._pickingRowId) {
+    toggleChatPanel();
+  }
+});
+
+// 창 크기 변경 시 재프레이밍
+window.addEventListener('resize', () => setTimeout(fitOperationalArea, 120));
+
+// 최초 로드 시 작전지역 프레이밍
+setTimeout(fitOperationalArea, 300);
+
 // ── 마커/레이어 관리 ─────────────────────────────────────────────
 const unitMarkers  = {};   // id → L.Marker
 const unitWpLines  = {};   // id → L.Polyline
@@ -478,35 +549,35 @@ function makeUnitIcon(id, cp, side, status) {
   const fg    = alive ? '#000d1a' : color;
   const opacity = alive ? 1.0 : 0.35;
   return L.divIcon({
-    html: `<div class="unit-mk" style="width:52px;height:30px;background:${bg};border:2px solid ${color};opacity:${opacity};color:${fg};">
+    html: `<div class="unit-mk" style="width:70px;height:30px;background:${bg};border:2px solid ${color};opacity:${opacity};color:${fg};">
              <div class="uid">${id}</div><div class="ucp">${cp.toFixed(0)}%</div>
            </div>`,
-    className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+    className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
   });
 }
 
 function makeIntelIcon(unitId, intelStatus, cp) {
   if (intelStatus === 'detected') {
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:#ff4040;border:2px solid #ff4040;color:#000d1a;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:#ff4040;border:2px solid #ff4040;color:#000d1a;">
                <div class="uid">${unitId}</div><div class="ucp">${(cp||0).toFixed(0)}%</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   } else if (intelStatus === 'approximate') {
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:transparent;border:2px solid #ffa726;color:#ffa726;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:transparent;border:2px solid #ffa726;color:#ffa726;">
                <div class="uid">?${unitId}</div><div class="ucp">???</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   } else {
     // lost
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:transparent;border:2px dashed #555;color:#555;opacity:.6;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:transparent;border:2px dashed #555;color:#555;opacity:.6;">
                <div class="uid">(${unitId})</div><div class="ucp">---</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   }
 }
@@ -1013,7 +1084,12 @@ function addChatMessage(role, text) {
 }
 
 document.getElementById('chat-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  // 한글(IME) 조합 중 Enter는 글자 확정용이므로 전송하지 않는다.
+  // (isComposing / keyCode 229 미확인 시 마지막 조합 글자가 다시 전송되는 버그)
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    sendChat();
+  }
 });
 
 async function sendChat() {
@@ -1050,18 +1126,20 @@ fetchEvents();
 const UNIT_TYPES = ['기계화보병', '전차', '정찰', '대전차', '자주포'];
 
 const DEFAULT_BLUFOR = [
-  {id:'Alpha',   unit_type:'기계화보병', x:9000,  y:4500},
-  {id:'Bravo',   unit_type:'기계화보병', x:9000,  y:7500},
-  {id:'Charlie', unit_type:'전차',       x:7000,  y:6000},
-  {id:'Delta',   unit_type:'정찰',       x:11500, y:3500},
-  {id:'Echo',    unit_type:'대전차',     x:11500, y:8500},
+  {id:'보병1중대',   unit_type:'기계화보병', x:8000,  y:5000},
+  {id:'보병2중대',   unit_type:'기계화보병', x:8000,  y:8500},
+  {id:'보병3중대',   unit_type:'기계화보병', x:12000, y:10000},
+  {id:'전차중대',    unit_type:'전차',       x:5500,  y:6500},
+  {id:'대전차중대',  unit_type:'대전차',     x:11000, y:6000},
+  {id:'자주포중대',  unit_type:'자주포',     x:3500,  y:4000},
 ];
 const DEFAULT_OPFOR = [
-  {id:'Red1', unit_type:'기계화보병', x:21000, y:19500},
-  {id:'Red2', unit_type:'기계화보병', x:21000, y:22500},
-  {id:'Red3', unit_type:'전차',       x:23000, y:21000},
-  {id:'Red4', unit_type:'정찰',       x:19500, y:17500},
-  {id:'Red5', unit_type:'자주포',     x:25000, y:21000},
+  {id:'적보병1중대',   unit_type:'기계화보병', x:21000, y:19000},
+  {id:'적보병2중대',   unit_type:'기계화보병', x:21000, y:22500},
+  {id:'적보병3중대',   unit_type:'기계화보병', x:18000, y:18500},
+  {id:'적전차중대',    unit_type:'전차',       x:23500, y:20500},
+  {id:'적대전차중대',  unit_type:'대전차',     x:24000, y:23000},
+  {id:'적자주포중대',  unit_type:'자주포',     x:26500, y:21000},
 ];
 
 let _scCounter = 0;
@@ -1077,7 +1155,7 @@ function makeUnitRow(side, u) {
   const key = ++_scCounter;
   const btnClr = side === 'blufor' ? 'color:var(--blue)' : 'color:var(--red)';
   return `<tr id="scrow-${key}" data-side="${side}">
-    <td><input type="text" value="${u.id||''}" placeholder="예: Alpha" style="width:60px" data-field="id"></td>
+    <td><input type="text" value="${u.id||''}" placeholder="예: 보병1중대" style="width:60px" data-field="id"></td>
     <td><select data-field="unit_type">${makeTypeOptions(u.unit_type||'기계화보병')}</select></td>
     <td><input type="number" value="${u.x != null ? u.x : ''}" placeholder="랜덤" data-field="x" oninput="updateScPreviewMarkers()"></td>
     <td><input type="number" value="${u.y != null ? u.y : ''}" placeholder="랜덤" data-field="y" oninput="updateScPreviewMarkers()"></td>

@@ -195,6 +195,21 @@ class InMemoryGraphStore:
             ids.append(node.entity_id)
         return tuple(dict.fromkeys(ids))
 
+    def recent_event_nodes(
+        self, *, scenario_id: str | None = None, limit: int = 15
+    ) -> tuple[KnowledgeNode, ...]:
+        """최근 전투/포격 이벤트(Event) 노드를 최신순으로 반환.
+
+        관측(Observation) 노드가 매 틱 생성돼 이웃 검색에서 이벤트가 밀려나는 것을 막기 위해,
+        이벤트는 별도로 최신 N건을 직접 확보한다.
+        """
+        evs = [
+            n for n in self.nodes.values()
+            if n.node_type == "Event" and _in_scenario(n.scenario_id, scenario_id)
+        ]
+        evs.sort(key=lambda n: (n.observed_at or "", n.kg_node_id), reverse=True)
+        return tuple(evs[:limit])
+
     def reset_demo_data(self) -> None:
         self.nodes.clear()
         self.edges.clear()

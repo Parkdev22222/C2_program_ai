@@ -10,35 +10,10 @@ from tools.coord_utils import is_latlon_coords, waypoints_latlon_to_xy, latlon_t
 logger = logging.getLogger(__name__)
 
 
-def _raise_final_answer(value):
-    """
-    smolagents CodeAgent를 즉시 종료시키는 예외를 발생시킨다.
-    apply_wargame_mission_plan(dry_run=False) 성공 후 불필요한 추가 LLM 스텝을 제거하기 위해 사용.
-
-    smolagents 버전별로 예외 클래스 위치가 다를 수 있으므로 여러 경로를 순서대로 시도한다.
-    모두 실패하면 조용히 반환 (normal return 으로 폴백).
-    """
-    _candidates = [
-        ("smolagents.local_python_executor", "FinalAnswerException"),
-        ("smolagents.local_python_executor", "ReturnValueException"),
-        ("smolagents.agents",                "AgentFinish"),
-        ("smolagents",                       "FinalAnswerException"),
-    ]
-    for _mod_path, _exc_name in _candidates:
-        try:
-            import importlib as _il
-            _mod = _il.import_module(_mod_path)
-            _exc_cls = getattr(_mod, _exc_name, None)
-            if _exc_cls is not None:
-                logger.info(f"[apply] 조기 종료 트리거: {_mod_path}.{_exc_name}")
-                raise _exc_cls(value)
-        except ImportError:
-            continue
-    logger.debug("[apply] FinalAnswerException 클래스를 찾지 못함 — 일반 반환으로 폴백")
-
 _wargame_engine = None
 _resume_on_apply: bool = False
 _last_apply_time: float = 0.0  # apply_wargame_mission_plan 마지막 호출 시각
+_last_applied_plan: dict = {}  # 마지막으로 실제 적용된 계획(좌표 변환·스냅 반영본)
 
 
 def register_wargame_engine(engine):
@@ -53,13 +28,19 @@ def set_resume_on_apply(flag: bool) -> None:
 
 def reset_apply_tracker() -> None:
     """자동 재계획 세션 시작 시 호출 — 이전 apply 기록 초기화."""
-    global _last_apply_time
+    global _last_apply_time, _last_applied_plan
     _last_apply_time = 0.0
+    _last_applied_plan = {}
 
 
 def was_plan_applied_since(since: float) -> bool:
     """since 이후 apply_wargame_mission_plan이 실제로 호출됐는지 확인."""
     return _last_apply_time > since
+
+
+def get_last_applied_plan() -> dict:
+    """에이전트가 apply 툴로 직접 적용한 마지막 계획을 반환(표시용). 없으면 빈 dict."""
+    return dict(_last_applied_plan) if _last_applied_plan else {}
 
 
 # ── 공중지원 목표 좌표 스냅 헬퍼 ────────────────────────────────────
@@ -210,7 +191,12 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             "status": "blocked",
             "reason": "validation_failed",
             "validation": validation,
-            "message": f"검증 실패 — 실행 불가: {validation.get('summary')}",
+            "message": (
+                f"검증 실패 — 실행 불가: {validation.get('summary')}. "
+                f"오류: {validation.get('errors')}. "
+                "위 오류를 수정한 mission_plans 를 다시 생성해 "
+                "apply_wargame_mission_plan(dry_run=false) 로 재호출하세요."
+            ),
         }
 
     try:
@@ -285,8 +271,10 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
 
         # 적용 시각 기록 (자동 재계획에서 폴백 여부 판단에 사용)
         import time as _t_apply
-        global _last_apply_time
+        global _last_apply_time, _last_applied_plan
         _last_apply_time = _t_apply.time()
+        # 적용된 계획(좌표 변환·스냅 반영본) 보관 → UI 표시용
+        _last_applied_plan = plan
 
         # 임무계획 버튼이 시뮬레이션을 정지한 경우 여기서 재개
         global _resume_on_apply
@@ -310,12 +298,22 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
         if air_snap_errors:
             result["air_target_warnings"] = air_snap_errors
 
-        # 임무계획 적용 성공 → 추가 LLM 스텝 불필요. CodeAgent 즉시 종료.
-        _raise_final_answer(result)
+        # 성공 결과를 그대로 반환한다.
+        # (과거 _raise_final_answer(result)로 smolagents CodeAgent를 조기 종료시켰으나,
+        #  smolagents 버전에 따라 FinalAnswerException이 에이전트 루프에 안 잡히고 밖으로
+        #  새어나와(BaseException 계열) 트레이스백/중단을 유발 → 제거. 두 백엔드 모두
+        #  반환 dict를 정상 처리한다.)
         return result
     except Exception as e:
         logger.error(f"apply_wargame_mission_plan error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {
+            "status": "error",
+            "message": (
+                f"임무계획 적용 중 오류: {e}. 오류 원인을 수정한 mission_plans 를 "
+                "다시 생성해 apply_wargame_mission_plan(dry_run=false) 로 재호출하세요. "
+                "(좌표는 미터 정수 0~30000, company_id 는 실제 BLUFOR 부대 ID)"
+            ),
+        }
 
 
 @tool
@@ -386,19 +384,9 @@ def apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:
             ),
         }
 
-    try:
-        from tools.mission_plan_validator import guard_write_tool
-        gate = guard_write_tool("apply_wargame_air_support", {"support_json": support_json})
-    except Exception:
-        gate = {"allowed": True}
-
-    if not gate.get("allowed", True):
-        return {
-            "status": "blocked",
-            "reason": gate.get("reason"),
-            "message": gate.get("message", "실행이 차단되었습니다."),
-        }
-
+    # 승인 게이트(guard_write_tool)를 두지 않는다 — apply_wargame_mission_plan 과 동일하게
+    # dry_run=False 시 즉시 적용한다. (기존 게이트는 pending_plan 승인을 요구해 공중지원이
+    # 항상 'pending_plan 없음'으로 차단 → LLM 이 '시스템 문제로 적용 실패'로 보고하던 버그)
     if not validation["ok"]:
         return {
             "status": "blocked",

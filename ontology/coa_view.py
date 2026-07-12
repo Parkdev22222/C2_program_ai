@@ -51,6 +51,10 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
     def _uid(node_id: str) -> str:
         return node_id.replace("KGN-UNIT-", "")
 
+    # 부대ID → 병종/진영 조회 (관계에 적 부대 type 을 인라인 반영하기 위함)
+    _type_by_id = {u["unit_id"]: u.get("unit_type", "") for u in units}
+    _side_by_id = {u["unit_id"]: u.get("side", "") for u in units}
+
     # 적↔아군 관계 (observes=탐지 / engages=교전 / threatens=위협).
     # 틱마다 같은 (source,target,relation) 쌍이 반복 적재되므로 중복은 최신 1건만 유지
     # → 관계 목록이 턴 수에 비례해 늘지 않도록 압축.
@@ -65,7 +69,11 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
         if cur is None or (e.observed_at or "") >= (cur["observed_at"] or ""):
             _latest_rel[key] = {
                 "source": src,
+                "source_type": _type_by_id.get(src, ""),
+                "source_side": _side_by_id.get(src, ""),
                 "target": tgt,
+                "target_type": _type_by_id.get(tgt, ""),   # 적 부대 병종(자주포/기계화보병 등)
+                "target_side": _side_by_id.get(tgt, ""),
                 "relation": e.relation,
                 "observed_at": e.observed_at,
             }
@@ -73,9 +81,15 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
         _latest_rel.values(), key=lambda r: r.get("observed_at") or ""
     )
 
-    # 탐지 관계 (observes) — 위 압축 결과에서 파생
+    # 탐지 관계 (observes) — 위 압축 결과에서 파생 (탐지 대상 병종 포함)
     detections = [
-        {"observer": r["source"], "target": r["target"], "observed_at": r["observed_at"]}
+        {
+            "observer": r["source"],
+            "target": r["target"],
+            "target_type": r["target_type"],   # 탐지된 적 부대 병종
+            "target_side": r["target_side"],
+            "observed_at": r["observed_at"],
+        }
         for r in force_relations
         if r["relation"] == "observes"
     ]
@@ -109,9 +123,23 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
     detected_targets = {d["target"] for d in detections}
     engagements = [r for r in force_relations if r["relation"] == "engages"]
     threats = [r for r in force_relations if r["relation"] == "threatens"]
+    # 탐지된 적 부대 요약 (병종 포함) — 아군 방책 판단 시 적 편성 인지용
+    detected_enemies = [
+        {
+            "unit_id": u["unit_id"],
+            "unit_type": u.get("unit_type", ""),
+            "combat_power": u.get("combat_power"),
+            "status": u.get("status", ""),
+            "lat": u.get("lat"),
+            "lon": u.get("lon"),
+        }
+        for u in units
+        if u["unit_id"] in detected_targets and u["side"] != "BLUFOR"
+    ]
     return {
         "units": units,
         "detections": detections,
+        "detected_enemies": detected_enemies,
         # 적↔아군 관계: observes(탐지) / engages(교전) / threatens(위협)
         "force_relations": force_relations[-60:],
         "events": events[-30:],

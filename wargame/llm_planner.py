@@ -132,6 +132,131 @@ def _sample_elevation_map(state: dict) -> str:
 
 # ── 프롬프트 빌더 ─────────────────────────────────────────────────
 
+def _blufor_roster_block(state: dict) -> str:
+    """계획 대상 BLUFOR 부대를 위경도와 함께 명시적으로 나열 (함수호출 모델용)."""
+    try:
+        from tools.coord_utils import xy_to_latlon
+    except Exception:
+        xy_to_latlon = lambda x, y: (x, y)  # noqa: E731
+    lines = []
+    for u in state.get("units", []):
+        if u.get("side") != "BLUFOR" or u.get("status") == "destroyed":
+            continue
+        lat, lon = xy_to_latlon(u.get("x", 0), u.get("y", 0))
+        _cp = u.get("combat_power")
+        _cp_s = f"{_cp:.0f}%" if isinstance(_cp, (int, float)) else "미상"
+        lines.append(
+            f"  - {u['id']} (종류:{u.get('unit_type','?')}, 전투력:{_cp_s}, "
+            f"상태:{u.get('status','?')}, 현위치:[{lat:.6f},{lon:.6f}])"
+        )
+    if not lines:
+        return "  (계획 대상 BLUFOR 부대 없음)"
+    return "\n".join(lines)
+
+
+def _opfor_targets_block(state: dict) -> str:
+    """탐지된 OPFOR(표적)를 위경도와 함께 명시적으로 나열 (함수호출 모델용)."""
+    try:
+        from tools.coord_utils import xy_to_latlon
+    except Exception:
+        xy_to_latlon = lambda x, y: (x, y)  # noqa: E731
+    intel = state.get("intelligence", {}).get("BLUFOR", [])
+    lines = []
+    for e in intel:
+        if e.get("status") not in ("detected", "approximate"):
+            continue
+        lat, lon = xy_to_latlon(e.get("known_x", 0), e.get("known_y", 0))
+        _cp = e.get("combat_power")
+        _cp_s = f"{_cp:.0f}%" if isinstance(_cp, (int, float)) else "미상"
+        lines.append(
+            f"  - {e['unit_id']} (종류:{e.get('unit_type','?')}, 전투력:{_cp_s}, "
+            f"탐지:{e.get('status')}, 위치:[{lat:.6f},{lon:.6f}])"
+        )
+    if not lines:
+        return "  (탐지된 OPFOR 없음 — air_support_plans 는 빈 배열)"
+    return "\n".join(lines)
+
+
+def _build_mission_query_funccall(state: dict, recon_block: str, attack_pos_block: str,
+                                  elev_section: str, air_limit_line: str,
+                                  fire_priority_block: str = "") -> str:
+    """LangGraph(함수호출) 백엔드용 임무계획 쿼리 — 코드 실행 없이 데이터→JSON 직접 구성."""
+    roster = _blufor_roster_block(state)
+    targets = _opfor_targets_block(state)
+    return f"""대대급 C2 AI: BLUFOR 임무계획을 수립하고 워게임에 적용하라.
+
+당신은 코드를 실행하지 않는다. 아래 [제공 데이터]를 **직접 읽고 판단**해 최종 임무계획
+JSON을 구성한 뒤, apply_wargame_mission_plan 도구를 function call 로 호출해 적용하라.
+
+⚠️ 가장 중요: [계획 대상 BLUFOR 부대]에 나열된 **모든 부대**에 대해 각각 1개의 임무를
+   mission_plans 에 반드시 포함하라. mission_plans 를 절대 빈 배열로 제출하지 말 것.
+
+[계획 대상 BLUFOR 부대] — 이 부대들 각각에 임무를 배정하라
+{roster}
+
+[탐지된 OPFOR — 표적 후보]
+{targets}
+
+[제공 데이터 — 참고용 계산 결과]
+{recon_block}
+{attack_pos_block}
+{fire_priority_block}
+
+[부대별 임무 결정 규칙]
+- 정찰: recon_result.status 가 "no_recon_units" 가 아니고 recon 경로가 있으면 해당 정찰부대만
+  mission_type="recon" 으로 배정하고 그 waypoints 를 사용한다. 정찰부대가 없으면(현 시나리오는
+  UAV 정찰로 적 위치 파악) 모든 부대를 전투/방어 임무로 배정한다.
+- 자주포(포병) 부대: 전방 이동을 지양하고 현 후방 위치를 유지(mission_type="hold" 또는 "defend").
+  포병은 자동으로 사거리 내 표적에 화력지원하므로 전진 공격 임무를 주지 말 것.
+- 그 외 각 BLUFOR 전투부대(기계화보병/전차/대전차 등):
+  · 전투력 CP ≥ 30% → mission_type = "attack" 또는 "flank" (측방 기동 우선)
+  · 전투력 CP < 30% → mission_type = "defend" 또는 "withdraw"
+  · attack/flank 부대는 담당할 표적을 "target_unit_id" 에 [탐지된 OPFOR] 중 하나의 ID로 반드시 명시.
+  · waypoints 는 attack_positions_result.unit_key_highground 중 해당 unit_id 의 position([lat,lon])을
+    우선 사용(있으면). 없으면 표적으로 향하는 은밀·유리한 접근 경로 3~5개를 직접 산정.
+  · 아군이 적과 근접 교전 중인 표적에는 공중지원 method 를 strike(정밀타격)로.
+
+[공중지원·포병 규칙]
+{air_limit_line}
+- air CAS(cas/strike/helicopter)는 위 잔여 횟수 내에서만. 포병(artillery)은 횟수 제한 없이 동시 투사 가능.
+- ★ 타격 우선순위는 **fire_priority_result 를 최우선 근거**로 사용하라. 이 스케줄은 적 병종·현황을
+  반영한 위협 순위(자주포 등 고가치 자산 우선)로, priorities[].rank 순서대로 화력을 배정한다.
+  · air_support_plans 는 fire_priority_result.air_cas_schedule 의 target·method 를 우선순위대로 사용.
+  · 포병(artillery)은 fire_priority_result.artillery_schedule 의 target 을 사용(항공과 동시 투사).
+  · 위협 상위 표적은 **같은 target 좌표**에 공중지원 + 포병을 동시 배정(별개 항목 2개, 같은 [lat,lon]).
+  · fire_priority_result 가 없으면 attack_positions_result.air_support_schedule/artillery_support_schedule 로 대체.
+- air_support_plans[].target 좌표는 반드시 [탐지된 OPFOR] 의 위치([lat,lon])를 그대로 사용(임의 좌표 금지).
+- 탐지된 OPFOR 가 없으면 air_support_plans = [].
+
+[좌표 규칙]
+- 모든 waypoints·target 은 위경도(WGS84) 소수점 6자리. 예:[38.081081,127.101248].
+- 미터 정수([9000,8000])나 단순 정수([9,8]) 사용 금지.
+[지형고도] 작전지역=철원(DMZ인근), lat 38.0~38.27 / lon 127.0~127.34.
+{elev_section}
+
+[실행 절차 — 반드시 준수]
+1) 위 규칙으로 final_plan 을 구성한다. mission_plans 에는 위 [계획 대상 BLUFOR 부대]가 모두 포함돼야 한다.
+2) ⚠️ apply_wargame_mission_plan 등 어떤 적용/조회 도구도 호출하지 마라. 워게임 적용은 시스템이 수행한다.
+3) 당신의 최종 응답은 오직 아래 형식의 JSON 블록 하나여야 한다. 다른 설명 텍스트·도구 호출 금지.
+   mission_plans 가 비어 있으면 안 된다 (모든 대상 부대 포함).
+
+[출력 JSON 형식]
+```json
+{{"reasoning":"한국어 판단근거",
+"mission_plans":[
+  {{"company_id":"Delta","mission_type":"recon","waypoints":[[위도,경도]],"objective":"정찰 목표"}},
+  {{"company_id":"실제부대ID","mission_type":"attack","target_unit_id":"담당 OPFOR ID","waypoints":[[위도,경도]],"objective":"목표"}}
+],
+"air_support_plans":[
+  {{"call_sign":"호출부호1","support_type":"cas","target":[위도,경도],"radius":1500,"delay":6}},
+  {{"call_sign":"호출부호2","support_type":"artillery","target":[위도,경도],"radius":2500,"delay":30}}
+]}}
+```
+(위 예시처럼 위협도 상위 표적에는 공중지원(cas/strike/helicopter)과 포병(artillery)을 **같은 target 좌표**로 동시 배정 가능)
+[형식 참고 예시] (좌표·ID는 placeholder — 실제 데이터로 대체)
+{_FEW_SHOT_EXAMPLES}"""
+
+
 def build_mission_query(state: dict) -> str:
     """
     BattlefieldAgent.run()에 전달할 공격 임무계획 쿼리 문자열 생성.
@@ -172,6 +297,11 @@ def build_mission_query(state: dict) -> str:
         _attack_positions_result = _gap_fn()
     except Exception as _ae:
         _attack_positions_result = {"status": "error", "error": str(_ae)}
+    try:
+        from tools.wargame_fire_priority_tool import get_fire_priority_schedule as _fp_fn
+        _fire_priority_result = _fp_fn()
+    except Exception as _fe:
+        _fire_priority_result = {"status": "error", "error": str(_fe)}
     recon_block = (
         "[recommend_recon_routes() 결과 — recon_result]\n"
         f"```json\n{_json.dumps(_recon_result, ensure_ascii=False)}\n```"
@@ -180,6 +310,22 @@ def build_mission_query(state: dict) -> str:
         "[get_optimal_attack_positions() 결과 — attack_positions_result]\n"
         f"```json\n{_json.dumps(_attack_positions_result, ensure_ascii=False)}\n```"
     )
+    fire_priority_block = (
+        "[get_fire_priority_schedule() 결과 — fire_priority_result "
+        "(적 병종·현황 반영 타격 우선순위: 자주포 등 고가치 자산 우선)]\n"
+        f"```json\n{_json.dumps(_fire_priority_result, ensure_ascii=False)}\n```"
+    )
+
+    # 백엔드에 맞춘 프롬프트 선택:
+    #   langgraph(기본, 함수호출 모델) → 코드 실행 없이 데이터→JSON 직접 구성
+    #   smolagents(CodeAgent)          → 아래 Python 코드 지향 프롬프트
+    import os as _os
+    _backend = _os.environ.get("C2_AGENT_BACKEND", "langgraph").strip().lower()
+    if _backend != "smolagents":
+        return _build_mission_query_funccall(
+            state, recon_block, attack_pos_block, elev_section, air_limit_line,
+            fire_priority_block,
+        )
 
     query = f"""대대급 C2 AI: BLUFOR 임무계획을 수립하라.
 

@@ -188,6 +188,13 @@ class BattlefieldAgent:
             logger.warning(f"Failed to load attack advisor tool: {e}")
 
         try:
+            from tools.wargame_fire_priority_tool import get_fire_priority_schedule
+            tools.append(get_fire_priority_schedule)
+            logger.info("Wargame fire priority scheduling tool loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load fire priority tool: {e}")
+
+        try:
             from tools.wargame_recon_tool import assess_recon_need, recommend_recon_routes
             tools.extend([assess_recon_need, recommend_recon_routes])
             logger.info("Wargame recon tools loaded")
@@ -565,3 +572,12 @@ class BattlefieldAgent:
     @property
     def exaone4_model(self):
         return self._exaone4_model
+
+
+def build_battlefield_tools() -> list:
+    """에이전트 툴셋(smolagents Tool 리스트)을 구성한다.
+
+    smolagents BattlefieldAgent 와 LangGraph 에이전트가 동일한 툴셋을 공유하도록 하는
+    단일 소스. ``_build_tools`` 는 self 를 사용하지 않으므로 언바운드로 호출한다.
+    """
+    return BattlefieldAgent._build_tools(None)

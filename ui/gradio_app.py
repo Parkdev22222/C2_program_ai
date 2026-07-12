@@ -79,6 +79,80 @@ def _convert_latlon_plan_to_meters(plan: dict) -> dict:
     plan["air_support_plans"] = converted_air
     return plan
 
+
+# ── 임무계획 적용 실패 시 LLM 피드백 루프 ──────────────────────────
+_PLAN_REPAIR_MAX_RETRIES = 2
+
+
+def _apply_plan_to_engine(eng, plan: dict) -> dict:
+    """플랜을 엔진에 적용(지상 + 공중지원). 위경도→미터 변환 포함, 실패 시 예외 전파."""
+    plan = _convert_latlon_plan_to_meters(plan)
+    eng.apply_mission_plan(plan)
+    if plan.get("air_support_plans"):
+        eng.apply_air_support_plan(plan)
+    return plan
+
+
+def _build_plan_repair_query(plan: dict, error) -> str:
+    """적용 실패한 플랜과 에러 메시지를 LLM 에 되먹이는 수정 요청 쿼리."""
+    try:
+        plan_str = _json_mod.dumps(plan, ensure_ascii=False)
+    except Exception:
+        plan_str = str(plan)
+    return (
+        "직전에 생성한 BLUFOR 임무계획을 워게임에 적용하는 중 오류가 발생했습니다.\n"
+        "아래 오류의 원인을 분석해 임무계획을 수정한 뒤, 수정된 전체 계획을 다시 출력하세요.\n\n"
+        f"[적용 오류]\n{error}\n\n"
+        f"[적용 실패한 임무계획 JSON]\n{plan_str}\n\n"
+        "[수정 규칙]\n"
+        "- 좌표는 미터(m) 정수이며 맵 범위 0~30000 이내여야 합니다.\n"
+        "- company_id 는 현재 전장의 BLUFOR 부대 ID 와 정확히 일치해야 합니다.\n"
+        "- waypoints 는 [[x, y], ...] 형식(미터)이어야 합니다.\n"
+        "- target/target_unit_id 는 탐지된 OPFOR 좌표·부대 ID 여야 합니다.\n"
+        "- 반드시 mission_plans 를 포함한 수정된 전체 임무계획을 JSON 블록으로만 출력하세요.\n"
+    )
+
+
+def _apply_plan_with_repair(eng, agent, plan: dict, *, log_prefix: str = "[임무계획]",
+                            max_retries: int = _PLAN_REPAIR_MAX_RETRIES):
+    """플랜을 워게임에 적용하고, 실패 시 에러를 LLM 에 피드백해 수정본을 재적용한다.
+
+    Returns:
+        (applied_plan, ok). ok=True 면 엔진 적용 성공(applied_plan 은 변환·적용된 최종 플랜),
+        ok=False 면 재시도 후에도 실패 → 호출측에서 규칙 기반 폴백 필요.
+    """
+    current = plan
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            applied = _apply_plan_to_engine(eng, current)
+            if attempt > 0:
+                logger.info(f"{log_prefix} LLM 수정본 재적용 성공 "
+                            f"(시도 {attempt + 1}/{max_retries + 1})")
+            return applied, True
+        except Exception as e:
+            last_err = e
+            logger.warning(f"{log_prefix} 적용 실패 (시도 {attempt + 1}/{max_retries + 1}): {e}")
+            if agent is None or _wg_planner is None or attempt >= max_retries:
+                break
+            # 에러를 LLM 에 되먹여 수정본 요청 → 파싱
+            try:
+                repair_query = _build_plan_repair_query(current, e)
+                raw = agent.agent.run(repair_query, reset=True)
+                fixed = _wg_planner._parse_json(str(raw))
+            except Exception as _re:
+                logger.warning(f"{log_prefix} LLM 수정 요청 실패: {_re}")
+                break
+            if fixed and "mission_plans" in fixed:
+                current = fixed
+                logger.info(f"{log_prefix} LLM 수정본 수신 → 재적용 시도")
+            else:
+                logger.warning(f"{log_prefix} LLM 수정본 파싱 실패 → 피드백 루프 종료")
+                break
+    logger.warning(f"{log_prefix} 피드백 루프 종료 — 최종 적용 실패: {last_err}")
+    return current, False
+
+
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
@@ -275,6 +349,7 @@ def _wg_register_engine(engine):
         ("tools.wargame_mission_tool", "register_wargame_engine"),
         ("tools.wargame_strategy_tool", "register_wargame_engine"),
         ("tools.wargame_attack_advisor_tool", "register_wargame_engine"),
+        ("tools.wargame_fire_priority_tool", "register_wargame_engine"),
         ("tools.wargame_recon_tool", "register_wargame_engine"),
         ("tools.wargame_opfor_routes_tool", "register_wargame_engine"),
         ("tools.coa_analysis_tool", "register_wargame_engine"),
@@ -318,6 +393,10 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         return None
     if _wg_engine is None:
         units = setup_bn_vs_bn()
+        _bl = [u.id for u in units if u.side == "BLUFOR"]
+        _op = [u.id for u in units if u.side == "OPFOR"]
+        logger.warning("[시나리오] setup_cheorwon_bn 로드 — BLUFOR %d개%s / OPFOR %d개%s",
+                       len(_bl), _bl, len(_op), _op)
         _wg_engine = WargameEngine(units)
         _wg_planner = MissionPlanner()
         _wg_register_engine(_wg_engine)
@@ -710,21 +789,35 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 except Exception:
                     _tool_applied = False
 
+                logger.info("[자동임무계획] 에이전트 원문(preview): %s", str(raw)[:400])
                 plan = _wg_planner._parse_json(str(raw))
-                if plan and "mission_plans" in plan:
-                    # 에이전트가 JSON을 반환한 경우 → 위경도→미터 변환 후 직접 적용
-                    try:
-                        plan = _convert_latlon_plan_to_meters(plan)
+                if plan and plan.get("mission_plans"):
+                    # 에이전트 JSON 반환(비어있지 않음) → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                    applied_plan, _ok = _apply_plan_with_repair(
+                        eng, agent, plan, log_prefix="[자동임무계획]")
+                    if _ok:
+                        plan = applied_plan
+                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
+                                    f"— {len(plan.get('mission_plans', []))}개 중대 재배정")
+                    else:
+                        logger.warning("[자동임무계획] 수정 재시도 실패 → 규칙 기반 폴백")
+                        plan = _wg_planner._rule_based(state)
                         eng.apply_mission_plan(plan)
                         if plan.get("air_support_plans"):
                             eng.apply_air_support_plan(plan)
-                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
-                                    f"— {len(plan['mission_plans'])}개 중대 재배정")
-                    except Exception as _ae:
-                        logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
                 elif _tool_applied:
                     # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
-                    logger.info("[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요")
+                    # → 툴이 보관한 실제 적용 계획을 표시용으로 회수
+                    try:
+                        from tools.wargame_mission_tool import get_last_applied_plan
+                        _applied = get_last_applied_plan()
+                    except Exception:
+                        _applied = {}
+                    if _applied and _applied.get("mission_plans"):
+                        plan = dict(_applied)
+                        plan["_tool_applied"] = True
+                    logger.info(f"[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요 "
+                                f"({len((_applied or {}).get('mission_plans', []))}개 중대)")
                 else:
                     logger.warning(f"[자동임무계획] 에이전트 미적용 → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
@@ -880,6 +973,17 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         wps = u.get("waypoints", [])
         if wps:
             fig.add_trace(go.Scatter(x=[u["x"]] + [w[0] for w in wps], y=[u["y"]] + [w[1] for w in wps], mode="lines", line=dict(color=color, width=1.5, dash="dot"), hoverinfo="skip", showlegend=False))
+        # ── 임무 오버레이: 목표 지점 + 임무유형 라벨 (경유지 소진 후에도 유지) ──
+        _mobj = u.get("mission_objective")
+        _mtype = u.get("mission_type") or u.get("current_action") or ""
+        if _mobj and u["status"] != "destroyed" and u["side"] == "BLUFOR":
+            _MTYPE_KO = {"attack": "공격", "flank": "측방", "defend": "방어",
+                         "withdraw": "철수", "hold": "고수", "recon": "정찰", "move": "기동"}
+            _mt_ko = _MTYPE_KO.get(_mtype, _mtype)
+            # 현위치 → 목표 임무선 (실선, 반투명)
+            fig.add_trace(go.Scatter(x=[u["x"], _mobj[0]], y=[u["y"], _mobj[1]], mode="lines", line=dict(color=color, width=1.2, dash="solid"), opacity=0.45, hoverinfo="skip", showlegend=False))
+            # 목표 지점 깃발 마커 + 임무 라벨
+            fig.add_trace(go.Scatter(x=[_mobj[0]], y=[_mobj[1]], mode="markers+text", marker=dict(symbol="star", size=13, color=color, line=dict(color="white", width=1)), text=[f"{u['id']} {_mt_ko}"], textposition="bottom center", textfont=dict(color=color, size=9), showlegend=False, hovertemplate=f"<b>{u['id']} 임무목표</b><br>유형: {_mt_ko}<br>목표: ({_mobj[0]/1000:.1f}km, {_mobj[1]/1000:.1f}km)<extra></extra>"))
         fig.add_trace(go.Scatter(x=[u["x"]], y=[u["y"]], mode="markers+text", name=f"{u['side']} {u['id']}", marker=dict(symbol=sym, size=size, color=color, line=dict(color="white", width=1.5), opacity=0.3 if u["status"] == "destroyed" else 1.0), text=[f"{u['id']}<br>{cp:.0f}%"], textposition="top center", textfont=dict(color=color, size=11), hovertemplate=f"<b>{u['id']}</b><br>위치: ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)<br>고도: {elev:.0f}m<br>전투력: {cp:.1f}%<br>상태: {u['status']}<br>행동: {u['current_action']}<extra></extra>"))
     import math as _math
     _AIR_COLOR = {"cas": "#FF6F00", "strike": "#F50057", "artillery": "#AA00FF", "helicopter": "#00BFA5"}
@@ -896,6 +1000,23 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         status_ko = {"pending": "대기", "active": "투입중", "completed": "완료"}.get(air["status"], "")
         fig.add_trace(go.Scatter(x=circle_x, y=circle_y, mode="lines", fill="toself", fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},{alpha})", line=dict(color=clr, width=2, dash="dash" if air["status"] == "pending" else "solid"), name=label, hovertemplate=f"<b>{label}</b><br>상태: {status_ko}<br>목표: ({cx/1000:.1f}km, {cy/1000:.1f}km)<br>반경: {r:.0f}m<extra></extra>"))
         fig.add_trace(go.Scatter(x=[cx], y=[cy], mode="markers+text", marker=dict(symbol="x", size=12, color=clr), text=[air["call_sign"]], textposition="bottom center", textfont=dict(color=clr, size=10), showlegend=False, hoverinfo="skip"))
+    # ── 자주포(포병) 간접사격 표시 — 사수→탄착 사격선 + 탄착 AoE ──────────
+    for fire in state.get("indirect_fire", []):
+        _own = fire.get("side") == "BLUFOR"
+        f_clr = "#42A5F5" if _own else "#FF7043"   # 아군 포격 청색 / 적 포격 주황
+        tx, ty = fire["target_x"], fire["target_y"]
+        rr = fire.get("radius", 600.0)
+        pts = 30
+        cxs = [tx + rr * _math.cos(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        cys = [ty + rr * _math.sin(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        _who = "아군 포병" if _own else "적 포병"
+        # 탄착 지점 AoE 원 (점선)
+        fig.add_trace(go.Scatter(x=cxs, y=cys, mode="lines", fill="toself", fillcolor=f"rgba({int(f_clr[1:3],16)},{int(f_clr[3:5],16)},{int(f_clr[5:7],16)},0.12)", line=dict(color=f_clr, width=1.5, dash="dot"), name=f"{_who} 포격", legendgroup="artillery", hovertemplate=f"<b>{_who} 포격</b><br>{fire.get('shooter_id','?')} ({fire.get('unit_type','')})<br>탄착: ({tx/1000:.1f}km, {ty/1000:.1f}km)<br>반경: {rr:.0f}m<extra></extra>"))
+        # 탄착 표시(폭발 마커)
+        fig.add_trace(go.Scatter(x=[tx], y=[ty], mode="markers", marker=dict(symbol="star-triangle-up", size=11, color=f_clr, line=dict(color="white", width=0.5)), showlegend=False, hoverinfo="skip"))
+        # 사수 위치가 보이면 사격선 (사수→탄착)
+        if fire.get("shooter_visible") and fire.get("shooter_x") is not None:
+            fig.add_trace(go.Scatter(x=[fire["shooter_x"], tx], y=[fire["shooter_y"], ty], mode="lines", line=dict(color=f_clr, width=1.0, dash="dashdot"), opacity=0.6, showlegend=False, hovertemplate=f"<b>{_who} 사격</b><br>{fire.get('shooter_id','?')}<extra></extra>"))
     fig.update_layout(title=dict(text=f"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} {'▶ 진행 중' if state.get('running') else '⏸ 정지'}", font=dict(color="#dddddd", size=14)), xaxis=dict(title="동쪽 (m)", range=[0, MAP_W], gridcolor="#2a3a4a", zeroline=False, tickformat=",d", tickfont=dict(color="#aaa")), yaxis=dict(title="북쪽 (m)", range=[0, MAP_H], scaleanchor="x", scaleratio=1, gridcolor="#2a3a4a", zeroline=False, tickformat=",d", tickfont=dict(color="#aaa")), paper_bgcolor="#0d1117", plot_bgcolor="#0f1923", font=dict(color="#dddddd"), legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)), height=300, margin=dict(l=60, r=20, t=40, b=40), hovermode="closest")
     return fig
 
@@ -1172,6 +1293,10 @@ def wargame_reset_sim():
     if not _WARGAME_OK:
         return "초기화 실패", None, None, "", ""
     units = setup_bn_vs_bn()
+    _bl = [u.id for u in units if u.side == "BLUFOR"]
+    _op = [u.id for u in units if u.side == "OPFOR"]
+    logger.warning("[시나리오] 리셋 — setup_cheorwon_bn: BLUFOR %d개%s / OPFOR %d개%s",
+                   len(_bl), _bl, len(_op), _op)
     if _wg_engine is not None:
         _wg_engine.reset(units)
     else:
@@ -1499,28 +1624,43 @@ def wargame_request_attack_plan(history: List = None):
                 try:
                     # 에이전트 메모리 완전 초기화 — 이전 실행 잔류 변수·로그 제거
                     agent.reset_memory()
+                    try:
+                        from tools.wargame_mission_tool import (
+                            reset_apply_tracker as _reset_apply, get_last_applied_plan as _get_applied,
+                        )
+                        _reset_apply()  # 이번 실행에서 툴 적용 여부를 정확히 판별하기 위해 초기화
+                    except Exception:
+                        _get_applied = lambda: {}
                     raw = agent.agent.run(full_query, reset=True)
+                    logger.info("[공격임무계획] 에이전트 원문(preview): %s", str(raw)[:400])
                     plan = _wg_planner._parse_json(str(raw))
-                    if plan and "mission_plans" in plan:
-                        # 에이전트가 JSON 반환 → 위경도→미터 변환 후 직접 적용
-                        try:
-                            plan = _convert_latlon_plan_to_meters(plan)
+                    if plan and plan.get("mission_plans"):
+                        # 에이전트 JSON 반환(비어있지 않음) → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                        applied_plan, _ok = _apply_plan_with_repair(
+                            eng, agent, plan, log_prefix="[공격임무계획]")
+                        if _ok:
+                            plan = applied_plan
+                        else:
+                            logger.warning("[공격임무계획] 수정 재시도 실패 → 규칙 기반 폴백")
+                            plan = _wg_planner._rule_based(state)
                             eng.apply_mission_plan(plan)
                             if plan.get("air_support_plans"):
                                 eng.apply_air_support_plan(plan)
-                        except Exception as _ae:
-                            logger.warning(f"apply attack plan error: {_ae}")
-                    elif (isinstance(raw, dict) and raw.get("status") == "success") or \
-                         (isinstance(raw, str) and '"status": "success"' in raw):
-                        # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
-                        logger.info("[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료")
-                        plan = {"mission_plans": [], "_tool_applied": True}
                     else:
-                        logger.warning(f"[공격임무계획] JSON 파싱 실패 (raw={str(raw)[:120]}) → 규칙 기반 폴백")
-                        plan = _wg_planner._rule_based(state)
-                        eng.apply_mission_plan(plan)
-                        if plan.get("air_support_plans"):
-                            eng.apply_air_support_plan(plan)
+                        # 유효 JSON 계획 없음 → 에이전트가 apply 툴로 직접 적용했는지 정밀 확인
+                        # (조회 툴의 status:success 를 오인하지 않도록 실제 적용 계획 존재로만 판정)
+                        _applied = _get_applied()
+                        if _applied and _applied.get("mission_plans"):
+                            plan = dict(_applied)
+                            plan["_tool_applied"] = True
+                            logger.info(f"[공격임무계획] 에이전트가 툴로 계획 직접 적용 "
+                                        f"— {len(plan['mission_plans'])}개 중대")
+                        else:
+                            logger.warning(f"[공격임무계획] 유효 임무계획 없음 (raw={str(raw)[:200]}) → 규칙 기반 폴백")
+                            plan = _wg_planner._rule_based(state)
+                            eng.apply_mission_plan(plan)
+                            if plan.get("air_support_plans"):
+                                eng.apply_air_support_plan(plan)
                 except Exception as _ex:
                     logger.warning(f"[공격임무계획] 에이전트 실행 실패: {_ex} → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
@@ -1572,6 +1712,42 @@ def wargame_request_attack_plan(history: List = None):
             pass
 
 
+def _apply_chat_plan_if_any(eng, resp_str: str) -> str:
+    """채팅 응답에 air_support_plans/mission_plans JSON이 있으면 실제 엔진에 적용.
+
+    채팅으로 포격/화력지원/타격/임무를 '지시'하면 응답의 계획을 워게임에 반영한다.
+    (일반 질의응답에는 JSON이 없으므로 아무것도 적용하지 않는다.)
+    반환: 적용 요약 문자열(없으면 빈 문자열).
+    """
+    if eng is None or _wg_planner is None:
+        return ""
+    try:
+        plan = _wg_planner._parse_json(resp_str)
+    except Exception:
+        plan = None
+    if not isinstance(plan, dict):
+        return ""
+    has_air     = bool(plan.get("air_support_plans"))
+    has_mission = bool(plan.get("mission_plans"))
+    if not (has_air or has_mission):
+        return ""
+    try:
+        plan = _convert_latlon_plan_to_meters(plan)
+        notes = []
+        if has_mission:
+            eng.apply_mission_plan(plan)
+            notes.append(f"지상임무 {len(plan.get('mission_plans', []))}건")
+        if has_air:
+            eng.apply_air_support_plan(plan)
+            notes.append(f"화력지원 {len(plan.get('air_support_plans', []))}건")
+        logger.info("[채팅] 지시 계획 적용 — %s (running=%s)", ", ".join(notes), eng.running)
+        run_note = "" if eng.running else " (⏸ 시뮬레이션 정지 중 — ▶ 시작 시 투사)"
+        return f"✅ 워게임 적용: {', '.join(notes)}{run_note}"
+    except Exception as e:
+        logger.warning("[채팅] 지시 계획 적용 실패: %s", e)
+        return ""
+
+
 def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     if not message.strip():
         return history, ""
@@ -1583,8 +1759,20 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
         state = eng.get_state()
         def _fmt_unit(u):
             lat, lon = _xy_to_latlon(u["x"], u["y"])
-            return f"  {u['side']} {u['id']}: CP={u['combat_power']:.0f}% 위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}"
+            _utype = u.get("unit_type") or "미상"
+            return (f"  {u['side']} {u['id']}(병종:{_utype}): CP={u['combat_power']:.0f}% "
+                    f"위치=(lat={lat:.4f},lon={lon:.4f}) {u['status']}")
         context = (f"[현재 워게임 상황] 게임시간={state['game_time_str']}\n" + "\n".join(_fmt_unit(u) for u in state["units"]) + "\n\n")
+        # 지시 처리 안내: 사용자가 화력지원/포격/타격/임무를 '지시'하면 실행 가능한 JSON을 출력하게 유도
+        context += (
+            "[지시 처리 규칙] 사용자가 포격·화력지원·공중지원·타격·임무 이동을 '지시'하면, "
+            "실행할 계획을 아래 JSON 블록으로 출력하라(시스템이 워게임에 적용한다). "
+            "support_type: artillery=포병(반경 2500), cas/strike/helicopter=항공. "
+            "target/waypoints 좌표는 위 [현재 워게임 상황]의 대상 OPFOR lat/lon 을 사용. "
+            "단순 질문·상황설명 요청이면 JSON 없이 평문으로 답하라.\n"
+            '형식: ```json\n{"air_support_plans":[{"call_sign":"ARTY-1","support_type":"artillery",'
+            '"target":[위도,경도],"radius":2500,"delay":30}]}\n```\n\n'
+        )
     history.append((message, "처리 중..."))
     if agent is None:
         history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")
@@ -1592,7 +1780,12 @@ def wg_chat_send(message: str, history: List) -> Tuple[List, str]:
     try:
         full_query = context + message if context else message
         response = agent.run(full_query, reset=False)
-        history[-1] = (message, str(response))
+        resp_str = str(response)
+        # 채팅으로 화력지원/임무를 지시한 경우 → 응답 속 계획을 실제 워게임에 적용
+        applied_note = _apply_chat_plan_if_any(eng, resp_str)
+        if applied_note:
+            resp_str = resp_str + "\n\n" + applied_note
+        history[-1] = (message, resp_str)
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
@@ -1731,7 +1924,8 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
     # ── 2차 일반화 패스: 응답에 좌표·특정 ID·수치가 남아있으면 재작성 ──
     _SPECIFIC_PATTERN = _re.compile(
         r'\[\d{3,},\s*\d{3,}\]'          # [13723, 14083] 형태 좌표
-        r'|(?:Red|Blue|Alpha|Bravo|Charlie|Delta|Echo|Foxtrot)\d*'  # 특정 부대명
+        r'|(?:Red|Blue|Alpha|Bravo|Charlie|Delta|Echo|Foxtrot)\d*'  # 구 부대명(영문)
+        r'|적?(?:보병|전차|대전차|자주포|정찰)\d*중대'  # 한국어 중대명(예: 적자주포중대)
         r'|\b\d{3,}m\b'                    # 1200m 같은 수치
         r'|\(\d+\.?\d*km,\s*\d+\.?\d*km\)'  # (12.3km, 4.5km)
     )
@@ -1846,12 +2040,13 @@ def _init_harness_controller():
         return None
     try:
         from wargame.harness import HarnessController
-        from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
+        from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
         from wargame.llm_planner import MissionPlanner
 
         def _engine_factory():
             units = setup_bn_vs_bn()
             eng = WargameEngine(units)
+            eng.full_recon = True  # 철원 시나리오: UAV 완전정찰
             _wg_register_engine(eng)
             return eng
 

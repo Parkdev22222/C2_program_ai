@@ -215,6 +215,26 @@ class Neo4jGraphStore:
         )
         return tuple(row["entity_id"] for row in rows)
 
+    def recent_event_nodes(
+        self, *, scenario_id: str | None = None, limit: int = 15
+    ) -> tuple[KnowledgeNode, ...]:
+        """최근 전투/포격 이벤트(Event) 노드를 최신순으로 반환.
+
+        관측(Observation) 노드가 매 틱 생성돼 이웃 검색(neighborhood)에서 이벤트가 밀려나는
+        것을 막기 위해, 이벤트는 별도로 최신 N건을 직접 확보한다.
+        """
+        rows = self._run(
+            "MATCH (n:KgNode {node_type:'Event'}) "
+            "WHERE ($scenario_id IS NULL OR n.scenario_id = $scenario_id) "
+            "RETURN n.kg_node_id AS kg_node_id, n.scenario_id AS scenario_id, n.entity_id AS entity_id, "
+            "n.label AS label, n.node_type AS node_type, n.security_level AS security_level, "
+            "n.lat AS lat, n.lon AS lon, n.observed_at AS observed_at, properties(n) AS properties "
+            "ORDER BY n.observed_at DESC, n.kg_node_id LIMIT $limit",
+            scenario_id=scenario_id,
+            limit=limit,
+        )
+        return tuple(_node(row) for row in rows)
+
     # ------------------------------------------------------------------
     # 실시간 적재 (원본 ingest_sample_data 의 MERGE 쿼리를 단건 헬퍼로 분리)
     # ------------------------------------------------------------------

@@ -26,8 +26,15 @@
 transformers>=4.47.0,<4.48.0
 accelerate
 
-# Agent Framework
+# Agent Frameworks
+# smolagents: 기존 CodeAgent 백엔드 (C2_AGENT_BACKEND=smolagents)
 smolagents>=1.0.0
+# LangGraph: 그래프 기반 ReAct 백엔드 (기본, C2_AGENT_BACKEND=langgraph)
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+# Gemini API 프로바이더 (llm_provider=gemini 일 때 필요)
+langchain-google-genai>=2.0.0
 
 # Web UI
 gradio>=4.0.0
@@ -44,6 +51,8 @@ rdflib>=6.0.0
 num2words
 # 워게임 상태 → 온톨로지 실시간 적재/검색 (미접속 시 in-memory 폴백)
 neo4j>=5.0.0
+# 전술채팅 멀티턴 대화 적재 (PostgreSQL) — 미접속 시 in-memory 폴백
+psycopg2-binary>=2.9.0
 
 # Utilities
 huggingface-hub>=0.20.0

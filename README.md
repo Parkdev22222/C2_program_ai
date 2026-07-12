@@ -93,6 +93,112 @@ sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재
 
 ---
 
+## 에이전트 백엔드 선택 (LangGraph / smolagents)
+
+동일한 툴셋·시스템 지시사항·온톨로지 자동 주입을 공유하는 두 가지 에이전트 백엔드를
+환경변수 `C2_AGENT_BACKEND`로 전환할 수 있습니다.
+
+| 값 | 백엔드 | 구현 | 도구 호출 방식 |
+|----|--------|------|----------------|
+| `langgraph` (기본) | LangGraph StateGraph(ReAct) | `agent/langgraph_agent.py` | function calling (tool call) |
+| `smolagents` | smolagents CodeAgent | `agent/battlefield_agent.py` | 코드 생성형 |
+
+```bash
+# LangGraph 백엔드로 UI 실행 (기본값이라 생략 가능)
+C2_AGENT_BACKEND=langgraph python main.py ui
+
+# 기존 smolagents 백엔드로 복귀
+C2_AGENT_BACKEND=smolagents python main.py ui
+```
+
+두 백엔드는 다음을 **완전히 동일하게** 공유합니다.
+
+- 툴셋: `build_battlefield_tools()` 단일 소스 (`agent/battlefield_agent.py`)
+  → LangGraph 는 `agent/langgraph_tools.py`가 각 smolagents 툴을 LangChain
+    `StructuredTool`로 감싸 재사용하므로 워게임 엔진 연동·반환 구조가 같습니다.
+- 시스템 지시사항: `config/agent_custom_instructions.txt`
+- 매 판단마다 Neo4j 온톨로지 상황 자동 주입 (`ontology_situation_block()`)
+- 공개 인터페이스: `run()` / `agent.agent.run()` / `reset_memory()` /
+  `get_situation_memory()` / `reload_instructions()`
+
+### LangGraph 사용 시 vLLM 서버 요구사항
+
+LangGraph 백엔드는 **function calling(tool call)** 으로 도구를 호출하므로, vLLM 서버를
+tool-calling 활성화 옵션으로 기동해야 합니다. 위 `vllm serve` 명령에 다음 플래그를
+추가하세요(파서는 모델에 맞춰 선택 — EXAONE4 계열은 `hermes` 파서를 사용).
+
+```bash
+nohup vllm serve LGAI-EXAONE/EXAONE-4.0-32B-AWQ --host 127.0.0.1 --port 8000 \
+  --served-model-name exaone4-agent --trust-remote-code \
+  --quantization awq_marlin --dtype float16 \
+  --gpu-memory-utilization 0.90 --max-model-len 32768 \
+  --enable-prefix-caching --max-num-seqs 64 \
+  --enable-auto-tool-choice --tool-call-parser hermes \
+  > out1.log 2>&1 &
+```
+
+> 서버 주소는 `config/models_config.yaml`의 `agent_model.serving.base_url`
+> 또는 환경변수 `C2_AGENT_VLLM_BASE_URL`(예: `http://127.0.0.1:8000/v1`)로 지정합니다.
+> smolagents 백엔드는 위 tool-calling 플래그 없이도 동작합니다.
+
+### LLM 프로바이더 선택 — 직접 서빙한 EXAONE4 vs. Gemini API
+
+LangGraph 백엔드(기본)는 LLM을 **직접 서빙한 EXAONE4(vLLM)** 대신 **Google Gemini API**로도
+쓸 수 있습니다. GPU/서버 기동 없이 API 키만 있으면 됩니다. 프로바이더는 환경변수
+`C2_LLM_PROVIDER`(또는 `config/models_config.yaml`의 최상위 `llm_provider`)로 전환합니다.
+
+| `C2_LLM_PROVIDER` | LLM | 필요 조건 |
+|-------------------|-----|-----------|
+| `vllm` (기본) | 직접 서빙한 EXAONE4 | vLLM 서버 기동(위) |
+| `gemini` | Google Gemini API | `GOOGLE_API_KEY` 환경변수 |
+
+**API 키를 어디에 넣나요?** — 코드나 설정 파일이 아니라 **환경변수**에 넣습니다(키 유출 방지).
+[Google AI Studio](https://aistudio.google.com/apikey)에서 발급한 키를 다음처럼 주입하세요.
+
+```bash
+# 1) Gemini API 키를 환경변수로 주입 (필수)
+export GOOGLE_API_KEY="여기에_발급받은_키"     # 또는 GEMINI_API_KEY
+
+# 2) 프로바이더를 gemini 로 전환 후 UI 실행 (vLLM 서버 불필요)
+export C2_LLM_PROVIDER=gemini
+python main.py ui
+```
+
+- 사용 모델은 `config/models_config.yaml`의 `gemini_model.model`에서 지정합니다
+  (기본 `gemini-2.5-flash`, 필요 시 `gemini-2.5-pro` 등으로 변경).
+- `models_config.yaml`의 `api_key_env`는 **키 값이 아니라 키가 담긴 환경변수 이름**입니다.
+  기본값 `GOOGLE_API_KEY`를 쓰면 위 `export`만으로 연동됩니다.
+- Gemini는 tool-calling을 기본 지원하므로 LangGraph 그래프에서 EXAONE4와 **동일한 툴셋·
+  동일한 동작**으로 실행됩니다. (`pip install langchain-google-genai` 필요 — requirements 포함)
+- EXAONE4로 되돌리려면 `unset C2_LLM_PROVIDER`(또는 `C2_LLM_PROVIDER=vllm`).
+
+### 전술채팅 멀티턴 대화 메모리 (PostgreSQL / in-memory)
+
+전술채팅은 **이전 2턴**(사용자 쿼리 + 툴 호출 내역 + 툴 실행 결과 + 최종 응답)을 저장소에서
+적재해 현재 질문 앞에 붙여 멀티턴 대화를 지원합니다. 저장소는 **PostgreSQL** 또는
+**in-memory 폴백** 두 가지이며, 온톨로지 그래프 스토어와 동일한 폴백 패턴을 씁니다.
+(공격·정찰·COA 계획 경로는 무상태로 두어 이전 대화가 섞이지 않습니다.)
+
+| 환경변수 | 설명 |
+|----------|------|
+| `C2_CHAT_STORE` | `postgres` / `inmemory` 강제 선택 (미설정 시 접속정보 있으면 postgres) |
+| `C2_PG_DSN` | PostgreSQL 접속 문자열 (예: `postgresql://user:pw@host:5432/c2`) |
+| `C2_PG_HOST` / `C2_PG_PORT` / `C2_PG_DB` / `C2_PG_USER` / `C2_PG_PASSWORD` | DSN 대신 분리 지정 |
+| `C2_CHAT_SESSION_ID` | 대화 세션 ID (기본 `wargame_chat`) |
+
+```bash
+# PostgreSQL 사용 (접속 실패 시 자동으로 in-memory 폴백)
+export C2_PG_DSN="postgresql://postgres:pw@127.0.0.1:5432/c2"
+python main.py ui
+```
+
+- 접속정보가 없으면 자동으로 **in-memory**로 동작합니다(별도 설정 불필요, 프로세스 종료 시 소멸).
+- 대화 턴은 `c2_chat_turns` 테이블에 적재되며, 각 턴은 LangChain 메시지(Human/AI/Tool)를
+  직렬화해 저장합니다. `pip install psycopg2-binary` 필요(requirements 포함).
+- 유지 턴 수는 `agent/langgraph_agent.py`의 `_MEMORY_TURNS`(기본 2)로 조정합니다.
+
+---
+
 ## Google Colab에서 실행
 
 EXAONE4-32B(AWQ)를 **별도 vLLM 서버(OpenAI 호환 API)**로 띄우고, 앱은 그 서버에 접속합니다.

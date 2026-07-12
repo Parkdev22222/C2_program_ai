@@ -29,6 +29,7 @@ tools/
   wargame_mission_tool.py     # apply_wargame_mission_plan, apply_wargame_air_support
   wargame_recon_tool.py       # assess_recon_need, recommend_recon_routes
   wargame_attack_advisor_tool.py  # get_optimal_attack_positions
+  wargame_fire_priority_tool.py   # get_fire_priority_schedule (병종·현황 반영 타격 우선순위)
   wargame_opfor_routes_tool.py    # predict_opfor_routes
   wargame_strategy_tool.py        # get_wargame_tactical_recommendation
   mission_plan_validator.py       # Pydantic 스키마 검증 (MissionPlanRequest)

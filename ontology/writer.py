@@ -52,7 +52,9 @@ class OntologyWriter:
                 state = engine.get_state()
                 events = []
                 try:
-                    events = engine.db.get_recent_events(n=50)
+                    # 스냅샷 간 다수의 교전/포격 이벤트가 누락되지 않도록 충분히 넓게 조회
+                    # (빌더가 _seen_event_keys 로 중복 적재를 막으므로 넉넉히 가져와도 안전)
+                    events = engine.db.get_recent_events(n=300)
                 except Exception:
                     events = []
                 nodes, edges, evidences = self.builder.build(state, events)
