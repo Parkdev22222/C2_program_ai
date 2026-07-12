@@ -967,6 +967,17 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         wps = u.get("waypoints", [])
         if wps:
             fig.add_trace(go.Scatter(x=[u["x"]] + [w[0] for w in wps], y=[u["y"]] + [w[1] for w in wps], mode="lines", line=dict(color=color, width=1.5, dash="dot"), hoverinfo="skip", showlegend=False))
+        # ── 임무 오버레이: 목표 지점 + 임무유형 라벨 (경유지 소진 후에도 유지) ──
+        _mobj = u.get("mission_objective")
+        _mtype = u.get("mission_type") or u.get("current_action") or ""
+        if _mobj and u["status"] != "destroyed" and u["side"] == "BLUFOR":
+            _MTYPE_KO = {"attack": "공격", "flank": "측방", "defend": "방어",
+                         "withdraw": "철수", "hold": "고수", "recon": "정찰", "move": "기동"}
+            _mt_ko = _MTYPE_KO.get(_mtype, _mtype)
+            # 현위치 → 목표 임무선 (실선, 반투명)
+            fig.add_trace(go.Scatter(x=[u["x"], _mobj[0]], y=[u["y"], _mobj[1]], mode="lines", line=dict(color=color, width=1.2, dash="solid"), opacity=0.45, hoverinfo="skip", showlegend=False))
+            # 목표 지점 깃발 마커 + 임무 라벨
+            fig.add_trace(go.Scatter(x=[_mobj[0]], y=[_mobj[1]], mode="markers+text", marker=dict(symbol="star", size=13, color=color, line=dict(color="white", width=1)), text=[f"{u['id']} {_mt_ko}"], textposition="bottom center", textfont=dict(color=color, size=9), showlegend=False, hovertemplate=f"<b>{u['id']} 임무목표</b><br>유형: {_mt_ko}<br>목표: ({_mobj[0]/1000:.1f}km, {_mobj[1]/1000:.1f}km)<extra></extra>"))
         fig.add_trace(go.Scatter(x=[u["x"]], y=[u["y"]], mode="markers+text", name=f"{u['side']} {u['id']}", marker=dict(symbol=sym, size=size, color=color, line=dict(color="white", width=1.5), opacity=0.3 if u["status"] == "destroyed" else 1.0), text=[f"{u['id']}<br>{cp:.0f}%"], textposition="top center", textfont=dict(color=color, size=11), hovertemplate=f"<b>{u['id']}</b><br>위치: ({u['x']/1000:.1f}km, {u['y']/1000:.1f}km)<br>고도: {elev:.0f}m<br>전투력: {cp:.1f}%<br>상태: {u['status']}<br>행동: {u['current_action']}<extra></extra>"))
     import math as _math
     _AIR_COLOR = {"cas": "#FF6F00", "strike": "#F50057", "artillery": "#AA00FF", "helicopter": "#00BFA5"}
@@ -983,6 +994,23 @@ def _build_wargame_map(state: dict) -> Optional[go.Figure]:
         status_ko = {"pending": "대기", "active": "투입중", "completed": "완료"}.get(air["status"], "")
         fig.add_trace(go.Scatter(x=circle_x, y=circle_y, mode="lines", fill="toself", fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},{alpha})", line=dict(color=clr, width=2, dash="dash" if air["status"] == "pending" else "solid"), name=label, hovertemplate=f"<b>{label}</b><br>상태: {status_ko}<br>목표: ({cx/1000:.1f}km, {cy/1000:.1f}km)<br>반경: {r:.0f}m<extra></extra>"))
         fig.add_trace(go.Scatter(x=[cx], y=[cy], mode="markers+text", marker=dict(symbol="x", size=12, color=clr), text=[air["call_sign"]], textposition="bottom center", textfont=dict(color=clr, size=10), showlegend=False, hoverinfo="skip"))
+    # ── 자주포(포병) 간접사격 표시 — 사수→탄착 사격선 + 탄착 AoE ──────────
+    for fire in state.get("indirect_fire", []):
+        _own = fire.get("side") == "BLUFOR"
+        f_clr = "#42A5F5" if _own else "#FF7043"   # 아군 포격 청색 / 적 포격 주황
+        tx, ty = fire["target_x"], fire["target_y"]
+        rr = fire.get("radius", 600.0)
+        pts = 30
+        cxs = [tx + rr * _math.cos(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        cys = [ty + rr * _math.sin(2 * _math.pi * i / pts) for i in range(pts + 1)]
+        _who = "아군 포병" if _own else "적 포병"
+        # 탄착 지점 AoE 원 (점선)
+        fig.add_trace(go.Scatter(x=cxs, y=cys, mode="lines", fill="toself", fillcolor=f"rgba({int(f_clr[1:3],16)},{int(f_clr[3:5],16)},{int(f_clr[5:7],16)},0.12)", line=dict(color=f_clr, width=1.5, dash="dot"), name=f"{_who} 포격", legendgroup="artillery", hovertemplate=f"<b>{_who} 포격</b><br>{fire.get('shooter_id','?')} ({fire.get('unit_type','')})<br>탄착: ({tx/1000:.1f}km, {ty/1000:.1f}km)<br>반경: {rr:.0f}m<extra></extra>"))
+        # 탄착 표시(폭발 마커)
+        fig.add_trace(go.Scatter(x=[tx], y=[ty], mode="markers", marker=dict(symbol="star-triangle-up", size=11, color=f_clr, line=dict(color="white", width=0.5)), showlegend=False, hoverinfo="skip"))
+        # 사수 위치가 보이면 사격선 (사수→탄착)
+        if fire.get("shooter_visible") and fire.get("shooter_x") is not None:
+            fig.add_trace(go.Scatter(x=[fire["shooter_x"], tx], y=[fire["shooter_y"], ty], mode="lines", line=dict(color=f_clr, width=1.0, dash="dashdot"), opacity=0.6, showlegend=False, hovertemplate=f"<b>{_who} 사격</b><br>{fire.get('shooter_id','?')}<extra></extra>"))
     fig.update_layout(title=dict(text=f"전장 지도 | 게임 시간: {state.get('game_time_str','00:00:00')} {'▶ 진행 중' if state.get('running') else '⏸ 정지'}", font=dict(color="#dddddd", size=14)), xaxis=dict(title="동쪽 (m)", range=[0, MAP_W], gridcolor="#2a3a4a", zeroline=False, tickformat=",d", tickfont=dict(color="#aaa")), yaxis=dict(title="북쪽 (m)", range=[0, MAP_H], scaleanchor="x", scaleratio=1, gridcolor="#2a3a4a", zeroline=False, tickformat=",d", tickfont=dict(color="#aaa")), paper_bgcolor="#0d1117", plot_bgcolor="#0f1923", font=dict(color="#dddddd"), legend=dict(bgcolor="rgba(0,0,0,0.5)", bordercolor="#334455", borderwidth=1, font=dict(size=10)), height=300, margin=dict(l=60, r=20, t=40, b=40), hovermode="closest")
     return fig
 

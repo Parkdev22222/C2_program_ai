@@ -91,6 +91,10 @@ class Unit:
     target_ref_y: Optional[float] = None   # 임무 발령 시점 표적 인지 위치 y
     target_replan_fired: bool = False      # 표적 이동 재계획 콜백 1회 발동 여부
     pursuing: bool = False                 # LLM 경유지 완주 후 표적 지속 추격 중 여부
+    # ── 임무 오버레이 (지도 표시용) — DB 미영속 (런타임 전용) ──────────
+    mission_type: str = ""                 # 발령된 임무 유형(attack/defend/flank...) — 지도 라벨
+    mission_objective_x: Optional[float] = None  # 임무 최종 목표 x (경유지 소진 후에도 유지)
+    mission_objective_y: Optional[float] = None  # 임무 최종 목표 y
 
     # ── 파생 속성 ──────────────────────────────────────────────────
 
