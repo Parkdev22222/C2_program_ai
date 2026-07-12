@@ -36,6 +36,8 @@ def register_wargame_engine(engine):
 _ENGAGEMENT_RANGE = 2_500.0
 _SUPPRESSION_RANGE = 4_000.0
 _ARTILLERY_RANGE = 8_000.0   # 자주포 간접사격 사거리
+# 이 전투력 이상인 detected 표적은 정밀타격(strike) 대상 — 고가치 점표적 제거
+_STRIKE_CP_THRESHOLD = 80.0
 
 
 def _engagement_factor(dist: float) -> float:
@@ -411,12 +413,14 @@ def get_optimal_attack_positions(
         CANDIDATE_DISTANCES = [1_200, 2_000, 3_000, 4_500]
         CANDIDATE_ANGLES = [i * (360 / 16) for i in range(16)]  # 22.5° 간격
 
-        def _air_method_for(unit_type):
+        def _air_method_for(unit_type, combat_power=None):
             ut = unit_type or ""
+            # 고가치·점표적(전투력 높음) 또는 포병 → 정밀타격(strike) 적극 활용
+            if (combat_power is not None and combat_power >= _STRIKE_CP_THRESHOLD) \
+                    or "자주포" in ut or "포병" in ut:
+                return "strike"       # 좁은 반경 고위력 한 방 — 핵심 표적 제거
             if "전차" in ut or "장갑" in ut or "기갑" in ut:
                 return "helicopter"   # 기갑 목표 → 헬기
-            if "자주포" in ut or "포병" in ut:
-                return "strike"       # 포병 → 정밀타격
             return "cas"              # 그 외 → 근접항공지원
 
         def _best_highground(ox, oy):
@@ -447,7 +451,7 @@ def get_optimal_attack_positions(
                 "target_unit_id": tgt["unit_id"],
                 "target_type": tgt.get("unit_type") or "미확인",
                 "target": [t_lat, t_lon],
-                "method": _air_method_for(tgt.get("unit_type")),
+                "method": _air_method_for(tgt.get("unit_type"), tgt.get("combat_power")),
                 "reason": f"전투력 {tgt.get('combat_power')} — 우선순위 {i}/{air_remaining}",
             })
 
