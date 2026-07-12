@@ -239,6 +239,12 @@ serve_kernel_port_as_window(7860)
 
 탐지 상태: `approximate` (초기 ±4 km 오차) → `detected` (정확 위치) → `lost` (Dead Reckoning)
 
+**대포병 탐지 (counter-battery)**: 자주포가 간접사격하면 그 순간 위치가 적에게 노출됩니다.
+기본은 음향표정 수준의 `approximate`(오차 반경 700 m), 확률 35%로 대포병 레이더가 정확
+위치(`detected`)를 포착합니다. 사격을 멈추면 Dead Reckoning 감쇠로 `lost` 처리되므로,
+쏘고 즉시 진지변환(shoot-and-scoot)하지 않으면 대포병 사격의 표적이 됩니다.
+(파라미터: `engine.py:_COUNTER_BATTERY_DETECT_PROB` / `_COUNTER_BATTERY_APPROX_RADIUS`)
+
 ### 전장 지도 범례
 
 | 마커 | 의미 |

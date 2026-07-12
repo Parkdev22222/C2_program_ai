@@ -104,6 +104,11 @@ _EXPOSURE_CONCEALED  = 0.6
 _DR_NOISE_PER_TICK   = 80.0
 # 제압 상태 회복: 교전 밖으로 이탈 후 이 게임초 경과 시 degraded로 회복
 _SUPPRESS_RECOVER_SEC = 120.0
+# 대포병 탐지(counter-battery): 자주포가 간접사격하면 위치가 적에게 노출된다.
+#   기본은 음향표정 수준의 approximate, 확률적으로 대포병 레이더가 정확 위치(detected)를 포착.
+#   사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리 → shoot-and-scoot.
+_COUNTER_BATTERY_DETECT_PROB   = 0.35   # 사격 시 정확 위치(detected) 포착 확률(틱당)
+_COUNTER_BATTERY_APPROX_RADIUS = 700    # approximate 노출 시 개략 위치 오차 반경(m)
 
 # ── OPFOR 전략 AI 파라미터 ────────────────────────────────────────────
 # 정찰 완료 임계값: BLUFOR 탐지 수가 이 이상이면 임무 결정 단계로 전환
@@ -1107,6 +1112,10 @@ class WargameEngine:
 
             cx, cy = target_entry["known_x"], target_entry["known_y"]
 
+            # 대포병 탐지: 사격하는 순간 자주포 위치가 적 인텔에 노출된다
+            # (기본 approximate, 확률적으로 detected). 사격을 멈추면 자연 감쇠로 lost.
+            self._expose_firing_spg(spg, enemy_side, enemies)
+
             # AoE 내 적 피해 적용
             hit_any = False
             for enemy in enemies:
@@ -1147,6 +1156,60 @@ class WargameEngine:
                     )
             if hit_any:
                 pass  # 개별 로그로 충분
+
+    def _expose_firing_spg(self, spg, enemy_side: str, enemies: list):
+        """자주포가 사격하면 그 위치를 적(enemy_side) 인텔에 노출한다.
+
+        기본은 음향표정 수준의 approximate(오차 반경 내), 확률적으로 대포병 레이더가
+        정확 위치(detected)를 포착한다. 이미 detected면 approximate로 강등하지 않는다.
+        사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리된다.
+
+        detected_by 는 실제로 탐지한 것으로 볼 가장 가까운 적 부대에 귀속한다
+        (온톨로지 observes 엣지가 유효 부대 노드를 가리키도록).
+        """
+        cb = self._intelligence.get(enemy_side, {}).get(spg.id)
+        if cb is None:
+            return
+        old_status = cb.get("status")
+
+        # 사격 원점을 포착한 것으로 귀속할 가장 가까운 적 부대
+        detector = None
+        if enemies:
+            detector = min(
+                enemies, key=lambda u: math.hypot(u.x - spg.x, u.y - spg.y)
+            )
+        detected_by = detector.id if detector is not None else "대포병탐지"
+
+        if random.random() < _COUNTER_BATTERY_DETECT_PROB:
+            # 대포병 레이더 명중 — 정확 위치
+            cb.update({
+                "status": "detected",
+                "known_x": spg.x, "known_y": spg.y,
+                "unit_type": spg.unit_type,
+                "combat_power": round(spg.combat_power, 1),
+                "last_detected_tick": self.tick, "detected_by": detected_by,
+                "ticks_since_lost": 0, "ever_detected": True,
+            })
+        elif old_status != "detected":
+            # 음향표정 수준 — 개략 위치(원형 분포 오차). 이미 detected면 유지.
+            ang = random.uniform(0.0, 2.0 * math.pi)
+            rad = _COUNTER_BATTERY_APPROX_RADIUS * math.sqrt(random.random())
+            cb.update({
+                "status": "approximate",
+                "known_x": max(0.0, min(29_999.0, spg.x + math.cos(ang) * rad)),
+                "known_y": max(0.0, min(29_999.0, spg.y + math.sin(ang) * rad)),
+                "unit_type": spg.unit_type,   # 사격 원점 = 포병으로 식별됨
+                "last_detected_tick": self.tick, "detected_by": detected_by,
+                "ticks_since_lost": 0, "ever_detected": True,
+            })
+
+        # 새로 정확 포착(detected)된 순간만 로그 (사격 지속 시 스팸 방지)
+        if cb["status"] == "detected" and old_status != "detected":
+            self.db.log_event(
+                self.tick, self.game_time, "DETECTION",
+                f"[대포병탐지] {enemy_side}가 {spg.id}(자주포) 사격 원점 포착 "
+                f"({spg.x/1000:.1f}km,{spg.y/1000:.1f}km)",
+            )
 
     # ── 공중지원 ─────────────────────────────────────────────────────
 
