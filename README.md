@@ -245,6 +245,10 @@ serve_kernel_port_as_window(7860)
 쏘고 즉시 진지변환(shoot-and-scoot)하지 않으면 대포병 사격의 표적이 됩니다.
 (파라미터: `engine.py:_COUNTER_BATTERY_DETECT_PROB` / `_COUNTER_BATTERY_APPROX_RADIUS`)
 
+**포병 화력 감쇠**: 자주포가 피해를 입어 전투력이 낮아질수록 간접사격 위력이 **초선형(제곱)**으로
+약해집니다. CP 100%→100%, 75%→56%, 50%→25%, 25%→6% 수준. 즉 피격당한 포병은 화력지원
+효율이 급격히 떨어지므로 보호가 중요합니다. (파라미터: `engine.py:_SPG_FIRE_DEGRADE_EXP`)
+
 ### 전장 지도 범례
 
 | 마커 | 의미 |

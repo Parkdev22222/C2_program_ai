@@ -109,6 +109,11 @@ _SUPPRESS_RECOVER_SEC = 120.0
 #   사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리 → shoot-and-scoot.
 _COUNTER_BATTERY_DETECT_PROB   = 0.35   # 사격 시 정확 위치(detected) 포착 확률(틱당)
 _COUNTER_BATTERY_APPROX_RADIUS = 700    # approximate 노출 시 개략 위치 오차 반경(m)
+# 포병 화력지원 전투력 감쇠 지수: 간접사격 위력이 전투력(combat_power) 감소에
+# 초선형(제곱)으로 약해진다. effective_firepower()가 이미 선형 factor(cp/100)를 포함하므로
+# 여기서는 (cp/100)^(exp-1) 을 추가로 곱해 총 (cp/100)^exp 가 되게 한다.
+#   exp=2.0 → CP 100%:×1.0, 75%:×0.56, 50%:×0.25, 25%:×0.06  (피해 많이 입을수록 급감)
+_SPG_FIRE_DEGRADE_EXP = 2.0
 
 # ── OPFOR 전략 AI 파라미터 ────────────────────────────────────────────
 # 정찰 완료 임계값: BLUFOR 탐지 수가 이 이상이면 임무 결정 단계로 전환
@@ -1082,6 +1087,8 @@ class WargameEngine:
             enemies    = [u for u in self.units if u.side == enemy_side and u.is_active()]
             intel      = self._intelligence[spg.side]
             fp_mult    = _status_firepower_mult(spg.status)
+            # 포병 화력지원은 전투력이 낮을수록 초선형으로 약해진다 (피해 많이 입을수록 급감)
+            spg_fire_degrade = (max(0.0, spg.combat_power) / 100.0) ** (_SPG_FIRE_DEGRADE_EXP - 1.0)
 
             # 탐지된 적 목표 선정 (detected or approximate)
             # 최소 사거리(_INDIRECT_MIN_RANGE) 이내 목표는 사격 불가 (자주포 특성상 근거리 사각지대)
@@ -1132,6 +1139,7 @@ class WargameEngine:
                     * (1.0 - cover)
                     * matchup
                     * fp_mult
+                    * spg_fire_degrade   # 포병 전투력 감소 → 화력지원 초선형 약화
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ind = enemy.combat_power
