@@ -83,6 +83,8 @@ class Unit:
     color: str = "blue"                # UI 색상
     unit_type: str = ""                # "기계화보병" | "전차" | "정찰" | "대전차" | "자주포"
     mission_lock_ticks: int = 0        # 신규 임무 발령 후 룰 기반 AI 차단 잔여 틱 수 (0=해제)
+    indirect_range: float = 15_000.0   # 자주포 간접사격 최대 사거리(m). 기본=엔진 _INDIRECT_MAX_RANGE.
+                                       #  K9 ~40km, 북한 곡산 자주포 ~60km(RAP) 등 체계별 실사거리 반영용.
     # ── 표적 추적 (BLUFOR 공격 임무) — DB 미영속 (런타임 전용) ──────────
     target_unit_id: Optional[str] = None   # 이 부대가 공격·추격할 적 부대 ID
     target_ref_x: Optional[float] = None   # 임무 발령 시점 표적 인지 위치 x (재계획 트리거 기준)

@@ -275,6 +275,9 @@ class WargameEngine:
         # 부대별 1회만 발동 (u.target_replan_fired 플래그로 관리)
         self.on_target_moved: Optional[Callable] = None
 
+        # UAV 완전 정찰 모드: True면 매 틱 모든 활성 적을 실위치로 detected 처리 (FOW 무시)
+        self.full_recon: bool = False
+
         # OPFOR 공중지원 쿨다운 (게임 초 단위)
         self._opfor_air_cooldown: float = 0.0
         self._OPFOR_AIR_INTERVAL = 900.0   # 게임 15분마다 공중지원 요청 가능
@@ -504,6 +507,18 @@ class WargameEngine:
                         entry["status"] = "lost"
                         entry["ticks_since_lost"] = 0
                     self._unit_velocity[enemy.id] = (0.0, 0.0)
+                    continue
+
+                # UAV 완전 정찰 모드: 모든 활성 적을 실위치로 항상 detected (FOW 무시)
+                if getattr(self, "full_recon", False):
+                    entry.update({
+                        "status": "detected",
+                        "known_x": enemy.x, "known_y": enemy.y,
+                        "unit_type": enemy.unit_type,
+                        "combat_power": round(enemy.combat_power, 1),
+                        "last_detected_tick": self.tick, "detected_by": "UAV",
+                        "ticks_since_lost": 0, "ever_detected": True,
+                    })
                     continue
 
                 # 적 부대 이동/정지 여부에 따른 피탐지 배율
@@ -1092,6 +1107,8 @@ class WargameEngine:
 
             # 탐지된 적 목표 선정 (detected or approximate)
             # 최소 사거리(_INDIRECT_MIN_RANGE) 이내 목표는 사격 불가 (자주포 특성상 근거리 사각지대)
+            # 체계별 실사거리 (K9 ~40km, 곡산 ~60km 등). 미지정 시 기본값.
+            spg_max_range = getattr(spg, "indirect_range", _INDIRECT_MAX_RANGE)
             targets = []
             for entry in intel.values():
                 if entry["status"] == "lost":
@@ -1100,7 +1117,7 @@ class WargameEngine:
                     spg.x - entry["known_x"],
                     spg.y - entry["known_y"],
                 )
-                if _INDIRECT_MIN_RANGE <= dist_to_target <= _INDIRECT_MAX_RANGE:
+                if _INDIRECT_MIN_RANGE <= dist_to_target <= spg_max_range:
                     targets.append(entry)
 
             if not targets:

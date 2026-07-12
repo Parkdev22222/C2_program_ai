@@ -20,7 +20,8 @@ except ImportError:
 try:
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-    from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
+    # 기본 시나리오: 철원 축선 기계화대대 교전 (6v6, 정찰→보병, UAV 완전정찰, 자주포 실사거리)
+    from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
     from wargame.llm_planner import MissionPlanner
     from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
     _WARGAME_OK = True
@@ -326,23 +327,28 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
         # BLUFOR 유닛 공중지원 피격 임무계획 콜백 등록
         _wg_engine.on_blufor_air_hit = _air_hit_enqueue
+        # UAV 완전 정찰: 처음부터 양측 전 위치 detected (철원 시나리오 가정)
+        _wg_engine.full_recon = True
         # 온톨로지 실시간 적재기 준비
         _wg_ensure_ontology(_wg_engine)
     return _wg_engine
 
 
 def _get_recon_unit_ids() -> list:
-    """현재 워게임에서 BLUFOR 정찰부대 ID 목록 반환."""
+    """현재 워게임에서 BLUFOR 정찰부대 ID 목록 반환.
+
+    정찰 병종이 없으면 빈 리스트(철원 시나리오는 정찰 없이 UAV 완전정찰). 이때
+    공격 플로우는 no_recon_units로 처리되어 정찰 임무를 생성하지 않는다.
+    """
     eng = _wg_ensure_engine()
     if eng is None:
-        return ["Delta"]
+        return []
     try:
         state = eng.get_state()
-        ids = [u["id"] for u in state.get("units", [])
-               if u.get("side") == "BLUFOR" and u.get("unit_type") == "정찰"]
-        return ids if ids else ["Delta"]
+        return [u["id"] for u in state.get("units", [])
+                if u.get("side") == "BLUFOR" and u.get("unit_type") == "정찰"]
     except Exception:
-        return ["Delta"]
+        return []
 
 
 def wargame_apply_custom_scenario(scenario_config: dict) -> dict:
@@ -1178,6 +1184,8 @@ def wargame_reset_sim():
     _wg_engine.on_new_opfor_detection = _detection_enqueue
     _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
     _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+    # UAV 완전 정찰: 처음부터 양측 전 위치 detected (철원 시나리오 가정)
+    _wg_engine.full_recon = True
     # 온톨로지 적재기 준비 + 그래프 초기화 (엔진 상태가 0으로 리셋되므로 KG도 비운다)
     _wg_ensure_ontology(_wg_engine)
     if _wg_ontology_writer is not None:
