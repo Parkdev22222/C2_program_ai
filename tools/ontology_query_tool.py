@@ -31,6 +31,8 @@ _PER_SEED_LIMIT = 5
 _EDGE_LIMIT = 500
 # 탐색 깊이(hop). 2 이면 아군 → 탐지한 적 → 그 적의 관측·관계까지 확장 수집.
 _HOPS = 2
+# 최근 전투/포격 이벤트를 별도로 확보할 개수 (관측 노드에 밀려 누락되는 것 방지)
+_EVENT_LIMIT = 20
 
 
 def register_graph_store(store, scenario_id: str = WARGAME_SCENARIO_ID) -> None:
@@ -70,6 +72,31 @@ def get_ontology_situation() -> dict:
             edge_limit=_EDGE_LIMIT,
             hops=_HOPS,
         )
+        # 최근 전투/포격 이벤트를 별도로 확보해 병합 (관측 노드에 밀려 이웃 검색에서 누락 방지)
+        try:
+            recent_events = _graph_store.recent_event_nodes(
+                scenario_id=_scenario_id, limit=_EVENT_LIMIT
+            )
+            if recent_events:
+                existing = {n.kg_node_id for n in kg_nodes}
+                extra = tuple(n for n in recent_events if n.kg_node_id not in existing)
+                if extra:
+                    kg_nodes = tuple(kg_nodes) + extra
+                    # 이벤트의 participates_in 등 엣지도 확보(관계 표기용)
+                    try:
+                        ev_edges = _graph_store.edges_for_nodes(
+                            tuple(n.kg_node_id for n in recent_events),
+                            limit=_EDGE_LIMIT,
+                            scenario_id=_scenario_id,
+                        )
+                        seen_e = {e.kg_edge_id for e in kg_edges}
+                        kg_edges = tuple(kg_edges) + tuple(
+                            e for e in ev_edges if e.kg_edge_id not in seen_e
+                        )
+                    except Exception:
+                        pass
+        except Exception as _ee:
+            logger.debug("최근 이벤트 병합 실패(무시): %s", _ee)
         result = serialize_situation(kg_nodes, kg_edges, evidences)
         result.update(
             {
