@@ -210,7 +210,12 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
             "status": "blocked",
             "reason": "validation_failed",
             "validation": validation,
-            "message": f"검증 실패 — 실행 불가: {validation.get('summary')}",
+            "message": (
+                f"검증 실패 — 실행 불가: {validation.get('summary')}. "
+                f"오류: {validation.get('errors')}. "
+                "위 오류를 수정한 mission_plans 를 다시 생성해 "
+                "apply_wargame_mission_plan(dry_run=false) 로 재호출하세요."
+            ),
         }
 
     try:
@@ -315,7 +320,14 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
         return result
     except Exception as e:
         logger.error(f"apply_wargame_mission_plan error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {
+            "status": "error",
+            "message": (
+                f"임무계획 적용 중 오류: {e}. 오류 원인을 수정한 mission_plans 를 "
+                "다시 생성해 apply_wargame_mission_plan(dry_run=false) 로 재호출하세요. "
+                "(좌표는 미터 정수 0~30000, company_id 는 실제 BLUFOR 부대 ID)"
+            ),
+        }
 
 
 @tool

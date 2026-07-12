@@ -79,6 +79,80 @@ def _convert_latlon_plan_to_meters(plan: dict) -> dict:
     plan["air_support_plans"] = converted_air
     return plan
 
+
+# ── 임무계획 적용 실패 시 LLM 피드백 루프 ──────────────────────────
+_PLAN_REPAIR_MAX_RETRIES = 2
+
+
+def _apply_plan_to_engine(eng, plan: dict) -> dict:
+    """플랜을 엔진에 적용(지상 + 공중지원). 위경도→미터 변환 포함, 실패 시 예외 전파."""
+    plan = _convert_latlon_plan_to_meters(plan)
+    eng.apply_mission_plan(plan)
+    if plan.get("air_support_plans"):
+        eng.apply_air_support_plan(plan)
+    return plan
+
+
+def _build_plan_repair_query(plan: dict, error) -> str:
+    """적용 실패한 플랜과 에러 메시지를 LLM 에 되먹이는 수정 요청 쿼리."""
+    try:
+        plan_str = _json_mod.dumps(plan, ensure_ascii=False)
+    except Exception:
+        plan_str = str(plan)
+    return (
+        "직전에 생성한 BLUFOR 임무계획을 워게임에 적용하는 중 오류가 발생했습니다.\n"
+        "아래 오류의 원인을 분석해 임무계획을 수정한 뒤, 수정된 전체 계획을 다시 출력하세요.\n\n"
+        f"[적용 오류]\n{error}\n\n"
+        f"[적용 실패한 임무계획 JSON]\n{plan_str}\n\n"
+        "[수정 규칙]\n"
+        "- 좌표는 미터(m) 정수이며 맵 범위 0~30000 이내여야 합니다.\n"
+        "- company_id 는 현재 전장의 BLUFOR 부대 ID 와 정확히 일치해야 합니다.\n"
+        "- waypoints 는 [[x, y], ...] 형식(미터)이어야 합니다.\n"
+        "- target/target_unit_id 는 탐지된 OPFOR 좌표·부대 ID 여야 합니다.\n"
+        "- 반드시 mission_plans 를 포함한 수정된 전체 임무계획을 JSON 블록으로만 출력하세요.\n"
+    )
+
+
+def _apply_plan_with_repair(eng, agent, plan: dict, *, log_prefix: str = "[임무계획]",
+                            max_retries: int = _PLAN_REPAIR_MAX_RETRIES):
+    """플랜을 워게임에 적용하고, 실패 시 에러를 LLM 에 피드백해 수정본을 재적용한다.
+
+    Returns:
+        (applied_plan, ok). ok=True 면 엔진 적용 성공(applied_plan 은 변환·적용된 최종 플랜),
+        ok=False 면 재시도 후에도 실패 → 호출측에서 규칙 기반 폴백 필요.
+    """
+    current = plan
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            applied = _apply_plan_to_engine(eng, current)
+            if attempt > 0:
+                logger.info(f"{log_prefix} LLM 수정본 재적용 성공 "
+                            f"(시도 {attempt + 1}/{max_retries + 1})")
+            return applied, True
+        except Exception as e:
+            last_err = e
+            logger.warning(f"{log_prefix} 적용 실패 (시도 {attempt + 1}/{max_retries + 1}): {e}")
+            if agent is None or _wg_planner is None or attempt >= max_retries:
+                break
+            # 에러를 LLM 에 되먹여 수정본 요청 → 파싱
+            try:
+                repair_query = _build_plan_repair_query(current, e)
+                raw = agent.agent.run(repair_query, reset=True)
+                fixed = _wg_planner._parse_json(str(raw))
+            except Exception as _re:
+                logger.warning(f"{log_prefix} LLM 수정 요청 실패: {_re}")
+                break
+            if fixed and "mission_plans" in fixed:
+                current = fixed
+                logger.info(f"{log_prefix} LLM 수정본 수신 → 재적용 시도")
+            else:
+                logger.warning(f"{log_prefix} LLM 수정본 파싱 실패 → 피드백 루프 종료")
+                break
+    logger.warning(f"{log_prefix} 피드백 루프 종료 — 최종 적용 실패: {last_err}")
+    return current, False
+
+
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 
 
@@ -712,16 +786,19 @@ def _execute_auto_attack_plan(event_type: str, *args):
 
                 plan = _wg_planner._parse_json(str(raw))
                 if plan and "mission_plans" in plan:
-                    # 에이전트가 JSON을 반환한 경우 → 위경도→미터 변환 후 직접 적용
-                    try:
-                        plan = _convert_latlon_plan_to_meters(plan)
+                    # 에이전트 JSON 반환 → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                    applied_plan, _ok = _apply_plan_with_repair(
+                        eng, agent, plan, log_prefix="[자동임무계획]")
+                    if _ok:
+                        plan = applied_plan
+                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
+                                    f"— {len(plan.get('mission_plans', []))}개 중대 재배정")
+                    else:
+                        logger.warning("[자동임무계획] 수정 재시도 실패 → 규칙 기반 폴백")
+                        plan = _wg_planner._rule_based(state)
                         eng.apply_mission_plan(plan)
                         if plan.get("air_support_plans"):
                             eng.apply_air_support_plan(plan)
-                        logger.info(f"[자동임무계획] 에이전트 계획 적용 완료 "
-                                    f"— {len(plan['mission_plans'])}개 중대 재배정")
-                    except Exception as _ae:
-                        logger.warning(f"[자동임무계획] 계획 적용 오류: {_ae}")
                 elif _tool_applied:
                     # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
                     logger.info("[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요")
@@ -1502,14 +1579,17 @@ def wargame_request_attack_plan(history: List = None):
                     raw = agent.agent.run(full_query, reset=True)
                     plan = _wg_planner._parse_json(str(raw))
                     if plan and "mission_plans" in plan:
-                        # 에이전트가 JSON 반환 → 위경도→미터 변환 후 직접 적용
-                        try:
-                            plan = _convert_latlon_plan_to_meters(plan)
+                        # 에이전트 JSON 반환 → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                        applied_plan, _ok = _apply_plan_with_repair(
+                            eng, agent, plan, log_prefix="[공격임무계획]")
+                        if _ok:
+                            plan = applied_plan
+                        else:
+                            logger.warning("[공격임무계획] 수정 재시도 실패 → 규칙 기반 폴백")
+                            plan = _wg_planner._rule_based(state)
                             eng.apply_mission_plan(plan)
                             if plan.get("air_support_plans"):
                                 eng.apply_air_support_plan(plan)
-                        except Exception as _ae:
-                            logger.warning(f"apply attack plan error: {_ae}")
                     elif (isinstance(raw, dict) and raw.get("status") == "success") or \
                          (isinstance(raw, str) and '"status": "success"' in raw):
                         # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료

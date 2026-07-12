@@ -47,6 +47,21 @@ def _build_args_schema(smol_tool):
     return create_model(f"{smol_tool.name}_Args", **fields)
 
 
+# smolagents 조기 종료(성공) 예외 클래스명 — LangGraph 에서는 성공 결과로 환원해야 함
+_FINAL_ANSWER_EXC_NAMES = {"FinalAnswerException", "ReturnValueException", "AgentFinish"}
+
+
+def _final_answer_value(exc):
+    """smolagents 조기 종료 예외에서 실제 반환값(성공 result)을 추출. 아니면 None."""
+    if type(exc).__name__ not in _FINAL_ANSWER_EXC_NAMES:
+        return None
+    for attr in ("value", "final_answer", "output"):
+        if hasattr(exc, attr):
+            return getattr(exc, attr)
+    args = getattr(exc, "args", None)
+    return args[0] if args else None
+
+
 def to_langchain_tool(smol_tool):
     """단일 smolagents 툴을 LangChain StructuredTool 로 변환."""
     from langchain_core.tools import StructuredTool
@@ -55,7 +70,16 @@ def to_langchain_tool(smol_tool):
 
     def _run(**kwargs):
         # smolagents 툴 객체 호출 → forward 실행 (엔진 연동·반환 dict 동일)
-        result = smol_tool(**kwargs)
+        try:
+            result = smol_tool(**kwargs)
+        except Exception as e:
+            # smolagents 는 apply 성공 시 FinalAnswerException 으로 CodeAgent 를 조기 종료한다.
+            # LangGraph 경로에서는 이 예외를 성공 결과로 환원해야 '성공'이 '툴 에러'로
+            # 오인되지 않는다 (오인 시 계획은 적용됐는데 LLM 이 실패로 판단해 재시도).
+            fa = _final_answer_value(e)
+            if fa is None:
+                raise
+            result = fa
         # LangChain ToolMessage 는 문자열을 기대 → dict/list 는 JSON 직렬화
         if isinstance(result, (dict, list)):
             try:
