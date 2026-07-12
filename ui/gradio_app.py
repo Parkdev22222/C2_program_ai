@@ -784,9 +784,10 @@ def _execute_auto_attack_plan(event_type: str, *args):
                 except Exception:
                     _tool_applied = False
 
+                logger.info("[자동임무계획] 에이전트 원문(preview): %s", str(raw)[:400])
                 plan = _wg_planner._parse_json(str(raw))
-                if plan and "mission_plans" in plan:
-                    # 에이전트 JSON 반환 → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                if plan and plan.get("mission_plans"):
+                    # 에이전트 JSON 반환(비어있지 않음) → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
                     applied_plan, _ok = _apply_plan_with_repair(
                         eng, agent, plan, log_prefix="[자동임무계획]")
                     if _ok:
@@ -1614,10 +1615,18 @@ def wargame_request_attack_plan(history: List = None):
                 try:
                     # 에이전트 메모리 완전 초기화 — 이전 실행 잔류 변수·로그 제거
                     agent.reset_memory()
+                    try:
+                        from tools.wargame_mission_tool import (
+                            reset_apply_tracker as _reset_apply, get_last_applied_plan as _get_applied,
+                        )
+                        _reset_apply()  # 이번 실행에서 툴 적용 여부를 정확히 판별하기 위해 초기화
+                    except Exception:
+                        _get_applied = lambda: {}
                     raw = agent.agent.run(full_query, reset=True)
+                    logger.info("[공격임무계획] 에이전트 원문(preview): %s", str(raw)[:400])
                     plan = _wg_planner._parse_json(str(raw))
-                    if plan and "mission_plans" in plan:
-                        # 에이전트 JSON 반환 → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
+                    if plan and plan.get("mission_plans"):
+                        # 에이전트 JSON 반환(비어있지 않음) → 적용 (실패 시 LLM 피드백 루프로 수정·재적용)
                         applied_plan, _ok = _apply_plan_with_repair(
                             eng, agent, plan, log_prefix="[공격임무계획]")
                         if _ok:
@@ -1628,29 +1637,21 @@ def wargame_request_attack_plan(history: List = None):
                             eng.apply_mission_plan(plan)
                             if plan.get("air_support_plans"):
                                 eng.apply_air_support_plan(plan)
-                    elif (isinstance(raw, dict) and raw.get("status") == "success") or \
-                         (isinstance(raw, str) and '"status": "success"' in raw):
-                        # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
-                        # → 툴이 보관한 실제 적용 계획을 가져와 표시 (빈 껍데기 방지)
-                        try:
-                            from tools.wargame_mission_tool import get_last_applied_plan
-                            _applied = get_last_applied_plan()
-                        except Exception:
-                            _applied = {}
+                    else:
+                        # 유효 JSON 계획 없음 → 에이전트가 apply 툴로 직접 적용했는지 정밀 확인
+                        # (조회 툴의 status:success 를 오인하지 않도록 실제 적용 계획 존재로만 판정)
+                        _applied = _get_applied()
                         if _applied and _applied.get("mission_plans"):
                             plan = dict(_applied)
                             plan["_tool_applied"] = True
-                            logger.info(f"[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료 "
+                            logger.info(f"[공격임무계획] 에이전트가 툴로 계획 직접 적용 "
                                         f"— {len(plan['mission_plans'])}개 중대")
                         else:
-                            logger.info("[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료 (계획 조회 불가)")
-                            plan = {"mission_plans": [], "_tool_applied": True}
-                    else:
-                        logger.warning(f"[공격임무계획] JSON 파싱 실패 (raw={str(raw)[:120]}) → 규칙 기반 폴백")
-                        plan = _wg_planner._rule_based(state)
-                        eng.apply_mission_plan(plan)
-                        if plan.get("air_support_plans"):
-                            eng.apply_air_support_plan(plan)
+                            logger.warning(f"[공격임무계획] 유효 임무계획 없음 (raw={str(raw)[:200]}) → 규칙 기반 폴백")
+                            plan = _wg_planner._rule_based(state)
+                            eng.apply_mission_plan(plan)
+                            if plan.get("air_support_plans"):
+                                eng.apply_air_support_plan(plan)
                 except Exception as _ex:
                     logger.warning(f"[공격임무계획] 에이전트 실행 실패: {_ex} → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)

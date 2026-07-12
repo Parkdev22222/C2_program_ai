@@ -28,13 +28,36 @@ from agent.langgraph_tools import build_langchain_tools
 logger = logging.getLogger(__name__)
 
 
+import re as _re
+
 _ROLE_PREAMBLE = (
-    "당신은 EXAONE4 기반 C2(지휘통제) 군사 AI 에이전트입니다. 전장 상황 판단과 "
-    "BLUFOR 임무계획 수립을 담당합니다.\n"
-    "도구는 **function calling(tool call)** 으로 호출합니다. 아래 지시사항의 "
-    "'코드 출력 형식/코드 블록' 관련 규칙(smolagents 전용)은 무시하고, 필요한 도구를 "
-    "tool call 로 사용하세요. 최종 임무계획은 반드시 JSON 블록으로 응답에 출력하세요.\n"
+    "당신은 C2(지휘통제) 군사 AI 에이전트입니다. 전장 상황 판단과 BLUFOR 임무계획 수립을 담당합니다.\n"
+    "\n"
+    "[동작 방식 — 매우 중요]\n"
+    "- 당신은 Python 코드를 작성하지 않습니다. 도구가 필요하면 네이티브 function calling(tool call)으로 호출하세요.\n"
+    "- ```py 코드 블록, `import json`, print() 같은 코드 형식은 절대 사용하지 마세요.\n"
+    "- 임무계획을 요청받으면, 각 과제 지시(제공된 데이터·부대 목록·규칙)를 그대로 따르고, "
+    "최종 임무계획은 반드시 하나의 JSON 블록(```json ... ```)으로 출력하세요.\n"
+    "- mission_plans 는 절대 빈 배열로 두지 마세요. 계획 대상 부대를 모두 포함해야 합니다.\n"
+    "\n"
+    "[전술 교리 요약]\n"
+    "- 표적은 탐지(detected)된 OPFOR 우선. attack/flank 부대는 담당 표적을 target_unit_id 로 명시.\n"
+    "- 전투력 CP<30% 부대는 defend/withdraw. 자주포(포병)는 후방 유지(hold/defend)하며 자동 화력지원.\n"
+    "- 항공 CAS(cas/strike/helicopter)는 아군 전용·5회 제한. 포병 화력지원은 횟수 제한 없이 동시 투사.\n"
+    "- 아군이 적과 근접(≈1.5km) 교전 표적은 정밀타격(strike). 좌표는 위경도(WGS84) 소수점 6자리.\n"
 )
+
+
+def _sanitize_instructions_for_funccall(text: str) -> str:
+    """smolagents 코드형 지시(코드 출력 형식/```py 블록)를 제거하고 LEARNED_RULES 등 교리만 남긴다."""
+    if not text:
+        return ""
+    # 최상단 '코드 출력 형식/코드 블록당 도구 1개' 섹션(첫 '---' 이전)을 제거
+    parts = text.split("\n---\n", 1)
+    body = parts[1] if len(parts) == 2 else text
+    # ```py ... ``` 코드 블록 제거 (```json 예시는 유지)
+    body = _re.sub(r"```py[\s\S]*?```", "", body)
+    return body.strip()
 
 
 class _RawRunner:
@@ -70,7 +93,8 @@ class LangGraphBattlefieldAgent:
 
     # ── 시스템 프롬프트 / 그래프 ──────────────────────────────────
     def _system_prompt(self) -> str:
-        return _ROLE_PREAMBLE + "\n" + (self._custom_instructions or "")
+        doctrine = _sanitize_instructions_for_funccall(self._custom_instructions or "")
+        return _ROLE_PREAMBLE + "\n" + doctrine
 
     def _build_graph(self):
         from langgraph.prebuilt import create_react_agent
