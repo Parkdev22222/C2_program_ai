@@ -51,6 +51,8 @@ rdflib>=6.0.0
 num2words
 # 워게임 상태 → 온톨로지 실시간 적재/검색 (미접속 시 in-memory 폴백)
 neo4j>=5.0.0
+# 전술채팅 멀티턴 대화 적재 (PostgreSQL) — 미접속 시 in-memory 폴백
+psycopg2-binary>=2.9.0
 
 # Utilities
 huggingface-hub>=0.20.0

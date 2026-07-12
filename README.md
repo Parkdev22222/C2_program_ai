@@ -172,6 +172,31 @@ python main.py ui
   동일한 동작**으로 실행됩니다. (`pip install langchain-google-genai` 필요 — requirements 포함)
 - EXAONE4로 되돌리려면 `unset C2_LLM_PROVIDER`(또는 `C2_LLM_PROVIDER=vllm`).
 
+### 전술채팅 멀티턴 대화 메모리 (PostgreSQL / in-memory)
+
+전술채팅은 **이전 2턴**(사용자 쿼리 + 툴 호출 내역 + 툴 실행 결과 + 최종 응답)을 저장소에서
+적재해 현재 질문 앞에 붙여 멀티턴 대화를 지원합니다. 저장소는 **PostgreSQL** 또는
+**in-memory 폴백** 두 가지이며, 온톨로지 그래프 스토어와 동일한 폴백 패턴을 씁니다.
+(공격·정찰·COA 계획 경로는 무상태로 두어 이전 대화가 섞이지 않습니다.)
+
+| 환경변수 | 설명 |
+|----------|------|
+| `C2_CHAT_STORE` | `postgres` / `inmemory` 강제 선택 (미설정 시 접속정보 있으면 postgres) |
+| `C2_PG_DSN` | PostgreSQL 접속 문자열 (예: `postgresql://user:pw@host:5432/c2`) |
+| `C2_PG_HOST` / `C2_PG_PORT` / `C2_PG_DB` / `C2_PG_USER` / `C2_PG_PASSWORD` | DSN 대신 분리 지정 |
+| `C2_CHAT_SESSION_ID` | 대화 세션 ID (기본 `wargame_chat`) |
+
+```bash
+# PostgreSQL 사용 (접속 실패 시 자동으로 in-memory 폴백)
+export C2_PG_DSN="postgresql://postgres:pw@127.0.0.1:5432/c2"
+python main.py ui
+```
+
+- 접속정보가 없으면 자동으로 **in-memory**로 동작합니다(별도 설정 불필요, 프로세스 종료 시 소멸).
+- 대화 턴은 `c2_chat_turns` 테이블에 적재되며, 각 턴은 LangChain 메시지(Human/AI/Tool)를
+  직렬화해 저장합니다. `pip install psycopg2-binary` 필요(requirements 포함).
+- 유지 턴 수는 `agent/langgraph_agent.py`의 `_MEMORY_TURNS`(기본 2)로 조정합니다.
+
 ---
 
 ## Google Colab에서 실행

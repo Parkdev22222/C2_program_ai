@@ -16,6 +16,7 @@ LLM 은 기존과 동일하게 별도 vLLM 서버(OpenAI 호환)에서 서빙되
 from __future__ import annotations
 
 import logging
+import os
 
 from agent.battlefield_agent import (
     _load_agent_config,
@@ -87,6 +88,14 @@ class LangGraphBattlefieldAgent:
         # agent.agent.run(...) 로 호출되는 경로(COA/공격/정찰) 호환
         self.agent = _RawRunner(self)
         self._situation_memory: dict = {}
+        # 전술채팅 멀티턴 메모리 — 이전 N턴(쿼리+툴 호출/결과+최종 응답)을 저장소에서 적재·조회.
+        # PostgreSQL(접속정보 있으면) 또는 in-memory 폴백. 채팅 경로(run) 전용이며,
+        # 공격/정찰/COA 계획 경로(_raw_run)는 무상태로 두어 이전 대화가 섞이지 않게 한다.
+        from agent.conversation_store import build_conversation_store
+
+        self._conv_store = build_conversation_store()
+        self._chat_session_id = os.environ.get("C2_CHAT_SESSION_ID", "wargame_chat")
+        self._MEMORY_TURNS = 2
         # 활성 LLM 프로바이더를 항상 보이도록 출력 (vllm/gemini 혼동·연결오류 진단용)
         logger.warning("[C2 LLM] 활성 프로바이더=%s (%s)", self._provider, describe_llm_target())
         logger.info("LangGraphBattlefieldAgent 초기화 완료 (tools=%d)", len(self._tools))
@@ -118,9 +127,29 @@ class LangGraphBattlefieldAgent:
             return block + "\n" + task
         return task
 
-    # ── 실행 ───────────────────────────────────────────────────────
+    # ── 오류 포맷 ──────────────────────────────────────────────────
+    def _format_error(self, e: Exception) -> str:
+        import json as _json
+
+        hint = ""
+        if "connection" in str(e).lower():
+            if self._provider in ("gemini", "google"):
+                hint = " — Gemini API 연결 실패: GOOGLE_API_KEY/네트워크를 확인하세요."
+            else:
+                hint = (
+                    f" — vLLM 서버({describe_llm_target()})에 연결할 수 없습니다. 서버 기동 여부를 "
+                    "확인하거나, Gemini API를 쓰려면 C2_LLM_PROVIDER=gemini + GOOGLE_API_KEY 를 "
+                    "설정하세요."
+                )
+        logger.error("LangGraph 실행 오류(provider=%s): %s%s", self._provider, e, hint, exc_info=True)
+        return _json.dumps(
+            {"status": "error", "message": f"{e}{hint}", "provider": self._provider},
+            ensure_ascii=False,
+        )
+
+    # ── 실행 (무상태 — 공격/정찰/COA 계획 경로) ────────────────────
     def _raw_run(self, query: str, reset: bool = False) -> str:
-        """그래프 1회 실행 — 온톨로지 상황 주입 후 최종 응답 텍스트 반환.
+        """그래프 1회 실행 — 온톨로지 상황 주입 후 최종 응답 텍스트 반환 (히스토리 미사용).
 
         create_react_agent 는 invoke 마다 stateless 이므로 reset 은 자연히 보장됨.
         """
@@ -131,23 +160,7 @@ class LangGraphBattlefieldAgent:
                 config={"recursion_limit": self._recursion_limit()},
             )
         except Exception as e:
-            import json as _json
-
-            hint = ""
-            if "connection" in str(e).lower():
-                if self._provider in ("gemini", "google"):
-                    hint = (" — Gemini API 연결 실패: GOOGLE_API_KEY/네트워크를 확인하세요.")
-                else:
-                    hint = (
-                        f" — vLLM 서버({describe_llm_target()})에 연결할 수 없습니다. 서버 기동 여부를 "
-                        "확인하거나, Gemini API를 쓰려면 C2_LLM_PROVIDER=gemini + GOOGLE_API_KEY 를 "
-                        "설정하세요."
-                    )
-            logger.error("LangGraph 실행 오류(provider=%s): %s%s", self._provider, e, hint, exc_info=True)
-            return _json.dumps(
-                {"status": "error", "message": f"{e}{hint}", "provider": self._provider},
-                ensure_ascii=False,
-            )
+            return self._format_error(e)
         msgs = result.get("messages", []) if isinstance(result, dict) else []
         return self._extract_result_text(msgs)
 
@@ -191,13 +204,63 @@ class LangGraphBattlefieldAgent:
         )
         return str(getattr(msgs[-1], "content", "") or "")
 
+    # ── 실행 (멀티턴 — 전술채팅 경로) ─────────────────────────────
     def run(self, query: str, reset: bool = False) -> str:
+        """전술채팅 실행 — 이전 N턴(쿼리+툴 호출/결과+최종 응답)을 저장소에서 적재해
+        현재 쿼리 앞에 붙여 멀티턴 대화를 지원한다. 실행 후 이번 턴을 저장소에 적재한다.
+        """
         try:
             intent = classify_intent(query)
             logger.info("Intent: %s", intent.get("intent", "general"))
         except Exception:
             pass
-        return self._raw_run(query, reset=reset)
+
+        from langchain_core.messages import (
+            HumanMessage, messages_from_dict, messages_to_dict,
+        )
+
+        if reset:
+            try:
+                self._conv_store.clear(self._chat_session_id)
+            except Exception:
+                pass
+
+        # 이전 N턴 메시지 적재 (오래된 것 먼저) → LangChain 메시지로 복원
+        prior_msgs = []
+        try:
+            turns = self._conv_store.recent_turns(self._chat_session_id, self._MEMORY_TURNS)
+            prior_dicts = [m for turn in turns for m in turn]
+            if prior_dicts:
+                prior_msgs = list(messages_from_dict(prior_dicts))
+        except Exception as e:
+            logger.warning("[대화메모리] 이전 턴 적재 실패(무시): %s", e)
+            prior_msgs = []
+
+        task = self._inject_ontology(query)
+        input_messages = prior_msgs + [HumanMessage(content=task)]
+        try:
+            result = self._graph.invoke(
+                {"messages": input_messages},
+                config={"recursion_limit": self._recursion_limit()},
+            )
+        except Exception as e:
+            return self._format_error(e)
+
+        all_msgs = result.get("messages", []) if isinstance(result, dict) else []
+        # 이번 턴에 해당하는 메시지 (이전 히스토리 이후) — 저장·응답 추출용
+        turn_msgs = list(all_msgs[len(prior_msgs):]) if all_msgs else []
+        # 저장 시 온톨로지 블록이 붙은 human 을 원본 쿼리로 치환 (컨텍스트 절약)
+        if turn_msgs:
+            turn_msgs[0] = HumanMessage(content=query)
+            try:
+                self._conv_store.append_turn(
+                    self._chat_session_id, messages_to_dict(turn_msgs)
+                )
+            except Exception as e:
+                logger.warning("[대화메모리] 이번 턴 저장 실패(무시): %s", e)
+
+        # 이번 턴 응답만 추출 (이전 히스토리 텍스트가 섞이지 않도록)
+        return self._extract_result_text(turn_msgs if turn_msgs else all_msgs)
 
     # ── BattlefieldAgent 호환 메서드 ──────────────────────────────
     def reset_memory(self) -> None:
