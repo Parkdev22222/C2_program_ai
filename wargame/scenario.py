@@ -132,54 +132,54 @@ def setup_cheorwon_bn() -> list:
     """
     return [
         # ── BLUFOR (대한민국) — 남서부 방어 → 역습 ──────────────────
-        Unit(id="Alpha", side="BLUFOR", unit_type="기계화보병",
+        Unit(id="보병1중대", side="BLUFOR", unit_type="기계화보병",
              x=8_000.0, y=5_000.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#1E88E5"),
-        Unit(id="Bravo", side="BLUFOR", unit_type="기계화보병",
+        Unit(id="보병2중대", side="BLUFOR", unit_type="기계화보병",
              x=8_000.0, y=8_500.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#42A5F5"),
-        Unit(id="Delta", side="BLUFOR", unit_type="기계화보병",   # (구 정찰 → 보병중대)
+        Unit(id="보병3중대", side="BLUFOR", unit_type="기계화보병",   # (구 정찰 → 보병중대)
              x=12_000.0, y=10_000.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#26C6DA"),
-        Unit(id="Charlie", side="BLUFOR", unit_type="전차",
+        Unit(id="전차중대", side="BLUFOR", unit_type="전차",
              x=5_500.0, y=6_500.0,
              combat_power=100.0, firepower_index=160.0, max_speed=2.0,
              status="active", waypoints=[], current_action="hold", color="#00BCD4"),
-        Unit(id="Echo", side="BLUFOR", unit_type="대전차",
+        Unit(id="대전차중대", side="BLUFOR", unit_type="대전차",
              x=11_000.0, y=6_000.0,
              combat_power=100.0, firepower_index=90.0, max_speed=2.2,
              status="active", waypoints=[], current_action="hold", color="#B3E5FC"),
-        Unit(id="Foxtrot", side="BLUFOR", unit_type="자주포",     # K9A1 — 실사거리 40km
+        Unit(id="자주포중대", side="BLUFOR", unit_type="자주포",     # K9A1 — 실사거리 40km
              x=3_500.0, y=4_000.0,
              combat_power=100.0, firepower_index=130.0, max_speed=1.8,
              indirect_range=40_000.0,
              status="active", waypoints=[], current_action="hold", color="#4DD0E1"),
 
         # ── OPFOR (북한) — 북동부 공격 ──────────────────────────────
-        Unit(id="Red1", side="OPFOR", unit_type="기계화보병",
+        Unit(id="적보병1중대", side="OPFOR", unit_type="기계화보병",
              x=21_000.0, y=19_000.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#E53935"),
-        Unit(id="Red2", side="OPFOR", unit_type="기계화보병",
+        Unit(id="적보병2중대", side="OPFOR", unit_type="기계화보병",
              x=21_000.0, y=22_500.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#EF5350"),
-        Unit(id="Red4", side="OPFOR", unit_type="기계화보병",     # (구 정찰 → 보병중대)
+        Unit(id="적보병3중대", side="OPFOR", unit_type="기계화보병",     # (구 정찰 → 보병중대)
              x=18_000.0, y=18_500.0,
              combat_power=100.0, firepower_index=100.0, max_speed=2.5,
              status="active", waypoints=[], current_action="hold", color="#FF8A65"),
-        Unit(id="Red3", side="OPFOR", unit_type="전차",
+        Unit(id="적전차중대", side="OPFOR", unit_type="전차",
              x=23_500.0, y=20_500.0,
              combat_power=100.0, firepower_index=155.0, max_speed=2.0,
              status="active", waypoints=[], current_action="hold", color="#FF7043"),
-        Unit(id="Red6", side="OPFOR", unit_type="대전차",
+        Unit(id="적대전차중대", side="OPFOR", unit_type="대전차",
              x=24_000.0, y=23_000.0,
              combat_power=100.0, firepower_index=85.0, max_speed=2.2,
              status="active", waypoints=[], current_action="hold", color="#FFAB91"),
-        Unit(id="Red5", side="OPFOR", unit_type="자주포",         # M1978 곡산 — 실사거리 60km(RAP)
+        Unit(id="적자주포중대", side="OPFOR", unit_type="자주포",         # M1978 곡산 — 실사거리 60km(RAP)
              x=26_500.0, y=21_000.0,
              combat_power=100.0, firepower_index=130.0, max_speed=1.8,
              indirect_range=60_000.0,

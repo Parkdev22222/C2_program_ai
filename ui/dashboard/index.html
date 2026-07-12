@@ -167,7 +167,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
 .unit-mk{display:flex;flex-direction:column;align-items:center;justify-content:center;
   border-radius:3px;font-family:'Courier New',monospace;line-height:1.2;cursor:pointer;
   box-shadow:0 0 6px rgba(0,0,0,.7)}
-.unit-mk .uid{font-size:9px;font-weight:700}
+.unit-mk .uid{font-size:9px;font-weight:700;white-space:nowrap}
 .unit-mk .ucp{font-size:9px}
 
 
@@ -549,35 +549,35 @@ function makeUnitIcon(id, cp, side, status) {
   const fg    = alive ? '#000d1a' : color;
   const opacity = alive ? 1.0 : 0.35;
   return L.divIcon({
-    html: `<div class="unit-mk" style="width:52px;height:30px;background:${bg};border:2px solid ${color};opacity:${opacity};color:${fg};">
+    html: `<div class="unit-mk" style="width:70px;height:30px;background:${bg};border:2px solid ${color};opacity:${opacity};color:${fg};">
              <div class="uid">${id}</div><div class="ucp">${cp.toFixed(0)}%</div>
            </div>`,
-    className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+    className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
   });
 }
 
 function makeIntelIcon(unitId, intelStatus, cp) {
   if (intelStatus === 'detected') {
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:#ff4040;border:2px solid #ff4040;color:#000d1a;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:#ff4040;border:2px solid #ff4040;color:#000d1a;">
                <div class="uid">${unitId}</div><div class="ucp">${(cp||0).toFixed(0)}%</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   } else if (intelStatus === 'approximate') {
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:transparent;border:2px solid #ffa726;color:#ffa726;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:transparent;border:2px solid #ffa726;color:#ffa726;">
                <div class="uid">?${unitId}</div><div class="ucp">???</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   } else {
     // lost
     return L.divIcon({
-      html: `<div class="unit-mk" style="width:52px;height:30px;background:transparent;border:2px dashed #555;color:#555;opacity:.6;">
+      html: `<div class="unit-mk" style="width:70px;height:30px;background:transparent;border:2px dashed #555;color:#555;opacity:.6;">
                <div class="uid">(${unitId})</div><div class="ucp">---</div>
              </div>`,
-      className: '', iconSize: [52, 30], iconAnchor: [26, 15], popupAnchor: [0, -18],
+      className: '', iconSize: [70, 30], iconAnchor: [35, 15], popupAnchor: [0, -18],
     });
   }
 }
@@ -1126,18 +1126,20 @@ fetchEvents();
 const UNIT_TYPES = ['기계화보병', '전차', '정찰', '대전차', '자주포'];
 
 const DEFAULT_BLUFOR = [
-  {id:'Alpha',   unit_type:'기계화보병', x:9000,  y:4500},
-  {id:'Bravo',   unit_type:'기계화보병', x:9000,  y:7500},
-  {id:'Charlie', unit_type:'전차',       x:7000,  y:6000},
-  {id:'Delta',   unit_type:'정찰',       x:11500, y:3500},
-  {id:'Echo',    unit_type:'대전차',     x:11500, y:8500},
+  {id:'보병1중대',   unit_type:'기계화보병', x:8000,  y:5000},
+  {id:'보병2중대',   unit_type:'기계화보병', x:8000,  y:8500},
+  {id:'보병3중대',   unit_type:'기계화보병', x:12000, y:10000},
+  {id:'전차중대',    unit_type:'전차',       x:5500,  y:6500},
+  {id:'대전차중대',  unit_type:'대전차',     x:11000, y:6000},
+  {id:'자주포중대',  unit_type:'자주포',     x:3500,  y:4000},
 ];
 const DEFAULT_OPFOR = [
-  {id:'Red1', unit_type:'기계화보병', x:21000, y:19500},
-  {id:'Red2', unit_type:'기계화보병', x:21000, y:22500},
-  {id:'Red3', unit_type:'전차',       x:23000, y:21000},
-  {id:'Red4', unit_type:'정찰',       x:19500, y:17500},
-  {id:'Red5', unit_type:'자주포',     x:25000, y:21000},
+  {id:'적보병1중대',   unit_type:'기계화보병', x:21000, y:19000},
+  {id:'적보병2중대',   unit_type:'기계화보병', x:21000, y:22500},
+  {id:'적보병3중대',   unit_type:'기계화보병', x:18000, y:18500},
+  {id:'적전차중대',    unit_type:'전차',       x:23500, y:20500},
+  {id:'적대전차중대',  unit_type:'대전차',     x:24000, y:23000},
+  {id:'적자주포중대',  unit_type:'자주포',     x:26500, y:21000},
 ];
 
 let _scCounter = 0;
@@ -1153,7 +1155,7 @@ function makeUnitRow(side, u) {
   const key = ++_scCounter;
   const btnClr = side === 'blufor' ? 'color:var(--blue)' : 'color:var(--red)';
   return `<tr id="scrow-${key}" data-side="${side}">
-    <td><input type="text" value="${u.id||''}" placeholder="예: Alpha" style="width:60px" data-field="id"></td>
+    <td><input type="text" value="${u.id||''}" placeholder="예: 보병1중대" style="width:60px" data-field="id"></td>
     <td><select data-field="unit_type">${makeTypeOptions(u.unit_type||'기계화보병')}</select></td>
     <td><input type="number" value="${u.x != null ? u.x : ''}" placeholder="랜덤" data-field="x" oninput="updateScPreviewMarkers()"></td>
     <td><input type="number" value="${u.y != null ? u.y : ''}" placeholder="랜덤" data-field="y" oninput="updateScPreviewMarkers()"></td>

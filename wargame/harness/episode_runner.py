@@ -575,7 +575,7 @@ class EpisodeRunner:
                     return True
                 if etype == "DESTROYED":
                     msg = ev.get("message", "")
-                    if any(uid in msg for uid in ("Alpha", "Bravo", "Charlie", "Delta", "Echo")):
+                    if any(uid in msg for uid in ("보병1중대", "보병2중대", "보병3중대", "전차중대", "대전차중대")):
                         return True
         except Exception:
             pass

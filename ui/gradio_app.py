@@ -1924,7 +1924,8 @@ def wargame_evaluate_and_learn(history: List) -> Tuple[List, str]:
     # ── 2차 일반화 패스: 응답에 좌표·특정 ID·수치가 남아있으면 재작성 ──
     _SPECIFIC_PATTERN = _re.compile(
         r'\[\d{3,},\s*\d{3,}\]'          # [13723, 14083] 형태 좌표
-        r'|(?:Red|Blue|Alpha|Bravo|Charlie|Delta|Echo|Foxtrot)\d*'  # 특정 부대명
+        r'|(?:Red|Blue|Alpha|Bravo|Charlie|Delta|Echo|Foxtrot)\d*'  # 구 부대명(영문)
+        r'|적?(?:보병|전차|대전차|자주포|정찰)\d*중대'  # 한국어 중대명(예: 적자주포중대)
         r'|\b\d{3,}m\b'                    # 1200m 같은 수치
         r'|\(\d+\.?\d*km,\s*\d+\.?\d*km\)'  # (12.3km, 4.5km)
     )
