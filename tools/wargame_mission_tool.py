@@ -384,19 +384,9 @@ def apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:
             ),
         }
 
-    try:
-        from tools.mission_plan_validator import guard_write_tool
-        gate = guard_write_tool("apply_wargame_air_support", {"support_json": support_json})
-    except Exception:
-        gate = {"allowed": True}
-
-    if not gate.get("allowed", True):
-        return {
-            "status": "blocked",
-            "reason": gate.get("reason"),
-            "message": gate.get("message", "실행이 차단되었습니다."),
-        }
-
+    # 승인 게이트(guard_write_tool)를 두지 않는다 — apply_wargame_mission_plan 과 동일하게
+    # dry_run=False 시 즉시 적용한다. (기존 게이트는 pending_plan 승인을 요구해 공중지원이
+    # 항상 'pending_plan 없음'으로 차단 → LLM 이 '시스템 문제로 적용 실패'로 보고하던 버그)
     if not validation["ok"]:
         return {
             "status": "blocked",
