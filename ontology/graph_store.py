@@ -119,7 +119,15 @@ class Neo4jGraphStore:
         since: str | None = None,
         until: str | None = None,
         scenario_id: str | None = None,
+        newest_first: bool = False,
     ) -> tuple[KnowledgeNode, ...]:
+        # newest_first=True: 앵커(observed_at NULL)를 먼저, 그다음 최신 관측/이벤트 순.
+        # LIMIT과 함께 쓰면 "부대별 최근 N개 1-hop"을 얻는다(오래된 항목 누적 문제 회피).
+        order_clause = (
+            "ORDER BY n.observed_at IS NOT NULL, n.observed_at DESC, n.kg_node_id"
+            if newest_first
+            else "ORDER BY n.observed_at, n.kg_node_id"
+        )
         rows = self._run(
             "MATCH (seed:KgNode) WHERE seed.entity_id IN $entity_ids "
             "AND ($scenario_id IS NULL OR seed.scenario_id = $scenario_id) "
@@ -135,7 +143,7 @@ class Neo4jGraphStore:
             "RETURN n.kg_node_id AS kg_node_id, n.scenario_id AS scenario_id, n.entity_id AS entity_id, "
             "n.label AS label, n.node_type AS node_type, n.security_level AS security_level, "
             "n.lat AS lat, n.lon AS lon, n.observed_at AS observed_at, properties(n) AS properties "
-            "ORDER BY n.observed_at, n.kg_node_id LIMIT $limit",
+            f"{order_clause} LIMIT $limit",
             entity_ids=list(entity_ids),
             limit=limit,
             since=since,

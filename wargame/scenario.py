@@ -122,6 +122,71 @@ def setup_bn_vs_bn() -> list:
     ]
 
 
+def setup_cheorwon_bn() -> list:
+    """철원 축선 기계화대대 교전 (가상) — 6 vs 6.
+
+    docs/scenario_cheorwon.md 반영판. 변경점:
+      - 정찰 부대 없음: 양측 정찰(Delta/Red4)을 기계화보병 중대로 대체.
+        정찰은 UAV가 담당한다고 가정 → 엔진 full_recon 모드로 처음부터 전 위치 detected.
+      - 자주포 실사거리: K9(Foxtrot) 40km / 북한 곡산(Red5) 60km(RAP) 를 indirect_range로 반영.
+    """
+    return [
+        # ── BLUFOR (대한민국) — 남서부 방어 → 역습 ──────────────────
+        Unit(id="Alpha", side="BLUFOR", unit_type="기계화보병",
+             x=8_000.0, y=5_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#1E88E5"),
+        Unit(id="Bravo", side="BLUFOR", unit_type="기계화보병",
+             x=8_000.0, y=8_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#42A5F5"),
+        Unit(id="Delta", side="BLUFOR", unit_type="기계화보병",   # (구 정찰 → 보병중대)
+             x=12_000.0, y=10_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#26C6DA"),
+        Unit(id="Charlie", side="BLUFOR", unit_type="전차",
+             x=5_500.0, y=6_500.0,
+             combat_power=100.0, firepower_index=160.0, max_speed=2.0,
+             status="active", waypoints=[], current_action="hold", color="#00BCD4"),
+        Unit(id="Echo", side="BLUFOR", unit_type="대전차",
+             x=11_000.0, y=6_000.0,
+             combat_power=100.0, firepower_index=90.0, max_speed=2.2,
+             status="active", waypoints=[], current_action="hold", color="#B3E5FC"),
+        Unit(id="Foxtrot", side="BLUFOR", unit_type="자주포",     # K9A1 — 실사거리 40km
+             x=3_500.0, y=4_000.0,
+             combat_power=100.0, firepower_index=130.0, max_speed=1.8,
+             indirect_range=40_000.0,
+             status="active", waypoints=[], current_action="hold", color="#4DD0E1"),
+
+        # ── OPFOR (북한) — 북동부 공격 ──────────────────────────────
+        Unit(id="Red1", side="OPFOR", unit_type="기계화보병",
+             x=21_000.0, y=19_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#E53935"),
+        Unit(id="Red2", side="OPFOR", unit_type="기계화보병",
+             x=21_000.0, y=22_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#EF5350"),
+        Unit(id="Red4", side="OPFOR", unit_type="기계화보병",     # (구 정찰 → 보병중대)
+             x=18_000.0, y=18_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             status="active", waypoints=[], current_action="hold", color="#FF8A65"),
+        Unit(id="Red3", side="OPFOR", unit_type="전차",
+             x=23_500.0, y=20_500.0,
+             combat_power=100.0, firepower_index=155.0, max_speed=2.0,
+             status="active", waypoints=[], current_action="hold", color="#FF7043"),
+        Unit(id="Red6", side="OPFOR", unit_type="대전차",
+             x=24_000.0, y=23_000.0,
+             combat_power=100.0, firepower_index=85.0, max_speed=2.2,
+             status="active", waypoints=[], current_action="hold", color="#FFAB91"),
+        Unit(id="Red5", side="OPFOR", unit_type="자주포",         # M1978 곡산 — 실사거리 60km(RAP)
+             x=26_500.0, y=21_000.0,
+             combat_power=100.0, firepower_index=130.0, max_speed=1.8,
+             indirect_range=60_000.0,
+             status="active", waypoints=[], current_action="hold", color="#FFCCBC"),
+    ]
+
+
 # 부대 유형별 스탯 (setup_custom_scenario에서 사용)
 UNIT_TYPE_SPECS: dict = {
     "기계화보병": {"firepower_index": 100.0, "max_speed": 2.5},
@@ -243,18 +308,20 @@ def setup_bn_vs_bn_blufor_random() -> list:
     return base
 
 
-# 부대 유형 라벨 (UI 표시용)
+# 부대 유형 라벨 (UI 표시용) — 철원 시나리오 편성 기준
 UNIT_TYPE_LABEL = {
     "Alpha":   "기계화보병",
     "Bravo":   "기계화보병",
     "Charlie":  "전차",
-    "Delta":   "정찰",
+    "Delta":   "기계화보병",   # (구 정찰 → 보병중대)
     "Echo":    "대전차",
+    "Foxtrot": "자주포",
     "Red1":    "기계화보병",
     "Red2":    "기계화보병",
     "Red3":    "전차",
-    "Red4":    "정찰",
+    "Red4":    "기계화보병",   # (구 정찰 → 보병중대)
     "Red5":    "자주포",
+    "Red6":    "대전차",
 }
 
 

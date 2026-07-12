@@ -20,7 +20,8 @@ except ImportError:
 try:
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-    from wargame import WargameEngine, setup_bn_vs_bn_blufor_random as setup_bn_vs_bn
+    # 기본 시나리오: 철원 축선 기계화대대 교전 (6v6, 정찰→보병, UAV 완전정찰, 자주포 실사거리)
+    from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
     from wargame.llm_planner import MissionPlanner
     from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
     _WARGAME_OK = True
@@ -326,23 +327,28 @@ def _wg_ensure_engine() -> Optional["WargameEngine"]:
         _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
         # BLUFOR 유닛 공중지원 피격 임무계획 콜백 등록
         _wg_engine.on_blufor_air_hit = _air_hit_enqueue
+        # UAV 완전 정찰: 처음부터 양측 전 위치 detected (철원 시나리오 가정)
+        _wg_engine.full_recon = True
         # 온톨로지 실시간 적재기 준비
         _wg_ensure_ontology(_wg_engine)
     return _wg_engine
 
 
 def _get_recon_unit_ids() -> list:
-    """현재 워게임에서 BLUFOR 정찰부대 ID 목록 반환."""
+    """현재 워게임에서 BLUFOR 정찰부대 ID 목록 반환.
+
+    정찰 병종이 없으면 빈 리스트(철원 시나리오는 정찰 없이 UAV 완전정찰). 이때
+    공격 플로우는 no_recon_units로 처리되어 정찰 임무를 생성하지 않는다.
+    """
     eng = _wg_ensure_engine()
     if eng is None:
-        return ["Delta"]
+        return []
     try:
         state = eng.get_state()
-        ids = [u["id"] for u in state.get("units", [])
-               if u.get("side") == "BLUFOR" and u.get("unit_type") == "정찰"]
-        return ids if ids else ["Delta"]
+        return [u["id"] for u in state.get("units", [])
+                if u.get("side") == "BLUFOR" and u.get("unit_type") == "정찰"]
     except Exception:
-        return ["Delta"]
+        return []
 
 
 def wargame_apply_custom_scenario(scenario_config: dict) -> dict:
@@ -615,7 +621,7 @@ def _execute_auto_attack_plan(event_type: str, *args):
             f"⛔ [최우선 지시 — 반드시 준수]\n"
             f"1. 모든 툴 호출을 완료하기 전에 절대 final_answer()를 호출하지 말 것.\n"
             f"2. {_recon_id_str}는 recon 임무로 mission_plans에 포함. 나머지 부대는 공격임무(attack/defend/flank/withdraw/hold) 부여.\n"
-            f"3. recon_advisor_tool 호출 금지. recommend_recon_routes는 반드시 호출하여 {_recon_id_str} 경로 생성에 사용.\n"
+            f"3. recon_result / attack_positions_result 는 아래 [제공 데이터]의 JSON을 그대로 사용 — recommend_recon_routes·get_optimal_attack_positions·recon_advisor_tool 호출 금지.\n"
             f"4. 전장 상황은 자동 주입된 [현재 전장 상황](온톨로지)을 사용 — 별도 상황 조회 툴은 없음.\n"
             f"5. apply_wargame_mission_plan(dry_run=False) 호출 후 즉시 final_answer() 호출하고 종료. 추가 툴 호출 절대 금지.\n"
             + base_query
@@ -1178,6 +1184,8 @@ def wargame_reset_sim():
     _wg_engine.on_new_opfor_detection = _detection_enqueue
     _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
     _wg_engine.on_blufor_air_hit      = _air_hit_enqueue
+    # UAV 완전 정찰: 처음부터 양측 전 위치 detected (철원 시나리오 가정)
+    _wg_engine.full_recon = True
     # 온톨로지 적재기 준비 + 그래프 초기화 (엔진 상태가 0으로 리셋되므로 KG도 비운다)
     _wg_ensure_ontology(_wg_engine)
     if _wg_ontology_writer is not None:
@@ -1389,25 +1397,22 @@ def wargame_request_recon_plan(history: List = None):
 
 def wargame_request_attack_plan(history: List = None):
     """
-    공격 임무계획 수립 — 전장 상황은 매 판단마다 온톨로지(Neo4j)에서 자동 주입됨
+    공격 임무계획 수립 — 상황·정찰·공격위치는 미리 실행되어 프롬프트에 주입됨
     ─────────────────────────────────────────────
-    전장 상황: [현재 전장 상황](온톨로지) 자동 주입 — 별도 상황 조회 툴 없음
-    Step 1. assess_recon_need() → OPFOR 탐지 현황(detected/approximate/lost)
-            → detected 목표만 공격 대상 (사전 계산 결과가 제공되면 재호출 불필요)
-    Step 2. get_optimal_attack_positions() → 탐지 OPFOR 기준 최적 공격 위치·기동 방향
-            → 결과를 Step 3 additional_context 로 전달
-    Step 3. strategy_advisor_tool(query="공격 임무계획 전술 검토", additional_context=<Step 2 결과>)
-            └─ EXAONE Deep 전술 조언
-    Step 4. 최종 임무계획 JSON 생성
+    사전 실행 후 [제공 데이터]로 주입 (에이전트는 이 함수들을 호출하지 않음):
+      · situation_result           ← [현재 전장 상황](온톨로지) 자동 주입
+      · recon_result               ← recommend_recon_routes() (build_mission_query가 실행)
+      · attack_positions_result    ← get_optimal_attack_positions() (build_mission_query가 실행)
+      · (assess_recon_need 결과도 참고용으로 주입)
+    Step 1. 최종 임무계획 JSON 생성 (제공 데이터 기반 직접 결정)
             detected OPFOR만 목표 / 공중지원도 detected 위치에만
             CP < 30% 부대 → defend/withdraw / 나머지 → attack/flank
-            정찰부대는 recommend_recon_routes() waypoints 로 recon 임무 포함
-    Step 5. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
+    Step 2. apply_wargame_mission_plan(plan_json=<JSON>, dry_run=False)
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)
-    Step 6. 응답에 최종 JSON 블록 출력
+    Step 3. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
-    금지: validate/approve 툴 호출, approximate/lost OPFOR 공중지원 목표 지정,
-          정찰부대(unit_type=정찰) 공격/flank 임무 부여 (recon 임무는 필수 포함)
+    금지: validate/approve 툴 호출, 사전 주입된 툴 재호출,
+          approximate/lost OPFOR 공중지원 목표 지정
     """
     global _wg_last_plan
     history = list(history or [])
@@ -1465,8 +1470,9 @@ def wargame_request_attack_plan(history: List = None):
     attack_suffix = (
         f"{_assess_block}"
         f"\n\n⚠️ 예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. "
-        f"모든 값은 반드시 툴 호출 결과에서 가져와야 한다.\n"
-        f"⚠️ {_atk_recon_str}(정찰부대)는 반드시 recon 임무로 포함. recommend_recon_routes() 결과의 waypoints 사용.\n\n"
+        f"모든 값은 반드시 [제공 데이터]에서 가져와야 한다.\n"
+        f"⚠️ {_atk_recon_str}(정찰부대)가 있으면 recon 임무로 포함. recon_result의 waypoints 사용 "
+        f"(recommend_recon_routes 호출 금지 — 결과가 [제공 데이터]에 이미 있음).\n\n"
         f"[ATTACK 규칙]\n{attack_rules}\n\n"
         f"[EXECUTION 규칙]\n{execution_rules_atk}"
         f"{learned_suffix_atk}"

@@ -136,14 +136,14 @@ def build_mission_query(state: dict) -> str:
     """
     BattlefieldAgent.run()에 전달할 공격 임무계획 쿼리 문자열 생성.
 
-    에이전트 툴 활용 순서:
-      1. recommend_recon_routes()        → Delta 정찰부대 경로 생성
-      2. get_optimal_attack_positions()  → detected OPFOR 기준 최적 공격 위치 추천
-      3. 최종 임무계획 JSON 생성         → 2번 결과 기반 직접 결정, detected OPFOR만 목표
-      4. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
-      5. 응답에 JSON 블록 출력
+    에이전트 처리 순서:
+      (recommend_recon_routes / get_optimal_attack_positions 는 이 함수가 미리 실행해
+       결과를 [제공 데이터]로 프롬프트에 주입 → 에이전트는 툴로 호출하지 않는다.)
+      1. 최종 임무계획 JSON 생성   → recon_result·attack_positions_result·situation_result 기반 직접 결정
+      2. apply_wargame_mission_plan(plan_json=..., dry_run=False)  → 즉시 적용
+      3. 응답에 JSON 블록 출력
 
-    ※ 현재 부대 위치·전투력 등 전장상황은 에이전트가 tool 호출로 직접 조회한다.
+    ※ situation_result(전장상황)는 에이전트 실행 시 온톨로지 블록으로 자동 주입된다.
     """
     elev_section = _sample_elevation_map(state)
 
@@ -159,23 +159,44 @@ def build_mission_query(state: dict) -> str:
         f" (잔여 {ticks_to_reset}틱 후 리셋). 잔여 횟수가 0이면 air_support_plans는 빈 배열로."
     )
 
+    # recommend_recon_routes / get_optimal_attack_positions 를 미리 실행해 결과를 프롬프트에 주입.
+    # (에이전트가 직접 툴을 호출하지 않고, 아래 [제공 데이터]의 JSON을 변수로 그대로 사용)
+    import json as _json
+    try:
+        from tools.wargame_recon_tool import recommend_recon_routes as _reco_fn
+        _recon_result = _reco_fn()
+    except Exception as _re:
+        _recon_result = {"status": "no_recon_units", "error": str(_re)}
+    try:
+        from tools.wargame_attack_advisor_tool import get_optimal_attack_positions as _gap_fn
+        _attack_positions_result = _gap_fn()
+    except Exception as _ae:
+        _attack_positions_result = {"status": "error", "error": str(_ae)}
+    recon_block = (
+        "[recommend_recon_routes() 결과 — recon_result]\n"
+        f"```json\n{_json.dumps(_recon_result, ensure_ascii=False)}\n```"
+    )
+    attack_pos_block = (
+        "[get_optimal_attack_positions() 결과 — attack_positions_result]\n"
+        f"```json\n{_json.dumps(_attack_positions_result, ensure_ascii=False)}\n```"
+    )
+
     query = f"""대대급 C2 AI: BLUFOR 임무계획을 수립하라.
 
-⚠️ 필수: 아래 툴을 반드시 순서대로 호출하여 실제 전장 데이터를 수집한 후 임무계획을 수립하라.
-예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 툴 호출 결과에서 가져와야 한다.
+⚠️ 필수: 아래 [제공 데이터]를 근거로 최종 임무계획 JSON을 직접 구성하라.
+예시의 좌표·부대명·호출부호를 절대 그대로 사용 금지. 모든 값은 제공 데이터에서 가져와야 한다.
 ⚠️ 코드 첫 줄에 반드시 `import json` 을 실행하라. json 없이 json.dumps() 호출 시 NameError 발생.
 
-※ situation_result 는 자동 주입된 [현재 전장 상황] 블록의 JSON을 그대로 사용한다(별도 조회 툴 없음).
-  키: situation_result["units"] = 부대 리스트, 각 원소에 "unit_id"/"side"("BLUFOR"|"OPFOR")/"combat_power"/"status"/"lat"/"lon".
+※ situation_result / recon_result / attack_positions_result 는 모두 아래 제공된 JSON을 변수로 그대로 사용한다 (별도 툴 호출 없음).
+  - situation_result: 자동 주입된 [현재 전장 상황] 블록. 키 situation_result["units"] = 부대 리스트("unit_id"/"side"/"combat_power"/"status"/"lat"/"lon").
+  - recon_result / attack_positions_result: 아래 [제공 데이터]의 JSON.
+
+[제공 데이터]
+{recon_block}
+{attack_pos_block}
 
 [필수 툴 호출 순서]
-1. recommend_recon_routes()
-   → Delta 정찰부대의 경로 생성 → recon_result에 저장
-   → recon_result["mission_plans"]의 첫 번째 항목을 Delta 임무로 사용
-   → status가 "no_recon_units"이면 Delta 임무 제외, 나머지는 항상 포함
-2. get_optimal_attack_positions()
-   → detected OPFOR 기준 최적 공격 위치 추천 (결과를 attack_positions_result에 저장)
-3. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
+1. [EXAONE4 직접 판단] 아래 Python 코드 구조로 최종 임무계획 JSON을 직접 구성하라:
 
    import json
 
@@ -191,11 +212,12 @@ def build_mission_query(state: dict) -> str:
            "objective": delta_mp.get("objective", "정찰")
        }})
 
-   # ② BLUFOR 공격부대 임무 — attack_positions_result를 근거로 직접 결정
-   #    attack_positions_result["attack_recommendations"] 에서 각 OPFOR 목표별 최적 공격 위치(lat/lon) 참조
+   # ② BLUFOR 공격부대 임무 — attack_positions_result["unit_key_highground"] 근거로 직접 결정
+   #    각 원소: {{"unit_id","target_unit_id","position":[lat,lon],"elevation_m","elevation_advantage"}}
+   #    → 부대별 주요 고지(position)를 waypoint로, 담당 타겟(target_unit_id)을 그대로 사용
    #    situation_result["units"] 중 side=="BLUFOR" 에서 각 부대 ID·전투력 참조
-   #    • CP >= 30% → attack 또는 flank (attack_positions_result 권고 반영)
-   #    • CP < 30%  → defend 또는 withdraw
+   #    • CP >= 30% → attack 또는 flank   • CP < 30% → defend 또는 withdraw
+   highground = {{h["unit_id"]: h for h in attack_positions_result.get("unit_key_highground", [])}}
    for unit in situation_result["units"]:
        if unit.get("side") != "BLUFOR":
            continue
@@ -204,23 +226,24 @@ def build_mission_query(state: dict) -> str:
        cp = unit["combat_power"]
        if cp <= 5:
            continue
-       # attack_positions_result에서 이 부대에 권고된 공격 위치 찾기
-       # (recommended_units에 부대 ID가 포함된 항목 우선)
        # ★ attack/flank 임무는 담당할 적 부대를 target_unit_id로 반드시 명시 ★
-       #   (detected OPFOR unit_id). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
+       #   (highground[unit_id]["target_unit_id"]). 부대는 경유지 도달 후 이 표적을 지속 추격한다.
+       hg = highground.get(unit["unit_id"])
        mission_plans.append({{
            "company_id": unit["unit_id"],
-           "mission_type": "<attack_positions_result 기반으로 직접 결정: attack|flank|defend|withdraw|hold>",
-           "target_unit_id": "<담당 detected OPFOR unit_id — attack/flank일 때 필수, 그 외 생략>",
-           "waypoints": [[<attack_positions_result의 lat>, <lon>], ...],  # 위경도 소수점6자리
-           "objective": "<detected OPFOR unit_id 목표 또는 방어 목표>"
+           "mission_type": "<CP·전황 기반 직접 결정: attack|flank|defend|withdraw|hold>",
+           "target_unit_id": "<hg['target_unit_id'] — attack/flank일 때 필수, 그 외 생략>",
+           "waypoints": [hg["position"]] if hg else [],  # 위경도 소수점6자리 (주요 고지)
+           "objective": "<담당 OPFOR 공략 또는 방어 목표>"
        }})
 
-   # ③ 공중지원 계획 — detected OPFOR의 known_lat/known_lon 사용
+   # ③ 항공 자산 CAS 계획 — attack_positions_result["air_support_schedule"] 사용 (아군 전용)
    air_support_plans = []
-   # detected OPFOR 목표에만 공중지원 할당
-   # target 좌표는 attack_positions_result의 대상 OPFOR 위치 또는
-   #   situation_result["units"] 중 side=="OPFOR" 부대의 lat/lon 사용
+   # 각 원소: {{"priority","target_unit_id","target_type","target":[lat,lon],"method"}}
+   # → 잔여 공중지원 횟수(air CAS는 5회 제한) 내에서 우선순위대로 target·method 그대로 사용
+   # ★ 아군 부대가 적과 인접(근접 교전)한 표적은 반드시 정밀타격(strike, 좁은 반경) 사용 ★
+   #   (스케줄의 method가 이미 strike로 설정됨 — 광역 cas 사용 금지: 근접 상황 부적합)
+   # 참고: 포병(자주포 부대) 화력지원은 별도 상시 지원(횟수 제한 없음)이며 항공 CAS와 동시 투사됨.
 
    final_plan = {{
        "reasoning": "<EXAONE4 전략 판단 근거 — 한국어>",
@@ -228,7 +251,7 @@ def build_mission_query(state: dict) -> str:
        "air_support_plans": air_support_plans
    }}
 
-4. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
+2. apply_wargame_mission_plan(plan_json=json.dumps(final_plan, ensure_ascii=False), dry_run=False)
    → 워게임 즉시 적용
 
 [지형고도] 작전지역=철원(DMZ인근), 좌표=위경도(WGS84), lat=북위(38.0~38.27), lon=동경(127.0~127.34)

@@ -66,6 +66,7 @@ class InMemoryGraphStore:
         since: str | None = None,
         until: str | None = None,
         scenario_id: str | None = None,
+        newest_first: bool = False,
     ) -> tuple[KnowledgeNode, ...]:
         entity_set = set(entity_ids)
         # writer 스레드의 동시 write 와 경합하지 않도록 컬렉션 스냅샷 위에서 동작
@@ -87,19 +88,30 @@ class InMemoryGraphStore:
             ):
                 connected_ids.add(edge.source_node_id)
                 connected_ids.add(edge.target_node_id)
-        return tuple(
-            node
-            for node in sorted(
-                (
-                    nodes_snapshot[node_id]
-                    for node_id in connected_ids
-                    if node_id in nodes_snapshot
-                ),
-                key=lambda item: (item.observed_at or "", item.kg_node_id),
+        candidates = [
+            nodes_snapshot[node_id]
+            for node_id in connected_ids
+            if node_id in nodes_snapshot
+            and _in_scenario(nodes_snapshot[node_id].scenario_id, scenario_id)
+            and _in_window(nodes_snapshot[node_id].observed_at, since, until)
+        ]
+        if newest_first:
+            # 앵커(observed_at None) 먼저, 그다음 관측/이벤트 최신순 (Neo4j newest_first와 일치)
+            untimed = sorted(
+                (n for n in candidates if not n.observed_at),
+                key=lambda n: n.kg_node_id,
             )
-            if _in_scenario(node.scenario_id, scenario_id)
-            and _in_window(node.observed_at, since, until)
-        )[:limit]
+            timed = sorted(
+                (n for n in candidates if n.observed_at),
+                key=lambda n: (n.observed_at, n.kg_node_id),
+                reverse=True,
+            )
+            ordered = list(untimed) + list(timed)
+        else:
+            ordered = sorted(
+                candidates, key=lambda item: (item.observed_at or "", item.kg_node_id)
+            )
+        return tuple(ordered[:limit])
 
     def edges_for_nodes(
         self,

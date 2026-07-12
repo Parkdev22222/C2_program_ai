@@ -104,6 +104,16 @@ _EXPOSURE_CONCEALED  = 0.6
 _DR_NOISE_PER_TICK   = 80.0
 # 제압 상태 회복: 교전 밖으로 이탈 후 이 게임초 경과 시 degraded로 회복
 _SUPPRESS_RECOVER_SEC = 120.0
+# 대포병 탐지(counter-battery): 자주포가 간접사격하면 위치가 적에게 노출된다.
+#   기본은 음향표정 수준의 approximate, 확률적으로 대포병 레이더가 정확 위치(detected)를 포착.
+#   사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리 → shoot-and-scoot.
+_COUNTER_BATTERY_DETECT_PROB   = 0.35   # 사격 시 정확 위치(detected) 포착 확률(틱당)
+_COUNTER_BATTERY_APPROX_RADIUS = 700    # approximate 노출 시 개략 위치 오차 반경(m)
+# 포병 화력지원 전투력 감쇠 지수: 간접사격 위력이 전투력(combat_power) 감소에
+# 초선형(제곱)으로 약해진다. effective_firepower()가 이미 선형 factor(cp/100)를 포함하므로
+# 여기서는 (cp/100)^(exp-1) 을 추가로 곱해 총 (cp/100)^exp 가 되게 한다.
+#   exp=2.0 → CP 100%:×1.0, 75%:×0.56, 50%:×0.25, 25%:×0.06  (피해 많이 입을수록 급감)
+_SPG_FIRE_DEGRADE_EXP = 2.0
 
 # ── OPFOR 전략 AI 파라미터 ────────────────────────────────────────────
 # 정찰 완료 임계값: BLUFOR 탐지 수가 이 이상이면 임무 결정 단계로 전환
@@ -264,6 +274,9 @@ class WargameEngine:
         # callback(unit_id, unit_type, target_id, moved_dist_m)
         # 부대별 1회만 발동 (u.target_replan_fired 플래그로 관리)
         self.on_target_moved: Optional[Callable] = None
+
+        # UAV 완전 정찰 모드: True면 매 틱 모든 활성 적을 실위치로 detected 처리 (FOW 무시)
+        self.full_recon: bool = False
 
         # OPFOR 공중지원 쿨다운 (게임 초 단위)
         self._opfor_air_cooldown: float = 0.0
@@ -494,6 +507,18 @@ class WargameEngine:
                         entry["status"] = "lost"
                         entry["ticks_since_lost"] = 0
                     self._unit_velocity[enemy.id] = (0.0, 0.0)
+                    continue
+
+                # UAV 완전 정찰 모드: 모든 활성 적을 실위치로 항상 detected (FOW 무시)
+                if getattr(self, "full_recon", False):
+                    entry.update({
+                        "status": "detected",
+                        "known_x": enemy.x, "known_y": enemy.y,
+                        "unit_type": enemy.unit_type,
+                        "combat_power": round(enemy.combat_power, 1),
+                        "last_detected_tick": self.tick, "detected_by": "UAV",
+                        "ticks_since_lost": 0, "ever_detected": True,
+                    })
                     continue
 
                 # 적 부대 이동/정지 여부에 따른 피탐지 배율
@@ -1077,9 +1102,13 @@ class WargameEngine:
             enemies    = [u for u in self.units if u.side == enemy_side and u.is_active()]
             intel      = self._intelligence[spg.side]
             fp_mult    = _status_firepower_mult(spg.status)
+            # 포병 화력지원은 전투력이 낮을수록 초선형으로 약해진다 (피해 많이 입을수록 급감)
+            spg_fire_degrade = (max(0.0, spg.combat_power) / 100.0) ** (_SPG_FIRE_DEGRADE_EXP - 1.0)
 
             # 탐지된 적 목표 선정 (detected or approximate)
             # 최소 사거리(_INDIRECT_MIN_RANGE) 이내 목표는 사격 불가 (자주포 특성상 근거리 사각지대)
+            # 체계별 실사거리 (K9 ~40km, 곡산 ~60km 등). 미지정 시 기본값.
+            spg_max_range = getattr(spg, "indirect_range", _INDIRECT_MAX_RANGE)
             targets = []
             for entry in intel.values():
                 if entry["status"] == "lost":
@@ -1088,7 +1117,7 @@ class WargameEngine:
                     spg.x - entry["known_x"],
                     spg.y - entry["known_y"],
                 )
-                if _INDIRECT_MIN_RANGE <= dist_to_target <= _INDIRECT_MAX_RANGE:
+                if _INDIRECT_MIN_RANGE <= dist_to_target <= spg_max_range:
                     targets.append(entry)
 
             if not targets:
@@ -1107,6 +1136,10 @@ class WargameEngine:
 
             cx, cy = target_entry["known_x"], target_entry["known_y"]
 
+            # 대포병 탐지: 사격하는 순간 자주포 위치가 적 인텔에 노출된다
+            # (기본 approximate, 확률적으로 detected). 사격을 멈추면 자연 감쇠로 lost.
+            self._expose_firing_spg(spg, enemy_side, enemies)
+
             # AoE 내 적 피해 적용
             hit_any = False
             for enemy in enemies:
@@ -1123,6 +1156,7 @@ class WargameEngine:
                     * (1.0 - cover)
                     * matchup
                     * fp_mult
+                    * spg_fire_degrade   # 포병 전투력 감소 → 화력지원 초선형 약화
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ind = enemy.combat_power
@@ -1147,6 +1181,60 @@ class WargameEngine:
                     )
             if hit_any:
                 pass  # 개별 로그로 충분
+
+    def _expose_firing_spg(self, spg, enemy_side: str, enemies: list):
+        """자주포가 사격하면 그 위치를 적(enemy_side) 인텔에 노출한다.
+
+        기본은 음향표정 수준의 approximate(오차 반경 내), 확률적으로 대포병 레이더가
+        정확 위치(detected)를 포착한다. 이미 detected면 approximate로 강등하지 않는다.
+        사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리된다.
+
+        detected_by 는 실제로 탐지한 것으로 볼 가장 가까운 적 부대에 귀속한다
+        (온톨로지 observes 엣지가 유효 부대 노드를 가리키도록).
+        """
+        cb = self._intelligence.get(enemy_side, {}).get(spg.id)
+        if cb is None:
+            return
+        old_status = cb.get("status")
+
+        # 사격 원점을 포착한 것으로 귀속할 가장 가까운 적 부대
+        detector = None
+        if enemies:
+            detector = min(
+                enemies, key=lambda u: math.hypot(u.x - spg.x, u.y - spg.y)
+            )
+        detected_by = detector.id if detector is not None else "대포병탐지"
+
+        if random.random() < _COUNTER_BATTERY_DETECT_PROB:
+            # 대포병 레이더 명중 — 정확 위치
+            cb.update({
+                "status": "detected",
+                "known_x": spg.x, "known_y": spg.y,
+                "unit_type": spg.unit_type,
+                "combat_power": round(spg.combat_power, 1),
+                "last_detected_tick": self.tick, "detected_by": detected_by,
+                "ticks_since_lost": 0, "ever_detected": True,
+            })
+        elif old_status != "detected":
+            # 음향표정 수준 — 개략 위치(원형 분포 오차). 이미 detected면 유지.
+            ang = random.uniform(0.0, 2.0 * math.pi)
+            rad = _COUNTER_BATTERY_APPROX_RADIUS * math.sqrt(random.random())
+            cb.update({
+                "status": "approximate",
+                "known_x": max(0.0, min(29_999.0, spg.x + math.cos(ang) * rad)),
+                "known_y": max(0.0, min(29_999.0, spg.y + math.sin(ang) * rad)),
+                "unit_type": spg.unit_type,   # 사격 원점 = 포병으로 식별됨
+                "last_detected_tick": self.tick, "detected_by": detected_by,
+                "ticks_since_lost": 0, "ever_detected": True,
+            })
+
+        # 새로 정확 포착(detected)된 순간만 로그 (사격 지속 시 스팸 방지)
+        if cb["status"] == "detected" and old_status != "detected":
+            self.db.log_event(
+                self.tick, self.game_time, "DETECTION",
+                f"[대포병탐지] {enemy_side}가 {spg.id}(자주포) 사격 원점 포착 "
+                f"({spg.x/1000:.1f}km,{spg.y/1000:.1f}km)",
+            )
 
     # ── 공중지원 ─────────────────────────────────────────────────────
 
@@ -1270,32 +1358,9 @@ class WargameEngine:
         opfor_intel  = self._intelligence["OPFOR"]
         detected_blu = [e for e in opfor_intel.values() if e["status"] == "detected"]
 
-        # ── OPFOR 공중지원 (쿨다운 기반) ─────────────────────────────
-        self._opfor_air_cooldown -= self._OPFOR_AI_INTERVAL
-        if self._opfor_air_cooldown <= 0.0 and detected_blu:
-            self._opfor_air_cooldown = self._OPFOR_AIR_INTERVAL
-            # 탐지된 BLUFOR 중 전투력이 높고 밀집한 위치 선택
-            target_entry = max(detected_blu, key=lambda e: e.get("combat_power", 0))
-            stype = random.choice(["strike", "artillery", "helicopter"])
-            preset = AIR_SUPPORT_PRESETS[stype]
-            air_plan = {
-                "air_support_plans": [{
-                    "call_sign": f"OPFOR-{stype.upper()}-{self.tick}",
-                    "support_type": stype,
-                    "target": [target_entry["known_x"], target_entry["known_y"]],
-                    "radius": preset["radius"],
-                    "damage_rate": preset["damage_rate"],
-                    "duration": preset["duration"],
-                    "delay": preset["delay"],
-                }]
-            }
-            self._apply_air_support_plan_locked(air_plan, side="OPFOR")
-            self.db.log_event(
-                self.tick, self.game_time, "OPFOR_AI",
-                f"OPFOR 공중지원 요청: {stype} → "
-                f"BLUFOR {target_entry['unit_id']} 위치 "
-                f"({target_entry['known_x']/1000:.1f}km, {target_entry['known_y']/1000:.1f}km)"
-            )
+        # ── OPFOR 공중지원(항공 자산 기반 CAS)은 비활성 ──────────────
+        # 헬기 등 항공 자산을 통한 CAS는 아군(BLUFOR) 전용이다. OPFOR는 항공 CAS를
+        # 요청하지 않으며, 화력지원은 온맵 자주포(Red5)의 간접사격으로만 수행한다.
 
         # ① 제압·저하 부대 우선 처리
         for u in opfor_all:

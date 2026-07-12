@@ -23,52 +23,62 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
     units = []
     for eid, un in unit_nodes.items():
         obs = latest_obs.get(eid)
-        p = un.properties
+        p = un.properties           # Unit 앵커: 매 스냅샷 최신 상태로 MERGE 갱신됨
         op = obs.properties if obs else {}
+
+        def _cur(key):
+            # 앵커(현재값) 우선, 없으면 최신 Observation 값으로 폴백
+            v = p.get(key)
+            return v if v is not None else op.get(key)
+
         units.append(
             {
                 "unit_id": eid,
                 "side": p.get("side", ""),
                 "affiliation": p.get("affiliation", ""),
                 "unit_type": p.get("unit_type", ""),
-                "lat": (obs.lat if obs else un.lat),
-                "lon": (obs.lon if obs else un.lon),
-                "x_m": op.get("x_m"),
-                "y_m": op.get("y_m"),
-                "combat_power": op.get("combat_power"),
-                "status": op.get("status", ""),
-                "current_action": op.get("current_action", ""),
-                "observed_at": (obs.observed_at if obs else None),
+                "lat": un.lat if un.lat is not None else (obs.lat if obs else None),
+                "lon": un.lon if un.lon is not None else (obs.lon if obs else None),
+                "x_m": _cur("x_m"),
+                "y_m": _cur("y_m"),
+                "combat_power": _cur("combat_power"),
+                "status": _cur("status") or "",
+                "current_action": _cur("current_action") or "",
+                "observed_at": (obs.observed_at if obs else un.observed_at),
             }
         )
 
     def _uid(node_id: str) -> str:
         return node_id.replace("KGN-UNIT-", "")
 
-    # 탐지 관계 (observes 엣지)
-    detections = [
-        {
-            "observer": _uid(e.source_node_id),
-            "target": _uid(e.target_node_id),
-            "observed_at": e.observed_at,
-        }
-        for e in kg_edges
-        if e.relation == "observes"
-    ]
-
-    # 적↔아군 관계 (observes=탐지 / engages=교전 / threatens=위협)
+    # 적↔아군 관계 (observes=탐지 / engages=교전 / threatens=위협).
+    # 틱마다 같은 (source,target,relation) 쌍이 반복 적재되므로 중복은 최신 1건만 유지
+    # → 관계 목록이 턴 수에 비례해 늘지 않도록 압축.
     _FORCE_RELS = {"observes", "engages", "threatens"}
-    force_relations = [
-        {
-            "source": _uid(e.source_node_id),
-            "target": _uid(e.target_node_id),
-            "relation": e.relation,
-            "observed_at": e.observed_at,
-        }
-        for e in kg_edges
-        if e.relation in _FORCE_RELS
+    _latest_rel: dict = {}
+    for e in kg_edges:
+        if e.relation not in _FORCE_RELS:
+            continue
+        src, tgt = _uid(e.source_node_id), _uid(e.target_node_id)
+        key = (src, tgt, e.relation)
+        cur = _latest_rel.get(key)
+        if cur is None or (e.observed_at or "") >= (cur["observed_at"] or ""):
+            _latest_rel[key] = {
+                "source": src,
+                "target": tgt,
+                "relation": e.relation,
+                "observed_at": e.observed_at,
+            }
+    force_relations = sorted(
+        _latest_rel.values(), key=lambda r: r.get("observed_at") or ""
+    )
+
+    # 탐지 관계 (observes) — 위 압축 결과에서 파생
+    detections = [
+        {"observer": r["source"], "target": r["target"], "observed_at": r["observed_at"]}
+        for r in force_relations
+        if r["relation"] == "observes"
     ]
-    force_relations.sort(key=lambda r: r.get("observed_at") or "")
 
     # 전투 이벤트 (Event 노드 — BattleEvent 페이로드)
     events = []
