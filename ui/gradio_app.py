@@ -801,7 +801,17 @@ def _execute_auto_attack_plan(event_type: str, *args):
                             eng.apply_air_support_plan(plan)
                 elif _tool_applied:
                     # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
-                    logger.info("[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요")
+                    # → 툴이 보관한 실제 적용 계획을 표시용으로 회수
+                    try:
+                        from tools.wargame_mission_tool import get_last_applied_plan
+                        _applied = get_last_applied_plan()
+                    except Exception:
+                        _applied = {}
+                    if _applied and _applied.get("mission_plans"):
+                        plan = dict(_applied)
+                        plan["_tool_applied"] = True
+                    logger.info(f"[자동임무계획] 에이전트가 툴로 계획 직접 적용 완료 — 폴백 불필요 "
+                                f"({len((_applied or {}).get('mission_plans', []))}개 중대)")
                 else:
                     logger.warning(f"[자동임무계획] 에이전트 미적용 → 규칙 기반 폴백")
                     plan = _wg_planner._rule_based(state)
@@ -1593,8 +1603,20 @@ def wargame_request_attack_plan(history: List = None):
                     elif (isinstance(raw, dict) and raw.get("status") == "success") or \
                          (isinstance(raw, str) and '"status": "success"' in raw):
                         # 에이전트가 apply_wargame_mission_plan 툴을 직접 호출해 이미 적용 완료
-                        logger.info("[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료")
-                        plan = {"mission_plans": [], "_tool_applied": True}
+                        # → 툴이 보관한 실제 적용 계획을 가져와 표시 (빈 껍데기 방지)
+                        try:
+                            from tools.wargame_mission_tool import get_last_applied_plan
+                            _applied = get_last_applied_plan()
+                        except Exception:
+                            _applied = {}
+                        if _applied and _applied.get("mission_plans"):
+                            plan = dict(_applied)
+                            plan["_tool_applied"] = True
+                            logger.info(f"[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료 "
+                                        f"— {len(plan['mission_plans'])}개 중대")
+                        else:
+                            logger.info("[공격임무계획] 에이전트가 툴로 계획 직접 적용 완료 (계획 조회 불가)")
+                            plan = {"mission_plans": [], "_tool_applied": True}
                     else:
                         logger.warning(f"[공격임무계획] JSON 파싱 실패 (raw={str(raw)[:120]}) → 규칙 기반 폴백")
                         plan = _wg_planner._rule_based(state)

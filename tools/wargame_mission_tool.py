@@ -39,6 +39,7 @@ def _raise_final_answer(value):
 _wargame_engine = None
 _resume_on_apply: bool = False
 _last_apply_time: float = 0.0  # apply_wargame_mission_plan 마지막 호출 시각
+_last_applied_plan: dict = {}  # 마지막으로 실제 적용된 계획(좌표 변환·스냅 반영본)
 
 
 def register_wargame_engine(engine):
@@ -53,13 +54,19 @@ def set_resume_on_apply(flag: bool) -> None:
 
 def reset_apply_tracker() -> None:
     """자동 재계획 세션 시작 시 호출 — 이전 apply 기록 초기화."""
-    global _last_apply_time
+    global _last_apply_time, _last_applied_plan
     _last_apply_time = 0.0
+    _last_applied_plan = {}
 
 
 def was_plan_applied_since(since: float) -> bool:
     """since 이후 apply_wargame_mission_plan이 실제로 호출됐는지 확인."""
     return _last_apply_time > since
+
+
+def get_last_applied_plan() -> dict:
+    """에이전트가 apply 툴로 직접 적용한 마지막 계획을 반환(표시용). 없으면 빈 dict."""
+    return dict(_last_applied_plan) if _last_applied_plan else {}
 
 
 # ── 공중지원 목표 좌표 스냅 헬퍼 ────────────────────────────────────
@@ -290,8 +297,10 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
 
         # 적용 시각 기록 (자동 재계획에서 폴백 여부 판단에 사용)
         import time as _t_apply
-        global _last_apply_time
+        global _last_apply_time, _last_applied_plan
         _last_apply_time = _t_apply.time()
+        # 적용된 계획(좌표 변환·스냅 반영본) 보관 → UI 표시용
+        _last_applied_plan = plan
 
         # 임무계획 버튼이 시뮬레이션을 정지한 경우 여기서 재개
         global _resume_on_apply
