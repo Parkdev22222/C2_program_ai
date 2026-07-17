@@ -15,7 +15,7 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 |--------|------|-----------|
 | **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`c2.presentation.web.api`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
 | **Agent / Planner** | 초록 | `LangGraphBattlefieldAgent`(기본) 또는 `BattlefieldAgent`(smolagents CodeAgent, EXAONE4) + `MissionPlanner` + 자동 재계획 워커(`c2.application.simulation.replan`) |
-| **Tools** | 주황·청록·보라 | 에이전트가 호출하는 LLM 툴 어댑터(`c2.presentation.tools`) — 13개 도구, 스텝당 1개 제한 |
+| **Tools** | 주황·청록·보라 | 에이전트가 호출하는 LLM 툴 어댑터(`c2.presentation.tools`) — 12개 도구 모듈, 스텝당 1개 제한 |
 | **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
 | **Data / External** | 빨강 | 시나리오, SQLite DB, COHA 온톨로지 TTL |
 
@@ -512,7 +512,15 @@ serve_kernel_port_as_window(7860)
 
 | 도구 | 파라미터 | 설명 |
 |------|----------|------|
+| `validate_mission_plan_tool(plan)` | plan: 임무계획 JSON | 좌표 범위·부대 ID·스키마 검증 후 결과 반환 |
+| `approve_mission_plan_tool(plan_id)` | plan_id: 계획 ID | 승인 대기 중인 임무계획을 승인 처리 |
 | `get_pending_plan_tool()` | — | 현재 승인 대기 중인 임무계획 및 세션 상태 조회 |
+
+#### 5-7. 화력지원 타격 우선순위 도구 (`wargame_fire_priority_tool.py`)
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_fire_priority_schedule()` | — | 적 병종·현황을 반영해 화력지원(포병/공중지원) 타격 우선순위 스케줄 반환 (자주포 등 고가치 자산 우선) |
 
 ---
 
@@ -532,6 +540,29 @@ COHA(Command and Ontology for Hostile Action) 군사 전술 온톨로지를 rdfl
 5. `Subject --[Predicate]--> Object` 형식의 교리 관계 목록 반환
 
 **자동 주입:** `recommend_recon_routes()` 및 `get_optimal_attack_positions()` 반환값의 `ontology_context` 필드에 관련 교리 컨텍스트가 자동으로 포함됩니다.
+
+---
+
+### 7. 온톨로지 상황 조회 도구 (`ontology_query_tool.py`)
+
+전장 지식그래프(KG)에서 현재 상황 컨텍스트를 조회합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `get_ontology_situation()` | — | 지식그래프 기반 전장 상황 컨텍스트(부대·이벤트·관계) 반환 |
+| `ontology_situation_block()` | — | 프롬프트 주입용으로 정리된 온톨로지 상황 텍스트 블록 반환 |
+
+---
+
+### 8. 상황분석 메모리 도구 (`strategy_advisor_tool.py`)
+
+에이전트의 상황 분석 응답을 세션 메모리로 누적·조회합니다.
+
+| 도구 | 파라미터 | 설명 |
+|------|----------|------|
+| `update_situation_memory(text)` | text: 상황 분석 응답 | 상황 분석 결과를 세션 메모리에 반영 |
+| `get_situation_memory()` | — | 누적된 상황 분석 메모리 조회 |
+| `clear_situation_memory()` | — | 상황 분석 메모리 초기화 |
 
 ---
 
@@ -599,18 +630,23 @@ COHA(Command and Ontology for Hostile Action) 군사 전술 온톨로지를 rdfl
 
 ## 도구 그룹 요약
 
-| 그룹 | 파일 | 도구 수 | 주요 용도 |
+모든 툴은 `src/c2/presentation/tools/` 아래에 있습니다 (아래 12개 모듈 + 스텝당 1툴 제한을 강제하는 `single_tool_guard.py`).
+
+| 그룹 | 파일 | 함수 수 | 주요 용도 |
 |------|------|---------|----------|
-| 워게임 조회 | `wargame_query_tool.py` | 4 | 실시간 전장 상황 |
-| 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 즉시 적용 |
+| 워게임 조회 | `wargame_query_tool.py` | 4 | 실시간 전장 상황·인텔·부대상세·전투로그 |
+| 워게임 실행 | `wargame_mission_tool.py` | 3 | 임무계획·공중지원 즉시 적용·엔진상태 |
 | 정찰 임무 | `wargame_recon_tool.py` | 2 | 정찰 필요 평가 + 경로 생성 |
 | 적군 경로 예측 | `wargame_opfor_routes_tool.py` | 1 | OPFOR 예상 기동 경로 분석 |
 | 최적 공격 위치 | `wargame_attack_advisor_tool.py` | 1 | 공격 위치 추천 + 온톨로지 컨텍스트 |
+| 화력 우선순위 | `wargame_fire_priority_tool.py` | 1 | 적 병종·현황 반영 타격 우선순위 스케줄 |
 | 전술 권고 | `wargame_strategy_tool.py` | 1 | 병종 상성 + 기동 경로 추천 |
 | COA 분석 | `coa_analysis_tool.py` | 1 | 행동 방책 비교 평가 |
-| 임무계획 조회 | `mission_plan_validator_tool.py` | 1 | 승인 대기 임무계획 조회 |
+| 임무계획 검증 | `mission_plan_validator_tool.py` | 3 | 임무계획 검증·승인·대기 조회 |
+| 온톨로지 상황 | `ontology_query_tool.py` | 2 | 지식그래프 기반 상황 컨텍스트 |
+| 상황분석 메모리 | `strategy_advisor_tool.py` | 3 | 상황 분석 응답 세션 메모리 |
 | Graph RAG | `graph_rag_tool.py` | 1 | COHA 군사 온톨로지 교리 검색 |
-| **합계** | | **15** | |
+| **합계** | **12개 모듈** | **23** | |
 
 ---
 
@@ -705,7 +741,7 @@ C2_program_ai/
 - `presentation/agent/battlefield_agent.py` — smolagents CodeAgent 오케스트레이터(대안).
 - `presentation/agent/langgraph_tools.py` — smolagents 툴을 LangChain `StructuredTool`로 래핑.
 
-**③ LLM 툴 어댑터(13종) — `presentation/tools/`**
+**③ LLM 툴 어댑터(12종) — `presentation/tools/`**
 상황조회·임무적용·정찰·공격위치·화력우선순위·적경로예측·전략추천·COA분석·온톨로지질의·
 그래프RAG(교리)·임무계획검증·단일툴가드. 에이전트가 호출하는 인터페이스 어댑터로,
 `application`/`domain` 유스케이스를 감싼다.
