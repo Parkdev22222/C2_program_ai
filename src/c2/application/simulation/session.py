@@ -27,9 +27,37 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class _NullReplanHooks:
+    """presentation 계층 툴 연동(replan_hooks) 미주입 시 사용되는 no-op 훅.
+
+    자동 재계획 워커(`c2.application.simulation.replan`)가 presentation 툴
+    (`tools.wargame_mission_tool`의 apply tracker 등, `agent.battlefield_agent`의
+    학습규칙 조회)과 협력하기 위한 경계. application은 tools/agent를 import할 수
+    없으므로 composition/gradio_app에서 실체를 주입한다. 미주입 시 이 no-op이
+    쓰이며, 이는 과거 gradio 워커의 try/except 폴백(빈 문자열/False/빈 dict)과
+    동일하게 동작한다.
+    """
+
+    def reset_apply_tracker(self) -> None:
+        pass
+
+    def was_plan_applied_since(self, ts: float) -> bool:
+        return False
+
+    def get_last_applied_plan(self) -> dict:
+        return {}
+
+    def set_resume_on_apply(self, value: bool) -> None:
+        pass
+
+    def get_instruction_section(self, name: str) -> str:
+        return ""
 
 
 class _NullOntologyWriter:
@@ -73,6 +101,7 @@ class WargameSession:
         graph_store_factory: Optional[Callable[[], Any]] = None,
         ontology_writer_factory: Optional[Callable[[Any, Any], Any]] = None,
         agent: Any = None,
+        replan_hooks: Any = None,
     ):
         self._engine_factory = engine_factory or _default_engine_factory
         self._tool_register_hook = tool_register_hook
@@ -81,6 +110,8 @@ class WargameSession:
             lambda engine, graph_store: _NullOntologyWriter(engine, graph_store)
         )
         self.agent = agent
+        # presentation 툴 연동 훅 (자동 재계획 워커가 사용). 미주입 시 no-op.
+        self.replan_hooks: Any = replan_hooks or _NullReplanHooks()
 
         self.engine: Optional[Any] = None
         self.planner: Optional[Any] = None
@@ -95,13 +126,20 @@ class WargameSession:
         # Task 29B(replan 워커)가 이 큐를 소비한다.
         self.detection_queue: "queue.Queue" = queue.Queue()
 
+        # 자동 재계획 상태/동기화 (replan 워커가 참조).
+        self._auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
+        self.auto_plan_status: dict = {"active": False, "message": "", "started_at": 0.0}
+        self.last_replan_tick: int = -30           # 30틱 쿨다운 기준
+        self._worker_stop = threading.Event()      # 탐지 워커 정지 신호
+        self._detection_thread: Optional[threading.Thread] = None
+
     # ── 콜백 enqueue (엔진 틱 스레드에서 호출됨 — 큐에만 넣고 즉시 반환) ──
 
-    def _detection_enqueue(self, enemy_id: str, unit_type: str, x: float, y: float) -> None:
+    def enqueue_detection(self, enemy_id: str, unit_type: str, x: float, y: float) -> None:
         self.detection_queue.put_nowait(("detection", enemy_id, unit_type, x, y))
         self._ontology_flush()
 
-    def _cp_threshold_enqueue(
+    def enqueue_cp_threshold(
         self, unit_id: str, unit_type: str, threshold_pct: float, current_cp: float
     ) -> None:
         self.detection_queue.put_nowait(
@@ -109,18 +147,47 @@ class WargameSession:
         )
         self._ontology_flush()
 
-    def _air_hit_enqueue(
+    def enqueue_air_hit(
         self, unit_id: str, unit_type: str, call_sign: str, current_cp: float
     ) -> None:
         self.detection_queue.put_nowait(("air_hit", unit_id, unit_type, call_sign, current_cp))
         self._ontology_flush()
 
-    def _target_moved_enqueue(
+    def enqueue_target_moved(
         self, unit_id: str, unit_type: str, target_id: str, moved_dist: float
     ) -> None:
         self.detection_queue.put_nowait(
             ("target_moved", unit_id, unit_type, target_id, moved_dist)
         )
+
+    # 하위호환 별칭 (기존 private 이름 참조 대비)
+    _detection_enqueue = enqueue_detection
+    _cp_threshold_enqueue = enqueue_cp_threshold
+    _air_hit_enqueue = enqueue_air_hit
+    _target_moved_enqueue = enqueue_target_moved
+
+    # ── 탐지 워커 수명주기 ─────────────────────────────────────────
+
+    def start_detection_worker(self) -> None:
+        """세션 탐지 큐를 소비하는 백그라운드 워커 스레드를 시작한다 (1회)."""
+        if self._detection_thread is not None and self._detection_thread.is_alive():
+            return
+        from c2.application.simulation.replan import detection_worker
+
+        self._worker_stop.clear()
+        t = threading.Thread(
+            target=detection_worker, args=(self,), daemon=True, name="DetectionWorker"
+        )
+        self._detection_thread = t
+        t.start()
+
+    def stop_detection_worker(self, timeout: float = 5.0) -> None:
+        """탐지 워커 스레드에 정지 신호를 보내고 종료를 대기한다."""
+        self._worker_stop.set()
+        t = self._detection_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+        self._detection_thread = None
 
     def _ontology_flush(self) -> None:
         """온톨로지 적재기에 비동기 즉시 스냅샷 요청 (엔진 틱 스레드 논블로킹)."""
@@ -132,12 +199,19 @@ class WargameSession:
 
     def _register_callbacks(self, engine) -> None:
         """콜백 4종을 항상 (재)등록한다 (CLAUDE.md 필수)."""
-        engine.on_new_opfor_detection = self._detection_enqueue
-        engine.on_blufor_cp_threshold = self._cp_threshold_enqueue
-        engine.on_blufor_air_hit = self._air_hit_enqueue
-        engine.on_target_moved = self._target_moved_enqueue
+        engine.on_new_opfor_detection = self.enqueue_detection
+        engine.on_blufor_cp_threshold = self.enqueue_cp_threshold
+        engine.on_blufor_air_hit = self.enqueue_air_hit
+        engine.on_target_moved = self.enqueue_target_moved
 
     # ── 엔진 생명주기 ──────────────────────────────────────────────
+
+    def _ensure_planner(self) -> None:
+        """자동 재계획 폴백/파싱에 쓰이는 MissionPlanner를 준비한다 (세션당 1회)."""
+        if self.planner is None:
+            from c2.application.agent.mission_planner import MissionPlanner
+
+            self.planner = MissionPlanner()
 
     def register_engine(self, engine) -> None:
         """presentation 계층 툴들에 엔진을 등록한다 (주입된 훅 경유)."""
@@ -165,6 +239,7 @@ class WargameSession:
         if self.engine is None:
             engine = self._engine_factory()
             self.engine = engine
+            self._ensure_planner()
             self.register_engine(engine)
             self._register_callbacks(engine)
             # UAV 완전 정찰 가정 (철원 시나리오) — 존재하는 속성일 때만 설정
@@ -191,6 +266,9 @@ class WargameSession:
         engine = self.engine
         engine.reset(units)
 
+        self._ensure_planner()
+        # 엔진 틱이 0으로 초기화되므로 재계획 쿨다운 기준도 초기화
+        self.last_replan_tick = -30
         self.register_engine(engine)
         self._register_callbacks(engine)
         try:
