@@ -15,7 +15,7 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 |--------|------|-----------|
 | **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`c2.presentation.web.api`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
 | **Agent / Planner** | 초록 | `LangGraphBattlefieldAgent`(기본) 또는 `BattlefieldAgent`(smolagents CodeAgent, EXAONE4) + `MissionPlanner` + 자동 재계획 워커(`c2.application.simulation.replan`) |
-| **Tools** | 주황·청록·보라 | 에이전트가 코드로 호출하는 도구 레이어 — 17개 도구, 스텝당 1개 제한 |
+| **Tools** | 주황·청록·보라 | 에이전트가 호출하는 LLM 툴 어댑터(`c2.presentation.tools`) — 13개 도구, 스텝당 1개 제한 |
 | **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
 | **Data / External** | 빨강 | 시나리오, SQLite DB, COHA 온톨로지 TTL |
 
@@ -616,10 +616,29 @@ COHA(Command and Ontology for Hostile Action) 군사 전술 온톨로지를 rdfl
 
 ## 파일 구조
 
-4계층 클린 아키텍처(`src/c2/{domain,application,infrastructure,presentation}/` +
-`src/c2/composition/` 조립 루트)로 구성되어 있습니다. 레거시 top-level 패키지
-(`agent/`, `wargame/`, `tools/`, `ui/gradio_app.py`)는 모두 삭제되었습니다.
-계층별 상세 매핑·의존성 규칙·import-linter 계약은 `CLAUDE.md`를 참고하세요.
+`src/c2/` 아래 **실용형 4계층 클린 아키텍처**로 구성됩니다. 모든 의존성은 안쪽(도메인)을
+향하며, 바깥 계층은 안쪽 계층이 정의한 **포트(인터페이스)** 를 통해서만 연결됩니다.
+이 의존성 규칙은 `import-linter` 계약 3종으로 **자동 강제**됩니다
+(`PYTHONPATH=src lint-imports` → 3 kept, 0 broken).
+
+```
+presentation ─┐
+              ├─▶ application ─▶ domain
+infrastructure┘   (ports)  ▲
+                           └── infrastructure가 포트를 구현 (의존성 역전, DI 주입)
+composition ─────────────────▶ 모든 계층을 조립 (조립 루트)
+```
+
+| 계층 | 역할 | 프레임워크·IO |
+|------|------|--------------|
+| **domain** | 순수 도메인 규칙·값 객체 — 부대/전투/지형/좌표, 온톨로지 엔티티, 임무계획 스키마. 어떤 계층도 import하지 않음 | ❌ 표준 라이브러리(+numpy/pydantic) |
+| **application** | 유스케이스·오케스트레이션 — 시뮬 엔진·세션·자동재계획·임무계획·온톨로지 서비스·하네스. **포트 5종** 정의 | ❌ 포트로 IO 추상화 |
+| **infrastructure** | 포트 구현체 — vLLM 클라이언트, SQLite, 온톨로지 스토어, PostgreSQL, rdflib | ✅ |
+| **presentation** | 전달 계층 — FastAPI web_api·HTML 대시보드, LLM 툴 어댑터, 에이전트 런타임 | ✅ |
+| **composition** | 조립 루트 — 포트↔구현 바인딩, 전 계층 DI 주입 | ✅ |
+
+> 이전의 레거시 top-level 패키지(`wargame/`·`agent/`·`ontology/`·`tools/`·`ui/gradio_app.py`)와
+> ARMA3 연동·PDF RAG·Gradio UI는 모두 **삭제**되었습니다. 상세 매핑은 `CLAUDE.md` 참고.
 
 ```
 C2_program_ai/
@@ -661,6 +680,72 @@ C2_program_ai/
 ├── main.py                            # 진입점 (ui / query / check-env)
 └── requirements.txt
 ```
+
+### 계층별 기능 구성
+
+핵심 컴포넌트를 기능 영역별로 정리하면 다음과 같습니다.
+
+**① 워게임 시뮬레이션 — `application/simulation/`**
+- `engine.py` — `WargameEngine`: 틱 루프(2Hz), 전투·탐지·공중지원 처리, 부대 상태 전이.
+  네 가지 이벤트 콜백(신규 탐지 / CP 임계값 / 공중지원 피격 / 표적 이동)을 발동한다.
+  `WargameDB`(SQLite)를 직접 알지 않고 **`EventStore` 포트**에 의존하며, 기본 구현은
+  조립 루트가 DI factory로 주입한다.
+- `scenario.py` — 초기 부대 배치(`setup_bn_vs_bn`, 철원 시나리오, 커스텀 시나리오).
+- `session.py` — `WargameSession`: 엔진 생명주기·탐지 워커 스레드·세션 조작(시작/정지,
+  리셋, 배속, 정찰/공격 계획, 채팅, 평가/학습, 시나리오 적용)을 소유하고 **데이터(dict)** 를
+  반환한다. UI는 이 데이터를 받아 렌더링만 한다.
+- `replan.py` — 자동 재계획 워커: 위 4종 이벤트를 큐로 받아 에이전트로 공격/정찰 임무를
+  재수립한다.
+
+**② 에이전트 & 임무계획 — `application/agent/`, `presentation/agent/`**
+- `application/agent/mission_planner.py` — `build_mission_query()` / `MissionPlanner`:
+  전장 상황을 프롬프트로 구성. 정찰·공격·화력 advisor는 **주입 레지스트리**로 받아
+  (application이 tools를 import하지 않도록) `wargame↔tools` 순환을 제거했다.
+- `presentation/agent/langgraph_agent.py` — LangGraph StateGraph(ReAct) 오케스트레이터(기본).
+- `presentation/agent/battlefield_agent.py` — smolagents CodeAgent 오케스트레이터(대안).
+- `presentation/agent/langgraph_tools.py` — smolagents 툴을 LangChain `StructuredTool`로 래핑.
+
+**③ LLM 툴 어댑터(13종) — `presentation/tools/`**
+상황조회·임무적용·정찰·공격위치·화력우선순위·적경로예측·전략추천·COA분석·온톨로지질의·
+그래프RAG(교리)·임무계획검증·단일툴가드. 에이전트가 호출하는 인터페이스 어댑터로,
+`application`/`domain` 유스케이스를 감싼다.
+
+**④ 온톨로지(지식그래프 + 교리 RAG) — `*/ontology/`**
+- `domain/ontology/models.py` — KG 엔티티(`KnowledgeNode/Edge/Evidence` 등).
+- `application/ontology/` — `wargame_builder`(전장→KG), `writer`(이벤트·스냅샷 적재),
+  `retrieval`(GraphRAG 질의), `coa_view`(상황 직렬화).
+- `infrastructure/ontology/` — `graph_store`(Neo4j)·`in_memory_store`(폴백)·`factory`,
+  `doctrine_loader`(COHA 교리 온톨로지 TTL을 rdflib로 조회하는 Graph RAG).
+
+**⑤ 학습/평가 하네스 — `application/harness/`**
+`episode_runner`·`metrics`·`rule_extractor`·`rule_manager`·`tactical_memory` —
+반복 시뮬로 전술 규칙을 추출·평가·누적. `HarnessDB`는 `HarnessStore` 포트로 주입.
+
+**⑥ 포트 & 조립 루트 — `application/ports/`, `composition/`**
+- 포트 5종: `LLMClient`·`EventStore`·`OntologyStore`·`ConversationStore`·`HarnessStore`
+  (application이 정의, infrastructure가 구현).
+- `composition/container.py` — `build_session()`: EventStore/HarnessStore factory,
+  정찰/공격/화력 advisor, 8개 툴의 엔진 등록, 온톨로지 스토어, 에이전트를 **한곳에서 wiring**.
+  애플리케이션의 유일한 의존성 주입 지점.
+
+**⑦ 인프라 어댑터 — `infrastructure/`**
+- `llm/` — `vllm_client`(EXAONE4 OpenAI 호환), `model_loader`, `langgraph_llm`(vLLM/Gemini).
+- `persistence/` — `sqlite_event_store`(WargameDB), `harness_db`, `conversation_store`(PostgreSQL/in-memory).
+
+**⑧ UI — `presentation/web/`, `ui/dashboard/`**
+- `web/api.py` — FastAPI REST(`create_app`/`start_server`): 엔진 제어·상태·이벤트·채팅·
+  임무(정찰/공격/평가)·시나리오·자동계획상태 엔드포인트. `WargameSession`을 조립 루트에서
+  받아 사용하며 Gradio에 의존하지 않는다.
+- `ui/dashboard/index.html` — Leaflet 전장 지도 대시보드(FastAPI가 정적 서빙).
+
+### 요청 흐름 (예: `POST /api/mission/attack`)
+```
+브라우저(대시보드) → FastAPI web/api.py → WargameSession.request_attack_plan()
+   → MissionPlanner.build_mission_query() + 에이전트(LLM) → 임무계획 JSON
+   → WargameEngine.apply_mission_plan()  (EventStore 포트로 이벤트 기록)
+   → 상태 dict 반환 → 대시보드 지도 갱신
+```
+엔진의 탐지/피격 이벤트는 `replan.py` 워커가 큐로 받아 자동으로 재계획을 수행한다.
 
 ---
 
