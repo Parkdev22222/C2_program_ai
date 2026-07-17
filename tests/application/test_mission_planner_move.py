@@ -1,7 +1,6 @@
-"""Task 22: llm_planner → c2.application.agent.mission_planner + advisor 주입 검증.
+"""Task 22/33: mission_planner (c2.application.agent.mission_planner) + advisor 주입 검증.
 
 - 이동한 모듈에서 공개 심볼 import 가능
-- shim identity (wargame.llm_planner.X is mission_planner.X)
 - 이동 모듈은 tools/ui/wargame(legacy) 를 import 하지 않음
 - advisor 주입(DI)이 프롬프트에 반영됨
 - advisor 미등록 시 graceful fallback (문자열 반환)
@@ -34,13 +33,6 @@ def test_public_symbols_importable():
     assert callable(mp.build_mission_query)
     assert callable(mp.set_planning_advisors)
     assert inspect.isclass(mp.MissionPlanner)
-
-
-def test_shim_identity():
-    import wargame.llm_planner as shim
-    assert shim.build_mission_query is mp.build_mission_query
-    assert shim.MissionPlanner is mp.MissionPlanner
-    assert shim.set_planning_advisors is mp.set_planning_advisors
 
 
 def test_module_has_no_outward_imports():

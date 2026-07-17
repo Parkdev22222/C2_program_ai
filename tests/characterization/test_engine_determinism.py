@@ -2,9 +2,9 @@ import random
 import tempfile
 from pathlib import Path
 
-from wargame.scenario import setup_bn_vs_bn
-from wargame.engine import WargameEngine
-from wargame.models import WargameDB
+from c2.application.simulation.scenario import setup_bn_vs_bn
+from c2.application.simulation.engine import WargameEngine
+from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
 # 900틱 동안 BLUFOR 공격부대가 OPFOR 표적을 향해 실제로 진격·교전하도록
 # 강제하는 임무계획. 좌표는 setup_bn_vs_bn()의 OPFOR 초기 배치 좌표

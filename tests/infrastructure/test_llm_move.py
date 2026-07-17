@@ -1,7 +1,6 @@
-"""Task 13: LLM 인프라 이동 — c2.infrastructure.llm + shim 검증.
+"""Task 13/33: LLM 인프라 — c2.infrastructure.llm.
 
 - 새 경로(c2.infrastructure.llm.*)에서 구현체가 임포트 가능한지 확인.
-- 옛 경로(agent.*)가 새 경로와 동일 객체(identity)를 재노출하는 shim인지 확인.
 """
 
 
@@ -22,17 +21,6 @@ def test_vllm_client_importable_from_new_path():
     assert isinstance(LAUNCH_HINT, str)
 
 
-def test_vllm_client_shim_identity():
-    import agent.vllm_client as old
-    import c2.infrastructure.llm.vllm_client as new
-
-    assert old.VLLMServerClient is new.VLLMServerClient
-    assert old.resolve_base_url is new.resolve_base_url
-    assert old.normalize_messages is new.normalize_messages
-    assert old.DEFAULT_API_KEY is new.DEFAULT_API_KEY
-    assert old.LAUNCH_HINT is new.LAUNCH_HINT
-
-
 # ── model_loader ────────────────────────────────────────────────────────
 def test_model_loader_importable_from_new_path():
     from c2.infrastructure.llm.model_loader import (
@@ -46,16 +34,6 @@ def test_model_loader_importable_from_new_path():
     assert callable(load_exaone_model)
     assert callable(load_model_from_config_file)
     assert callable(load_exaone_model_config)
-
-
-def test_model_loader_shim_identity():
-    import agent.model_loader as old
-    import c2.infrastructure.llm.model_loader as new
-
-    assert old.EXAONE4ServedModel is new.EXAONE4ServedModel
-    assert old.load_exaone_model is new.load_exaone_model
-    assert old.load_model_from_config_file is new.load_model_from_config_file
-    assert old.load_exaone_model_config is new.load_exaone_model_config
 
 
 def test_model_loader_config_path_still_resolves():
@@ -88,16 +66,6 @@ def test_langgraph_llm_importable_from_new_path():
     assert callable(describe_llm_target)
     assert callable(resolve_provider)
     assert callable(resolve_base_url)
-
-
-def test_langgraph_llm_shim_identity():
-    import agent.langgraph_llm as old
-    import c2.infrastructure.llm.langgraph_llm as new
-
-    assert old.build_chat_llm is new.build_chat_llm
-    assert old.describe_llm_target is new.describe_llm_target
-    assert old.resolve_provider is new.resolve_provider
-    assert old.resolve_base_url is new.resolve_base_url
 
 
 def test_langgraph_llm_config_path_still_resolves():

@@ -1,9 +1,7 @@
-"""Task 23: 온톨로지 애플리케이션 서비스 → c2.application.ontology + shim.
+"""Task 23/33: 온톨로지 애플리케이션 서비스 (c2.application.ontology).
 
 - builder(wargame_builder)/retrieval/writer/coa_view 는 그래프 스토어를 생성자·함수
   인자로 주입받는 DI-friendly 모듈이라 애플리케이션 계층으로 그대로 이동 가능하다.
-- 레거시 shim(ontology.wargame_builder/retrieval/writer/coa_view)은 항등 재노출만
-  수행한다.
 - 애플리케이션 온톨로지 모듈은 domain + application(.ports) + stdlib 외 아무것도
   import 하지 않는다 (infrastructure/tools/ui import 시 import-linter 의
   application-no-outward 계약 위반).
@@ -28,34 +26,6 @@ def test_public_symbols_importable_from_application():
 
     coa_view = importlib.import_module("c2.application.ontology.coa_view")
     assert hasattr(coa_view, "serialize_situation")
-
-
-def test_shim_identity_for_all_public_symbols():
-    import ontology.wargame_builder as shim_wb
-    import c2.application.ontology.wargame_builder as app_wb
-
-    for name in ("WargameOntologyBuilder", "WARGAME_SCENARIO_ID", "seed_entity_ids", "xy_to_latlon"):
-        assert getattr(shim_wb, name) is getattr(app_wb, name), (
-            f"{name} 이 shim과 application 모듈에서 동일 객체가 아님 (wargame_builder)"
-        )
-
-    import ontology.retrieval as shim_retrieval
-    import c2.application.ontology.retrieval as app_retrieval
-
-    for name in ("retrieve_graph_context", "GraphStore"):
-        assert getattr(shim_retrieval, name) is getattr(app_retrieval, name), (
-            f"{name} 이 shim과 application 모듈에서 동일 객체가 아님 (retrieval)"
-        )
-
-    import ontology.writer as shim_writer
-    import c2.application.ontology.writer as app_writer
-
-    assert shim_writer.OntologyWriter is app_writer.OntologyWriter
-
-    import ontology.coa_view as shim_coa
-    import c2.application.ontology.coa_view as app_coa
-
-    assert shim_coa.serialize_situation is app_coa.serialize_situation
 
 
 def test_application_ontology_modules_have_no_outward_imports():

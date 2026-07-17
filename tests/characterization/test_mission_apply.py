@@ -2,9 +2,9 @@ import random
 import tempfile
 from pathlib import Path
 
-from wargame.scenario import setup_bn_vs_bn
-from wargame.engine import WargameEngine
-from wargame.models import WargameDB
+from c2.application.simulation.scenario import setup_bn_vs_bn
+from c2.application.simulation.engine import WargameEngine
+from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
 
 def _engine():

@@ -1,9 +1,7 @@
-"""Task 16: 온톨로지 스토어 이동 — c2.infrastructure.ontology + shim 검증.
+"""Task 16/33: 온톨로지 스토어 — c2.infrastructure.ontology.
 
 - 새 경로(c2.infrastructure.ontology.*)에서 Neo4jGraphStore/InMemoryGraphStore/
   build_graph_store 가 임포트 가능한지 확인.
-- 옛 경로(ontology.graph_store / ontology.in_memory_store / ontology.factory)가
-  새 경로와 동일 객체(identity)를 재노출하는 shim인지 확인.
 - InMemoryGraphStore 가 OntologyStore 포트를 여전히 구조적으로(isinstance) 만족하는지,
   merge_node → neighborhood/unit_entity_ids 라운드트립이 동작하는지 확인.
 - neo4j 미접속 환경에서 build_graph_store() 가 in-memory 스토어로 폴백하는지 확인.
@@ -19,20 +17,6 @@ def test_stores_importable_from_new_path():
     assert Neo4jConfig is not None
     assert InMemoryGraphStore is not None
     assert build_graph_store is not None
-
-
-def test_shim_identity():
-    import ontology.graph_store as old_graph_store
-    import ontology.in_memory_store as old_in_memory_store
-    import ontology.factory as old_factory
-    import c2.infrastructure.ontology.graph_store as new_graph_store
-    import c2.infrastructure.ontology.in_memory_store as new_in_memory_store
-    import c2.infrastructure.ontology.factory as new_factory
-
-    assert old_graph_store.Neo4jGraphStore is new_graph_store.Neo4jGraphStore
-    assert old_graph_store.Neo4jConfig is new_graph_store.Neo4jConfig
-    assert old_in_memory_store.InMemoryGraphStore is new_in_memory_store.InMemoryGraphStore
-    assert old_factory.build_graph_store is new_factory.build_graph_store
 
 
 def test_in_memory_store_satisfies_ontology_store_port():

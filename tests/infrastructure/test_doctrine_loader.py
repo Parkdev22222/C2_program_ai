@@ -66,15 +66,15 @@ def test_functional_query_returns_related_concepts_or_degrades_gracefully():
 
 
 def test_tool_wrapper_still_callable_with_same_shape():
-    from tools.graph_rag_tool import graph_rag_military_query
+    from c2.presentation.tools.graph_rag_tool import graph_rag_military_query
 
     result = graph_rag_military_query("Armor Unit")
     assert isinstance(result, str)
 
 
 def test_tool_wrapper_delegates_to_infra_loader():
-    """tools/graph_rag_tool.py 는 이제 c2.infrastructure.ontology.doctrine_loader 에 위임한다."""
-    import tools.graph_rag_tool as tool_module
+    """c2.presentation.tools.graph_rag_tool 는 c2.infrastructure.ontology.doctrine_loader 에 위임한다."""
+    import c2.presentation.tools.graph_rag_tool as tool_module
     from c2.infrastructure.ontology import doctrine_loader
 
     assert tool_module.query_military_ontology is doctrine_loader.query_military_ontology

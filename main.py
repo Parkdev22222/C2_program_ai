@@ -32,7 +32,7 @@ def preload_models():
     모델은 별도 프로세스의 vLLM 서버에서 동작합니다.
     서버 기동: python scripts/launch_vllm_servers.py
     """
-    from agent.model_loader import load_model_from_config_file
+    from c2.infrastructure.llm.model_loader import load_model_from_config_file
 
     logger.info("=== vLLM 서버 클라이언트 초기화 시작 ===")
     logger.info("EXAONE4 (메인 에이전트 모델) 서버 연결 중...")
@@ -57,11 +57,11 @@ def init_agent(exaone4_model=None):
     import os
     backend = os.environ.get("C2_AGENT_BACKEND", "langgraph").strip().lower()
     if backend == "smolagents":
-        from agent.battlefield_agent import BattlefieldAgent
+        from c2.presentation.agent.battlefield_agent import BattlefieldAgent
         logger.info("BattlefieldAgent(smolagents) 초기화 중...")
         agent = BattlefieldAgent(exaone4_model=exaone4_model)
     else:
-        from agent.langgraph_agent import LangGraphBattlefieldAgent
+        from c2.presentation.agent.langgraph_agent import LangGraphBattlefieldAgent
         logger.info("LangGraphBattlefieldAgent 초기화 중...")
         agent = LangGraphBattlefieldAgent(exaone4_model=exaone4_model)
     logger.info("에이전트 초기화 완료 (backend=%s)", backend)
@@ -86,7 +86,7 @@ def cmd_ui(args):
     from c2.composition.container import build_session
     build_session(agent=agent)
 
-    from ui.web_api import start_server
+    from c2.presentation.web.api import start_server
     start_server(agent=agent, host=args.host, port=args.port)
 
 
@@ -167,8 +167,8 @@ def cmd_check_env(args):
                   f"(기동: python scripts/launch_vllm_servers.py)")
 
     try:
-        from agent.vllm_client import resolve_base_url
-        from agent.model_loader import (
+        from c2.infrastructure.llm.vllm_client import resolve_base_url
+        from c2.infrastructure.llm.model_loader import (
             load_exaone_model_config, AGENT_BASE_URL_ENV, AGENT_DEFAULT_PORT,
         )
         agent_cfg = load_exaone_model_config()

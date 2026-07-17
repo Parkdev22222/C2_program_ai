@@ -1,7 +1,6 @@
-"""Task 15: 대화 저장소 이동 — c2.infrastructure.persistence.conversation_store + shim 검증.
+"""Task 15/33: 대화 저장소 — c2.infrastructure.persistence.conversation_store.
 
 - 새 경로(c2.infrastructure.persistence.conversation_store)에서 구현체가 임포트 가능한지 확인.
-- 옛 경로(agent.conversation_store)가 새 경로와 동일 객체(identity)를 재노출하는 shim인지 확인.
 - ConversationStore Protocol이 c2.application.ports.conversation_store의 정본과 통일됐는지 확인.
 - 실제 동작(round-trip) 및 psycopg 미설치 시 in-memory 폴백 확인.
 """
@@ -30,25 +29,6 @@ def test_conversation_store_protocol_unified_with_canonical_port():
     )
 
     assert InfraProtocol is PortProtocol
-
-
-# ── 옛 경로(agent.conversation_store)는 shim ──────────────────────────
-def test_conversation_store_shim_identity():
-    import agent.conversation_store as old
-    import c2.infrastructure.persistence.conversation_store as new
-
-    assert old.ConversationStore is new.ConversationStore
-    assert old.InMemoryConversationStore is new.InMemoryConversationStore
-    assert old.PostgresConversationStore is new.PostgresConversationStore
-    assert old.build_conversation_store is new.build_conversation_store
-
-
-def test_shim_conversation_store_is_canonical_port():
-    """agent.conversation_store.ConversationStore가 정본 포트와 동일 객체여야 한다."""
-    from c2.application.ports.conversation_store import ConversationStore as PortProtocol
-    import agent.conversation_store as old
-
-    assert old.ConversationStore is PortProtocol
 
 
 # ── 포트 정합성 + 기능 round-trip ──────────────────────────────────────

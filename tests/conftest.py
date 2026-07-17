@@ -27,3 +27,28 @@ except ModuleNotFoundError:
     _smolagents_stub.Tool = type("Tool", (), {})
     _smolagents_stub.CodeAgent = None
     sys.modules["smolagents"] = _smolagents_stub
+
+# ─────────────────────────────────────────────────────────────────────────
+# Task 33: DI 기본 팩토리 wiring
+#
+# 과거에는 `wargame/engine.py`, `wargame/harness/__init__.py` 레거시 shim이
+# import 시점에 `set_default_event_store_factory()` / `set_default_harness_db_factory()`
+# 를 호출해 기본 팩토리를 전역 등록했다. 이제 테스트는 c2.* 를 직접 import하므로
+# 그 shim import가 더 이상 일어나지 않는다 — db 를 명시적으로 주입하지 않는 소수의
+# 테스트(engine/harness controller의 "기본 팩토리로 db 없이 생성" 동작 검증)를 위해
+# 세션 전체에서 한 번 기본 팩토리를 임시 경로로 wiring한다 (프로덕션 wiring은
+# `c2.composition.container.build_session()` 이 담당하며 이와 무관).
+# ─────────────────────────────────────────────────────────────────────────
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _wire_default_di_factories(tmp_path_factory):
+    from c2.application.simulation.engine import set_default_event_store_factory
+    from c2.infrastructure.persistence.sqlite_event_store import WargameDB
+    from c2.application.harness.controller import set_default_harness_db_factory
+    from c2.infrastructure.persistence.harness_db import HarnessDB
+
+    db_dir = tmp_path_factory.mktemp("default_stores")
+    set_default_event_store_factory(lambda: WargameDB(db_path=db_dir / "wargame_state.db"))
+    set_default_harness_db_factory(lambda: HarnessDB(db_path=db_dir / "harness.db"))

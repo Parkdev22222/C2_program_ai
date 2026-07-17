@@ -1,9 +1,10 @@
-"""Task 31 — Gradio UI 삭제 검증.
+"""Task 31/33 — Gradio UI 삭제 검증.
 
 목적:
   1. `ui/gradio_app.py` 파일 자체가 더 이상 존재하지 않음을 고정한다.
-  2. `import ui.web_api`가 gradio 없이 성공함을 런타임으로 검증한다
-     (Task 30에서 web_api가 gradio 비의존이 됐음을 재확인).
+  2. `c2.presentation.web.api`가 gradio 없이 성공함을 런타임으로 검증한다
+     (Task 30에서 web_api가 gradio 비의존이 됐음을 재확인; Task 33에서 레거시
+     `ui.web_api` shim 대신 실제 이식 위치를 직접 검증하도록 갱신).
   3. 테스트/gradio-부재 단언 파일을 제외한 나머지 소스 파일 어디에도
      `ui.gradio_app`에 대한 실제 런타임 import 구문이 남아있지 않음을
      소스 검사로 고정한다 (주석/docstring의 역사적 언급은 허용).
@@ -36,13 +37,13 @@ def test_gradio_app_file_does_not_exist():
     )
 
 
-def test_import_ui_web_api_succeeds_without_gradio():
-    """gradio가 설치되어 있지 않은 이 환경에서 ui.web_api import가 성공해야 한다."""
+def test_import_web_api_succeeds_without_gradio():
+    """gradio가 설치되어 있지 않은 이 환경에서 c2.presentation.web.api import가 성공해야 한다."""
     import importlib
     import sys
 
-    sys.modules.pop("ui.web_api", None)
-    mod = importlib.import_module("ui.web_api")
+    sys.modules.pop("c2.presentation.web.api", None)
+    mod = importlib.import_module("c2.presentation.web.api")
     assert hasattr(mod, "app") or hasattr(mod, "start_server")
 
 

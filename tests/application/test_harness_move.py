@@ -1,13 +1,14 @@
-"""Task 26: 하네스(학습/평가) → c2.application.harness + harness_db → infra + shim 검증.
+"""Task 26/33: 하네스(학습/평가) — c2.application.harness + c2.infrastructure.persistence.harness_db.
 
 - 오케스트레이션(controller/episode_runner/metrics/rule_extractor/rule_manager/
-  tactical_memory)은 c2.application.harness 로 이동.
-- SQLite 영속 저장(HarnessDB)은 c2.infrastructure.persistence.harness_db 로 이동.
+  tactical_memory)은 c2.application.harness 에 있다.
+- SQLite 영속 저장(HarnessDB)은 c2.infrastructure.persistence.harness_db 에 있다.
 - 애플리케이션 하네스는 인프라(HarnessDB)를 런타임에 import 하지 않는다 —
   controller의 HarnessDB 의존은 DI 팩토리(Task 20의 EventStore 패턴과 동일)로 역전.
 - 인프라 harness_db는 애플리케이션(EpisodeMetrics)을 런타임에 import 하지 않는다 —
   TYPE_CHECKING 가드만 사용 (타입힌트 전용).
-- 레거시 shim(wargame.harness.*)은 항등 재노출 + 기본 HarnessDB 팩토리 주입을 수행한다.
+- 기본 HarnessDB 팩토리는 tests/conftest.py 의 세션 autouse fixture 가 주입한다
+  (Task 33: 레거시 shim import 소비 제거 이후 default factory wiring을 conftest 로 이관).
 """
 
 import importlib
@@ -47,43 +48,6 @@ def test_orchestration_importable_from_application():
     controller_mod = importlib.import_module("c2.application.harness.controller")
     assert hasattr(controller_mod, "HarnessController")
     assert hasattr(controller_mod, "set_default_harness_db_factory")
-
-
-# ── (b) shim 항등성 ────────────────────────────────────────────────────
-
-def test_shim_identity_for_all_public_symbols():
-    import wargame.harness as shim_pkg
-
-    from c2.application.harness.metrics import EpisodeMetrics as AppEpisodeMetrics
-    from c2.application.harness.episode_runner import EpisodeRunner as AppEpisodeRunner
-    from c2.application.harness.rule_extractor import RuleExtractor as AppRuleExtractor
-    from c2.application.harness.rule_manager import RuleManager as AppRuleManager
-    from c2.application.harness.controller import HarnessController as AppController
-    from c2.application.harness.tactical_memory import (
-        TacticalMemory as AppTacticalMemory,
-        SpatialRuleExtractor as AppSpatialRuleExtractor,
-        get_tactical_memory as app_get_tactical_memory,
-    )
-    from c2.infrastructure.persistence.harness_db import HarnessDB as InfraHarnessDB
-
-    assert shim_pkg.EpisodeMetrics is AppEpisodeMetrics
-    assert shim_pkg.EpisodeRunner is AppEpisodeRunner
-    assert shim_pkg.RuleExtractor is AppRuleExtractor
-    assert shim_pkg.RuleManager is AppRuleManager
-    assert shim_pkg.HarnessController is AppController
-    assert shim_pkg.TacticalMemory is AppTacticalMemory
-    assert shim_pkg.SpatialRuleExtractor is AppSpatialRuleExtractor
-    assert shim_pkg.get_tactical_memory is app_get_tactical_memory
-    assert shim_pkg.HarnessDB is InfraHarnessDB
-
-    import wargame.harness.tactical_memory as shim_tm
-    assert shim_tm.get_tactical_memory is app_get_tactical_memory
-    assert shim_tm.sample_terrain_profile is (
-        importlib.import_module("c2.application.harness.tactical_memory").sample_terrain_profile
-    )
-
-    import wargame.harness.harness_db as shim_db
-    assert shim_db.HarnessDB is InfraHarnessDB
 
 
 # ── (c) 애플리케이션 하네스 소스에 인프라/레거시 import 없음 ─────────────
@@ -189,19 +153,12 @@ def test_di_factory_smoke_with_temp_db(tmp_path, monkeypatch):
     assert db_path.exists()
 
 
-def test_legacy_shim_wires_default_factory(tmp_path, monkeypatch):
-    """wargame.harness import 시 기본 HarnessDB 팩토리가 주입됨을 확인."""
-    import wargame.harness  # noqa: F401  (팩토리 wiring 발생)
+def test_default_harness_db_factory_wired_via_conftest():
+    """tests/conftest.py 의 autouse fixture 가 기본 HarnessDB 팩토리를 주입함을 확인
+    (Task 33: 레거시 wargame.harness shim import 없이도 db 미주입 생성이 동작해야 함)."""
     controller_mod = importlib.import_module("c2.application.harness.controller")
 
     assert controller_mod._default_harness_db_factory is not None
 
-    # 실제 팩토리 호출은 기본 data/harness.db 경로를 사용하므로,
-    # 팩토리가 HarnessDB 인스턴스를 만들어낼 수 있는지만 별도 임시 경로로 검증.
-    from c2.infrastructure.persistence.harness_db import HarnessDB
-
-    monkeypatch.setattr(
-        controller_mod, "_default_harness_db_factory", lambda: HarnessDB(tmp_path / "legacy.db")
-    )
-    ctrl = wargame.harness.HarnessController(engine_factory=lambda: None)
+    ctrl = controller_mod.HarnessController(engine_factory=lambda: None)
     assert ctrl.get_db_stats() is not None

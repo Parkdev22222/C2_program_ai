@@ -68,7 +68,7 @@ def test_vllm_server_client_satisfies_llm_client_port():
     """VLLMServerClient는 openai 패키지 없이도 import는 가능하다(지연 import).
     실제 연결이 필요하므로 인스턴스화 없이 클래스 단위 구조 검사만 수행."""
     from c2.application.ports.llm import LLMClient
-    from agent.vllm_client import VLLMServerClient
+    from c2.infrastructure.llm.vllm_client import VLLMServerClient
 
     assert issubclass(VLLMServerClient, LLMClient)
 
@@ -87,7 +87,7 @@ def test_ontology_store_port_methods():
 
 def test_in_memory_graph_store_isinstance_ontology_store():
     from c2.application.ports.ontology_store import OntologyStore
-    from ontology.in_memory_store import InMemoryGraphStore
+    from c2.infrastructure.ontology.in_memory_store import InMemoryGraphStore
 
     store = InMemoryGraphStore()
     assert isinstance(store, OntologyStore)
@@ -96,7 +96,7 @@ def test_in_memory_graph_store_isinstance_ontology_store():
 def test_neo4j_graph_store_satisfies_ontology_store_port():
     """Neo4j driver/서버가 필요하므로 인스턴스화 없이 클래스 단위 구조 검사만 수행."""
     from c2.application.ports.ontology_store import OntologyStore
-    from ontology.graph_store import Neo4jGraphStore
+    from c2.infrastructure.ontology.graph_store import Neo4jGraphStore
 
     assert issubclass(Neo4jGraphStore, OntologyStore)
 
@@ -115,7 +115,7 @@ def test_event_store_port_methods():
 
 def test_wargame_db_isinstance_event_store(tmp_path):
     from c2.application.ports.event_store import EventStore
-    from wargame.models import WargameDB
+    from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
     db = WargameDB(db_path=tmp_path / "test_wargame.db")
     assert isinstance(db, EventStore)
@@ -131,7 +131,7 @@ def test_conversation_store_port_methods():
 
 def test_in_memory_conversation_store_isinstance_conversation_store():
     from c2.application.ports.conversation_store import ConversationStore
-    from agent.conversation_store import InMemoryConversationStore
+    from c2.infrastructure.persistence.conversation_store import InMemoryConversationStore
 
     store = InMemoryConversationStore()
     assert isinstance(store, ConversationStore)
@@ -140,7 +140,7 @@ def test_in_memory_conversation_store_isinstance_conversation_store():
 def test_postgres_conversation_store_satisfies_conversation_store_port():
     """PostgreSQL 접속이 필요하므로 인스턴스화 없이 클래스 단위 구조 검사만 수행."""
     from c2.application.ports.conversation_store import ConversationStore
-    from agent.conversation_store import PostgresConversationStore
+    from c2.infrastructure.persistence.conversation_store import PostgresConversationStore
 
     assert issubclass(PostgresConversationStore, ConversationStore)
 

@@ -1,7 +1,6 @@
-"""Task 14: WargameDB(SQLite) 이동 — c2.infrastructure.persistence.sqlite_event_store + shim 검증.
+"""Task 14/33: WargameDB(SQLite) — c2.infrastructure.persistence.sqlite_event_store.
 
 - 새 경로(c2.infrastructure.persistence.sqlite_event_store)에서 WargameDB가 임포트 가능한지 확인.
-- 옛 경로(wargame.models)가 새 경로와 동일 객체(identity)를 재노출하는 shim인지 확인.
 - WargameDB가 EventStore 포트를 여전히 구조적으로 만족하는지 확인.
 - 모듈 위치가 깊어져도 기본 DB_PATH가 기존과 동일한 저장소 위치(repo-root/data/...)를 가리키는지 확인.
 """
@@ -14,14 +13,6 @@ def test_wargame_db_importable_from_new_path():
 
     assert WargameDB is not None
     assert isinstance(DB_PATH, Path)
-
-
-def test_wargame_db_shim_identity():
-    import wargame.models as old
-    import c2.infrastructure.persistence.sqlite_event_store as new
-
-    assert old.WargameDB is new.WargameDB
-    assert old.DB_PATH is new.DB_PATH
 
 
 def test_wargame_db_satisfies_event_store_port(tmp_path):

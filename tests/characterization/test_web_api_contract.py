@@ -35,9 +35,9 @@ def _client():
     import 체인 실패 (gradio/smolagents 누락 등) → pytest.skip() 처리.
     """
     try:
-        import ui.web_api as web_api
+        import c2.presentation.web.api as web_api
     except ImportError as e:
-        pytest.skip(f"ui.web_api import 실패 (선택적 의존성 누락): {e}")
+        pytest.skip(f"c2.presentation.web.api import 실패 (선택적 의존성 누락): {e}")
 
     app = web_api.create_app() if hasattr(web_api, "create_app") else web_api.app
     if app is None:

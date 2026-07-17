@@ -14,19 +14,3 @@ def test_terrain_public_api_from_domain():
     assert isinstance(cov, float)
     spd = terrain.terrain.movement_speed_factor(1000, 1000)
     assert isinstance(spd, float)
-
-
-def test_terrain_shim_reexports():
-    from c2.domain.wargame.terrain import get_heightmap as new_fn
-    from wargame.terrain import get_heightmap as shim_fn
-    assert new_fn is shim_fn
-
-    from c2.domain.wargame.terrain import terrain as new_terrain
-    from wargame.terrain import terrain as shim_terrain
-    assert new_terrain is shim_terrain
-
-
-def test_terrain_korea_shim_reexports():
-    from c2.domain.wargame.terrain import KoreaRealTerrain as new_cls
-    from wargame.terrain_korea import KoreaRealTerrain as shim_cls
-    assert new_cls is shim_cls

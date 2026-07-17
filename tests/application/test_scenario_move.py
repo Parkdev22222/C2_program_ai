@@ -1,7 +1,6 @@
-"""Task 21: 시나리오 → c2.application.simulation.scenario + shim.
+"""Task 21/33: 시나리오 (c2.application.simulation.scenario).
 
-- 시나리오 배치 함수(순수 함수, Unit 리스트 생성)는 애플리케이션 계층으로 이동.
-- 레거시 shim(wargame.scenario)은 항등 재노출만 수행한다.
+- 시나리오 배치 함수(순수 함수, Unit 리스트 생성)는 애플리케이션 계층에 있다.
 - 애플리케이션 시나리오 모듈은 domain + stdlib 외 아무것도 import 하지 않는다
   (infrastructure/tools/ui import 시 import-linter의 application-no-outward 계약 위반).
 """
@@ -18,34 +17,6 @@ def test_scenario_importable_from_application():
     assert hasattr(mod, "setup_cheorwon_bn")
     assert hasattr(mod, "setup_custom_scenario")
     assert hasattr(mod, "setup_bn_vs_bn_blufor_random")
-
-
-def test_shim_identity_for_all_public_functions():
-    import wargame.scenario as shim_mod
-    import c2.application.simulation.scenario as app_mod
-
-    for name in (
-        "setup_bn_vs_bn",
-        "setup_cheorwon_bn",
-        "setup_custom_scenario",
-        "setup_bn_vs_bn_blufor_random",
-        "get_unit_type",
-        "_pick_pos",
-    ):
-        assert getattr(shim_mod, name) is getattr(app_mod, name), (
-            f"{name} 이 shim과 application 모듈에서 동일 객체가 아님"
-        )
-
-    for name in (
-        "_BLUFOR_ZONE",
-        "_OPFOR_ZONE",
-        "_MIN_SEP",
-        "UNIT_TYPE_SPECS",
-        "UNIT_TYPE_LABEL",
-    ):
-        assert getattr(shim_mod, name) is getattr(app_mod, name), (
-            f"{name} 상수가 shim과 application 모듈에서 동일 객체가 아님"
-        )
 
 
 def test_setup_bn_vs_bn_is_deterministic_unit_list():
