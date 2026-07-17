@@ -7,7 +7,8 @@
      `/api/control/start`, `/api/auto_plan_status`가 정상 200 응답(503/500 아님)임을
      런타임으로 검증한다 — gradio 없이도 컨테이너(`c2.composition.container.build_session`)
      경유로 엔진이 뜨는지 보장.
-  3. `ui/web_api.py`는 shim(re-export)이며 자체적으로 gradio_app을 import하지 않음.
+  3. `ui/web_api.py` shim은 Task 34(레거시 top-level 패키지 삭제)에서 제거되었다 —
+     실제 구현은 `c2.presentation.web.api`에만 존재한다.
 """
 from __future__ import annotations
 
@@ -33,13 +34,9 @@ def test_api_source_has_no_gradio_reference():
     assert "import gradio" not in src
 
 
-def test_shim_has_no_gradio_reference():
-    """ui/web_api.py shim도 gradio_app을 직접 import하지 않아야 한다."""
-    assert _SHIM.exists()
-    src = _SHIM.read_text(encoding="utf-8")
-    assert "import ui.gradio_app" not in src
-    assert "from ui.gradio_app" not in src
-    assert "from ui import gradio_app" not in src
+def test_shim_removed():
+    """ui/web_api.py shim은 Task 34에서 삭제되었다 — 부활하면 실패한다."""
+    assert not _SHIM.exists(), "ui/web_api.py 레거시 shim이 다시 존재합니다"
 
 
 pytest.importorskip("fastapi")
