@@ -746,9 +746,9 @@ def evaluate_and_learn(session, history: list = None) -> dict:
     for rule_text in final_rules:
         try:
             hooks.append_learned_rule(rule_text)
+            learned_count += 1
         except Exception:
             pass
-        learned_count += 1
 
     result_msg = (
         f"**🧠 전술 평가 완료** — {learned_count}개 규칙이 `agent_custom_instructions.txt`에 추가됨\n\n"
