@@ -33,6 +33,7 @@ def test_port_modules_exist():
         "ontology_store.py",
         "event_store.py",
         "conversation_store.py",
+        "harness_store.py",
     }
 
 
@@ -144,6 +145,26 @@ def test_postgres_conversation_store_satisfies_conversation_store_port():
     assert issubclass(PostgresConversationStore, ConversationStore)
 
 
+# ── HarnessStore ────────────────────────────────────────────────────────
+def test_harness_store_port_methods():
+    from c2.application.ports.harness_store import HarnessStore
+
+    expected = {
+        "save_episode", "get_episode", "get_all_episodes", "get_win_rate",
+        "save_rule", "update_rule_effectiveness", "get_active_rules",
+        "deactivate_rule", "delete_rule", "get_stats",
+    }
+    assert expected <= set(dir(HarnessStore))
+
+
+def test_harness_db_isinstance_harness_store(tmp_path):
+    from c2.application.ports.harness_store import HarnessStore
+    from c2.infrastructure.persistence.harness_db import HarnessDB
+
+    db = HarnessDB(db_path=tmp_path / "test_harness.db")
+    assert isinstance(db, HarnessStore)
+
+
 # ── __init__.py re-export ───────────────────────────────────────────────
 def test_ports_reexported_from_package_init():
     from c2.application.ports import (
@@ -151,8 +172,10 @@ def test_ports_reexported_from_package_init():
         OntologyStore,
         EventStore,
         ConversationStore,
+        HarnessStore,
     )
 
     assert all(
-        inspect.isclass(p) for p in (LLMClient, OntologyStore, EventStore, ConversationStore)
+        inspect.isclass(p)
+        for p in (LLMClient, OntologyStore, EventStore, ConversationStore, HarnessStore)
     )

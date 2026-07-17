@@ -5,6 +5,7 @@
 
 from c2.application.ports.conversation_store import ConversationStore
 from c2.application.ports.event_store import EventStore
+from c2.application.ports.harness_store import HarnessStore
 from c2.application.ports.llm import LLMClient
 from c2.application.ports.ontology_store import OntologyStore
 
@@ -13,4 +14,5 @@ __all__ = [
     "OntologyStore",
     "EventStore",
     "ConversationStore",
+    "HarnessStore",
 ]
