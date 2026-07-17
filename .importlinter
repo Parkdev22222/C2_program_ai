@@ -1,0 +1,11 @@
+[importlinter]
+root_package = c2
+
+[importlinter:contract:layers]
+name = C2 clean architecture layers
+type = layers
+layers =
+    c2.presentation
+    c2.infrastructure
+    c2.application
+    c2.domain
