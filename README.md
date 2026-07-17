@@ -172,6 +172,65 @@ python main.py ui
   동일한 동작**으로 실행됩니다. (`pip install langchain-google-genai` 필요 — requirements 포함)
 - EXAONE4로 되돌리려면 `unset C2_LLM_PROVIDER`(또는 `C2_LLM_PROVIDER=vllm`).
 
+### 선택 서비스 Docker로 기동 (PostgreSQL / Neo4j)
+
+전술채팅 멀티턴 메모리는 **PostgreSQL**, 온톨로지(지식그래프)는 **Neo4j**를 사용합니다.
+둘 다 **선택 사항**이며, 미설정 시 각각 in-memory로 자동 폴백하므로 없어도 앱은 동작합니다.
+아래는 Docker로 로컬에 띄우는 방법입니다. (Docker 설치 필요)
+
+**① PostgreSQL — 전술채팅 멀티턴 메모리**
+
+```bash
+# 컨테이너 기동 (db=c2 / user=postgres / password=c2password)
+docker run -d --name c2-postgres \
+  -e POSTGRES_DB=c2 \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=c2password \
+  -p 5432:5432 \
+  postgres:16
+
+# 앱이 접속하도록 환경변수 주입 (테이블 c2_chat_turns는 앱이 자동 생성)
+export C2_PG_HOST=127.0.0.1
+export C2_PG_PORT=5432
+export C2_PG_DB=c2
+export C2_PG_USER=postgres
+export C2_PG_PASSWORD=c2password
+# (또는 한 줄 DSN) export C2_PG_DSN="postgresql://postgres:c2password@127.0.0.1:5432/c2"
+```
+
+**② Neo4j — 온톨로지 지식그래프**
+
+```bash
+# 컨테이너 기동 (user=neo4j / password=c2password — 8자 이상 필수)
+# 7474: 브라우저 UI(http://localhost:7474), 7687: bolt(앱 접속)
+docker run -d --name c2-neo4j \
+  -e NEO4J_AUTH=neo4j/c2password \
+  -p 7474:7474 -p 7687:7687 \
+  neo4j:5
+
+# 앱이 접속하도록 환경변수 주입 (OI_NEO4J_URI 미설정 시 in-memory 폴백)
+export OI_NEO4J_URI="bolt://127.0.0.1:7687"
+export OI_NEO4J_USER=neo4j
+export OI_NEO4J_PASSWORD=c2password
+```
+
+**기동 확인 / 정리**
+
+```bash
+docker ps                                   # 두 컨테이너 실행 확인
+curl http://localhost:7474                   # Neo4j 브라우저 응답 확인(200)
+
+# 위 환경변수를 준 뒤 앱 실행 → 채팅 멀티턴/온톨로지 활성화
+python main.py ui
+
+# 중지·삭제
+docker rm -f c2-postgres c2-neo4j            # 컨테이너 삭제 (데이터도 함께 소멸)
+```
+
+> 데이터 영속화가 필요하면 `-v` 볼륨을 추가하세요
+> (예: PostgreSQL `-v c2-pgdata:/var/lib/postgresql/data`,
+> Neo4j `-v c2-neo4jdata:/data`).
+
 ### 전술채팅 멀티턴 대화 메모리 (PostgreSQL / in-memory)
 
 전술채팅은 **이전 2턴**(사용자 쿼리 + 툴 호출 내역 + 툴 실행 결과 + 최종 응답)을 저장소에서
