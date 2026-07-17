@@ -129,24 +129,6 @@ class BattlefieldAgent:
     def _build_tools(self) -> list:
         tools = []
 
-        try:
-            from tools.videodb_query_tool import (
-                get_selected_contexts, query_video_semantic, query_video_by_object,
-                query_video_by_event, get_video_summary, get_segment_details, set_active_videos,
-            )
-            tools.extend([get_selected_contexts, query_video_semantic, query_video_by_object,
-                          query_video_by_event, get_video_summary, get_segment_details, set_active_videos])
-            logger.info("VideoDB query tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load videodb tools: {e}")
-
-        try:
-            from tools.pdf_rag_tool import pdf_rag_search, add_pdf_to_rag
-            tools.extend([pdf_rag_search, add_pdf_to_rag])
-            logger.info("PDF RAG tools loaded")
-        except Exception as e:
-            logger.warning(f"Failed to load PDF RAG tools: {e}")
-
         # 전장 상황(situation)은 별도 조회 툴이 아니라, 매 판단(agent.run)마다
         # 온톨로지(Neo4j)를 자동 검색해 쿼리에 주입한다(_session_run 래퍼 참조).
         # → get_wargame_situation 등 상태 스냅샷 조회 툴은 에이전트에 등록하지 않는다.
