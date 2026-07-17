@@ -14,7 +14,9 @@ gemini_model:
   api_key_env: "GOOGLE_API_KEY"
   generation:
     temperature: 0.1
-    max_tokens: 4096
+    # gemini-2.5-flash는 thinking 모델이라 내부 사고 토큰이 출력 예산을 함께 소모한다.
+    # 4096은 reasoning+mission_plans JSON을 담기에 부족해 응답이 잘렸으므로 크게 상향.
+    max_tokens: 16384
 
 # ===== EXAONE4 메인 에이전트 모델 =====
 # 상황 분석, 최종 응답 생성 담당
@@ -47,7 +49,8 @@ agent_model:
   max_num_seqs: 64
   generation:
     temperature: 0.1
-    max_tokens: 4096
+    # 장문 reasoning + mission_plans JSON이 잘리지 않도록 상향 (max_model_len 32768 내)
+    max_tokens: 8192
   serving:
     host: "127.0.0.1"
     port: 8000
