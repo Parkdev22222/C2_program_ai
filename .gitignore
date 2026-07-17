@@ -37,3 +37,4 @@ data/korea_dem_*.npy
 data/korea_dem_*.json
 logs/
 .claude/settings.local.json
+.claude/settings.json

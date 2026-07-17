@@ -121,7 +121,7 @@ layers =
 
 - [ ] **Step 8: Verify import-linter runs**
 
-Run: `python -m pip install import-linter && python -m importlinter lint`
+Run: `python -m pip install import-linter && PYTHONPATH=src lint-imports`
 Expected: `Contracts: 1 kept, 0 broken.`
 
 - [ ] **Step 9: Commit**
@@ -452,7 +452,7 @@ git commit -m "test: web_api /api/state 계약 특성화 테스트"
 
 - [ ] **Step 4: Slice 0 완료 검증 (전체 실행)**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 모든 테스트 PASS, `Contracts: 1 kept, 0 broken.`
 
 ---
@@ -518,7 +518,7 @@ Expected: PASS
 
 - [ ] **Step 6: Full regression + lint**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 전부 PASS, 계약 유지
 
 - [ ] **Step 7: Commit**
@@ -583,7 +583,7 @@ Expected: PASS
 
 - [ ] **Step 6: Full regression + lint**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 전부 PASS (엔진 결정성 스냅샷 유지 = 동작 보존 확인)
 
 - [ ] **Step 7: Commit**
@@ -651,7 +651,7 @@ Expected: PASS
 
 - [ ] **Step 6: Full regression + lint**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 전부 PASS (엔진 스냅샷 유지 — 지형이 전투 계산에 쓰이므로 동작 보존의 강한 신호)
 
 - [ ] **Step 7: Commit**
@@ -716,7 +716,7 @@ Expected: PASS
 
 - [ ] **Step 6: Full regression (온톨로지 파이프라인 포함) + lint**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 전부 PASS (기존 `tests/test_ontology_pipeline.py` 포함)
 
 - [ ] **Step 7: Commit**
@@ -785,7 +785,7 @@ Expected: PASS
 
 - [ ] **Step 6: Full regression + lint**
 
-Run: `python -m pytest tests/ -v && python -m importlinter lint`
+Run: `python -m pytest tests/ -v && PYTHONPATH=src lint-imports`
 Expected: 전부 PASS
 
 - [ ] **Step 7: Slice 1 완료 검증 + Commit**
@@ -793,7 +793,7 @@ Expected: 전부 PASS
 ```bash
 git add src/c2/domain/planning/mission_plan.py tools/mission_plan_validator.py tests/domain/test_mission_plan.py
 git commit -m "refactor(domain): 임무계획 값객체·검증 → c2.domain.planning.mission_plan + shim"
-python -m pytest tests/ -v && python -m importlinter lint
+python -m pytest tests/ -v && PYTHONPATH=src lint-imports
 ```
 
 Expected: 전체 PASS, `Contracts: 1 kept, 0 broken.` — **Slice 1 완료: domain 계층이 순수 모듈로 확립됨.**
