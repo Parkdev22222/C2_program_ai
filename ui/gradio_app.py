@@ -303,7 +303,7 @@ def _build_map_figure(state: dict):
     last_updated = state.get("last_updated", "데이터 없음")
     fig = go.Figure()
     if not units and not groups:
-        fig.add_annotation(text="ARMA3 데이터 없음<br>relay.py가 실행 중인지 확인하세요", x=0.5, y=0.5, xref="paper", yref="paper", font=dict(size=16, color="#aaaaaa"), showarrow=False)
+        fig.add_annotation(text="데이터 없음", x=0.5, y=0.5, xref="paper", yref="paper", font=dict(size=16, color="#aaaaaa"), showarrow=False)
     else:
         from collections import defaultdict
         buckets = defaultdict(list)
@@ -329,11 +329,7 @@ def _build_map_figure(state: dict):
 def get_battlefield_map():
     if not _PLOTLY_OK:
         return None, "plotly 미설치: pip install plotly"
-    try:
-        from core_src.arma3_db_manager import load_state
-        state = load_state()
-    except Exception as e:
-        return None, f"상태 로드 오류: {e}"
+    state = {}
     fig = _build_map_figure(state)
     summary = state.get("summary", {})
     blu = summary.get("blufor", {})
@@ -2442,7 +2438,7 @@ def create_app(agent=None) -> gr.Blocks:
                     harness_rules_refresh_btn = gr.Button("규칙 새로고침", size="sm")
             harness_timer = gr.Timer(value=3)
           with gr.Tab("🗺️ 전장 지도"):
-            gr.Markdown("ARMA3에서 수신된 실시간 전장 데이터를 지도에 표시합니다. relay.py 실행 중일 때 10초마다 자동 갱신됩니다.")
+            gr.Markdown("실시간 전장 데이터를 지도에 표시합니다. 10초마다 자동 갱신됩니다.")
             with gr.Row():
                 with gr.Column(scale=3):
                     map_plot = gr.Plot(label="전장 상황도", show_label=False)
