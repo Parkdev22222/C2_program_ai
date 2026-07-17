@@ -183,7 +183,7 @@ def cmd_check_env(args):
             print(f"[FAIL] {pkg} 미설치")
 
     # 디렉토리
-    dirs = ["config", "core_src", "agent", "tools", "ui", "data"]
+    dirs = ["config", "agent", "tools", "ui", "data"]
     print("\n--- 디렉토리 확인 ---")
     for d in dirs:
         p = Path(d)
