@@ -255,6 +255,11 @@ class WargameSession:
             # UAV 완전 정찰 가정 (철원 시나리오) — 존재하는 속성일 때만 설정
             try:
                 engine.full_recon = True
+                # full_recon은 원래 _tick() 중에만 인텔에 반영되므로, 첫 틱 전(시작/일시정지)
+                # 상태에서는 OPFOR가 approximate로 남아 채팅("탐지 없음")과 공격계획("모두 탐지")
+                # 표시가 어긋난다. 초기 인텔을 즉시 갱신해 두 경로를 일치시킨다.
+                # (_update_intelligence는 유닛 이동·전투를 advance하지 않고 인텔만 갱신)
+                engine._update_intelligence()
             except Exception:
                 pass
             self.ensure_ontology(engine)
