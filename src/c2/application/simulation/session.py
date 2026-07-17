@@ -59,6 +59,15 @@ class _NullReplanHooks:
     def get_instruction_section(self, name: str) -> str:
         return ""
 
+    def assess_recon_need(self) -> dict:
+        return {}
+
+    def recommend_recon_routes(self) -> dict:
+        return {}
+
+    def append_learned_rule(self, rule: str) -> None:
+        pass
+
 
 class _NullOntologyWriter:
     """graph_store_factory/ontology_writer_factory 미주입 시 사용되는 no-op writer."""
@@ -307,3 +316,72 @@ class WargameSession:
     def get_state(self) -> dict:
         engine = self.ensure_engine()
         return engine.get_state()
+
+    # ── 세션 ops (Task 29C) — 데이터(dict) 반환, figure 생성은 presentation 몫 ──
+
+    def apply_custom_scenario(self, scenario_config: dict) -> dict:
+        """사용자 정의 시나리오 적용 — 부대 구성·배치 변경 후 엔진 리셋.
+
+        과거 `ui/gradio_app.py`의 `wargame_apply_custom_scenario()`(전역 `_wg_engine`/
+        `_wg_planner` 조작)를 세션 메서드로 이식한 것. 직접 `WargameEngine(units)`를
+        생성하던 부분은 주입된 `engine_factory` 경로(`ensure_engine()`)를 거치도록
+        치환했다(엔진 생성 즉시 콜백4종/툴등록/온톨로지가 갖춰지도록).
+        """
+        try:
+            from c2.application.planning.mission_session import update_valid_company_ids
+            from c2.application.simulation.scenario import setup_custom_scenario
+
+            blufor_defs = scenario_config.get("blufor", [])
+            opfor_defs = scenario_config.get("opfor", [])
+
+            if not blufor_defs:
+                return {"ok": False, "error": "BLUFOR 부대가 없습니다."}
+            if not opfor_defs:
+                return {"ok": False, "error": "OPFOR 부대가 없습니다."}
+
+            update_valid_company_ids({bd["id"] for bd in blufor_defs})
+
+            units = setup_custom_scenario(blufor_defs, opfor_defs)
+
+            if self.engine is not None:
+                self.engine.reset(units)
+            else:
+                self.ensure_engine()
+                self.engine.reset(units)
+
+            self._ensure_planner()
+            # 콜백 4종 재등록 (CLAUDE.md) — 세션 enqueue → 세션 큐 → 세션 워커
+            self._register_callbacks(self.engine)
+
+            logger.info(
+                "사용자 정의 시나리오 적용 완료: BLUFOR %d개, OPFOR %d개",
+                len(blufor_defs), len(opfor_defs),
+            )
+            return {"ok": True, "blufor": len(blufor_defs), "opfor": len(opfor_defs)}
+        except Exception as e:
+            logger.exception("apply_custom_scenario 오류")
+            return {"ok": False, "error": str(e)}
+
+    def request_recon_plan(self, history: Optional[list] = None) -> dict:
+        """정찰 임무계획 수립 — 오케스트레이션은 `replan.request_recon_plan`에 위임."""
+        from c2.application.simulation.replan import request_recon_plan as _impl
+
+        return _impl(self, history)
+
+    def request_attack_plan(self, history: Optional[list] = None) -> dict:
+        """공격 임무계획 수립 — 오케스트레이션은 `replan.request_attack_plan`에 위임."""
+        from c2.application.simulation.replan import request_attack_plan as _impl
+
+        return _impl(self, history)
+
+    def chat_send(self, message: str, history: Optional[list] = None) -> dict:
+        """전술채팅 메시지 처리 — 오케스트레이션은 `replan.chat_send`에 위임."""
+        from c2.application.simulation.replan import chat_send as _impl
+
+        return _impl(self, message, history)
+
+    def evaluate_and_learn(self, history: Optional[list] = None) -> dict:
+        """전투 결과 평가 + 전술 규칙 학습 — 오케스트레이션은 `replan.evaluate_and_learn`에 위임."""
+        from c2.application.simulation.replan import evaluate_and_learn as _impl
+
+        return _impl(self, history)
