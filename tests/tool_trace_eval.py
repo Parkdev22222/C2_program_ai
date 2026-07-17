@@ -72,14 +72,14 @@ def run_case(name, fn, verbose=False):
 
 def setup_engine():
     engine = MockWargameEngine()
-    from tools import wargame_mission_tool, coa_analysis_tool
+    from c2.presentation.tools import wargame_mission_tool, coa_analysis_tool
     wargame_mission_tool.register_wargame_engine(engine)
     coa_analysis_tool.register_wargame_engine(engine)
     return engine
 
 
 def test_validate_valid_plan():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000], [20000, 20000]], "objective": "Red1 격멸"}]}
     result = validate_mission_plan(plan)
     assert result["ok"] is True, f"유효한 계획이 통과해야 함: {result}"
@@ -88,7 +88,7 @@ def test_validate_valid_plan():
 
 
 def test_validate_invalid_company():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     plan = {"mission_plans": [{"company_id": "Zulu", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     result = validate_mission_plan(plan)
     assert result["ok"] is False
@@ -97,7 +97,7 @@ def test_validate_invalid_company():
 
 
 def test_validate_invalid_mission_type():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "blitz", "waypoints": [[5000, 5000]], "objective": "test"}]}
     result = validate_mission_plan(plan)
     assert result["ok"] is False
@@ -105,7 +105,7 @@ def test_validate_invalid_mission_type():
 
 
 def test_validate_out_of_bounds_waypoint():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[50000, 50000]], "objective": "test"}]}
     result = validate_mission_plan(plan)
     assert result["ok"] is False
@@ -113,7 +113,7 @@ def test_validate_out_of_bounds_waypoint():
 
 
 def test_validate_recon_attack_warning():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     plan = {"mission_plans": [
         {"company_id": "Delta", "mission_type": "recon", "waypoints": [[5000, 5000]], "objective": "정찰"},
         {"company_id": "Alpha", "mission_type": "attack", "waypoints": [[20000, 20000]], "objective": "공격"},
@@ -125,14 +125,15 @@ def test_validate_recon_attack_warning():
 
 
 def test_validate_empty_mission_plans():
-    from tools.mission_plan_validator import validate_mission_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
     result = validate_mission_plan({"mission_plans": []})
     assert result["ok"] is False
     return f"errors={result['errors']}"
 
 
 def test_pending_plan_save_and_retrieve():
-    from tools.mission_plan_validator import validate_mission_plan, save_pending_plan, get_pending_plan, clear_pending_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
+    from c2.application.planning.mission_session import save_pending_plan, get_pending_plan, clear_pending_plan
     clear_pending_plan()
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     validation = validate_mission_plan(plan)
@@ -146,7 +147,8 @@ def test_pending_plan_save_and_retrieve():
 
 
 def test_approve_plan_success():
-    from tools.mission_plan_validator import validate_mission_plan, save_pending_plan, approve_plan, clear_pending_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
+    from c2.application.planning.mission_session import save_pending_plan, approve_plan, clear_pending_plan
     clear_pending_plan()
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     validation = validate_mission_plan(plan)
@@ -159,7 +161,8 @@ def test_approve_plan_success():
 
 
 def test_approve_wrong_plan_id():
-    from tools.mission_plan_validator import validate_mission_plan, save_pending_plan, approve_plan, clear_pending_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
+    from c2.application.planning.mission_session import save_pending_plan, approve_plan, clear_pending_plan
     clear_pending_plan()
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     validation = validate_mission_plan(plan)
@@ -171,7 +174,7 @@ def test_approve_wrong_plan_id():
 
 
 def test_guard_write_tool_no_pending():
-    from tools.mission_plan_validator import guard_write_tool, clear_pending_plan
+    from c2.application.planning.mission_session import guard_write_tool, clear_pending_plan
     clear_pending_plan()
     result = guard_write_tool("apply_wargame_mission_plan", {})
     assert result["allowed"] is False
@@ -180,7 +183,8 @@ def test_guard_write_tool_no_pending():
 
 
 def test_guard_write_tool_not_approved():
-    from tools.mission_plan_validator import validate_mission_plan, save_pending_plan, guard_write_tool, clear_pending_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
+    from c2.application.planning.mission_session import save_pending_plan, guard_write_tool, clear_pending_plan
     clear_pending_plan()
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     validation = validate_mission_plan(plan)
@@ -193,7 +197,8 @@ def test_guard_write_tool_not_approved():
 
 
 def test_guard_write_tool_approved_passes():
-    from tools.mission_plan_validator import validate_mission_plan, save_pending_plan, approve_plan, guard_write_tool, clear_pending_plan
+    from c2.domain.planning.mission_plan import validate_mission_plan
+    from c2.application.planning.mission_session import save_pending_plan, approve_plan, guard_write_tool, clear_pending_plan
     clear_pending_plan()
     plan = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     validation = validate_mission_plan(plan)
@@ -207,9 +212,9 @@ def test_guard_write_tool_approved_passes():
 
 def test_apply_dry_run_default():
     setup_engine()
-    from tools.mission_plan_validator import clear_pending_plan
+    from c2.application.planning.mission_session import clear_pending_plan
     clear_pending_plan()
-    from tools.wargame_mission_tool import apply_wargame_mission_plan
+    from c2.presentation.tools.wargame_mission_tool import apply_wargame_mission_plan
     plan = json.dumps({"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]})
     result = apply_wargame_mission_plan(plan)
     assert result["status"] == "dry_run"
@@ -219,9 +224,9 @@ def test_apply_dry_run_default():
 
 def test_apply_dry_run_blocked_without_approval():
     setup_engine()
-    from tools.mission_plan_validator import clear_pending_plan
+    from c2.application.planning.mission_session import clear_pending_plan
     clear_pending_plan()
-    from tools.wargame_mission_tool import apply_wargame_mission_plan
+    from c2.presentation.tools.wargame_mission_tool import apply_wargame_mission_plan
     plan = json.dumps({"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]})
     apply_wargame_mission_plan(plan, dry_run=True)
     result = apply_wargame_mission_plan(plan, dry_run=False)
@@ -231,9 +236,9 @@ def test_apply_dry_run_blocked_without_approval():
 
 def test_apply_success_after_approval():
     engine = setup_engine()
-    from tools.mission_plan_validator import clear_pending_plan, approve_plan
+    from c2.application.planning.mission_session import clear_pending_plan, approve_plan
     clear_pending_plan()
-    from tools.wargame_mission_tool import apply_wargame_mission_plan
+    from c2.presentation.tools.wargame_mission_tool import apply_wargame_mission_plan
     plan_data = {"mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[5000, 5000]], "objective": "test"}]}
     plan_json = json.dumps(plan_data)
     dry = apply_wargame_mission_plan(plan_json, dry_run=True)
@@ -248,7 +253,7 @@ def test_apply_success_after_approval():
 
 def test_air_support_dry_run():
     setup_engine()
-    from tools.wargame_mission_tool import apply_wargame_air_support
+    from c2.presentation.tools.wargame_mission_tool import apply_wargame_air_support
     plan = json.dumps({"air_support_plans": [{"call_sign": "VIPER-1", "support_type": "cas", "target": [15000, 15000], "radius": 1500, "delay": 60}]})
     result = apply_wargame_air_support(plan)
     assert result["status"] == "dry_run"
@@ -258,7 +263,7 @@ def test_air_support_dry_run():
 
 def test_air_support_invalid_type():
     setup_engine()
-    from tools.wargame_mission_tool import apply_wargame_air_support
+    from c2.presentation.tools.wargame_mission_tool import apply_wargame_air_support
     plan = json.dumps({"air_support_plans": [{"call_sign": "X-1", "support_type": "nuke", "target": [15000, 15000], "radius": 1000, "delay": 0}]})
     result = apply_wargame_air_support(plan)
     assert result["valid"] is False
@@ -266,7 +271,7 @@ def test_air_support_invalid_type():
 
 
 def test_intent_execution_request():
-    from tools.mission_plan_validator import classify_intent
+    from c2.application.planning.mission_session import classify_intent
     result = classify_intent("Alpha 부대에 공격 임무를 적용해줘")
     assert result["intent"] == "execution_request"
     assert result["requires_confirmation"] is True
@@ -274,35 +279,28 @@ def test_intent_execution_request():
 
 
 def test_intent_recon_planning():
-    from tools.mission_plan_validator import classify_intent
+    from c2.application.planning.mission_session import classify_intent
     result = classify_intent("현재 적 위치 정찰이 필요한지 판단해줘")
     assert result["intent"] == "recon_planning"
     return f"intent={result['intent']}, tools={result['preferred_tools'][:2]}"
 
 
 def test_intent_attack_planning():
-    from tools.mission_plan_validator import classify_intent
+    from c2.application.planning.mission_session import classify_intent
     result = classify_intent("Red1 전차부대를 격멸하는 최적 공격 계획을 수립해줘")
     assert result["intent"] == "attack_planning"
     return f"intent={result['intent']}"
 
 
-def test_intent_video_query():
-    from tools.mission_plan_validator import classify_intent
-    result = classify_intent("드론 영상에서 탐지된 객체를 분석해줘")
-    assert result["intent"] == "video_query"
-    return f"intent={result['intent']}"
-
-
 def test_intent_situation_query():
-    from tools.mission_plan_validator import classify_intent
+    from c2.application.planning.mission_session import classify_intent
     result = classify_intent("현재 전투 현황을 알려줘")
     assert result["intent"] == "situation_query"
     return f"intent={result['intent']}"
 
 
 def test_intent_no_confirmation_for_recon():
-    from tools.mission_plan_validator import classify_intent
+    from c2.application.planning.mission_session import classify_intent
     result = classify_intent("정찰 경로를 추천해줘")
     assert result["requires_confirmation"] is False
     return f"requires_confirmation={result['requires_confirmation']}"
@@ -310,7 +308,7 @@ def test_intent_no_confirmation_for_recon():
 
 def test_coa_analysis_basic():
     setup_engine()
-    from tools.coa_analysis_tool import analyze_coa_wargame
+    from c2.presentation.tools.coa_analysis_tool import analyze_coa_wargame
     coa_list = [
         {"coa_id": "COA-1", "name": "정면 공격", "mission_plans": [
             {"company_id": "Alpha", "mission_type": "attack", "waypoints": [[20000, 20000]], "objective": "Red1 격멸"},
@@ -330,7 +328,7 @@ def test_coa_analysis_basic():
 
 def test_coa_analysis_empty():
     setup_engine()
-    from tools.coa_analysis_tool import analyze_coa_wargame
+    from c2.presentation.tools.coa_analysis_tool import analyze_coa_wargame
     result = analyze_coa_wargame([], objective="test")
     assert result["status"] == "error"
     return f"message={result['message']}"
@@ -338,7 +336,7 @@ def test_coa_analysis_empty():
 
 def test_coa_analysis_recon_bonus():
     setup_engine()
-    from tools.coa_analysis_tool import analyze_coa_wargame
+    from c2.presentation.tools.coa_analysis_tool import analyze_coa_wargame
     r1 = analyze_coa_wargame([{"coa_id": "R1", "name": "정찰 포함", "mission_plans": [{"company_id": "Delta", "mission_type": "recon", "waypoints": [[10000, 10000]], "objective": "정찰"}]}])
     a1 = analyze_coa_wargame([{"coa_id": "A1", "name": "정찰 없음", "mission_plans": [{"company_id": "Alpha", "mission_type": "attack", "waypoints": [[20000, 20000]], "objective": "공격"}]}])
     r_score = r1["evaluated"][0]["score"]
@@ -349,7 +347,7 @@ def test_coa_analysis_recon_bonus():
 
 def test_engine_status():
     setup_engine()
-    from tools.wargame_mission_tool import get_wargame_engine_status
+    from c2.presentation.tools.wargame_mission_tool import get_wargame_engine_status
     result = get_wargame_engine_status()
     assert result["status"] == "success"
     assert "running" in result
@@ -378,7 +376,6 @@ ALL_CASES = [
     ("intent/execution_request", test_intent_execution_request),
     ("intent/recon_planning", test_intent_recon_planning),
     ("intent/attack_planning", test_intent_attack_planning),
-    ("intent/video_query", test_intent_video_query),
     ("intent/situation_query", test_intent_situation_query),
     ("intent/no_confirmation_for_recon", test_intent_no_confirmation_for_recon),
     ("coa/basic", test_coa_analysis_basic),
@@ -423,7 +420,10 @@ def main():
 if __name__ == "__main__":
     import os
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, project_root)
+    src_root = os.path.join(project_root, "src")
+    for p in (project_root, src_root):
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
     try:
         import smolagents
@@ -433,11 +433,5 @@ if __name__ == "__main__":
         smolagents_stub = MagicMock()
         smolagents_stub.tool = _noop_tool
         sys.modules["smolagents"] = smolagents_stub
-
-    import importlib, types
-    tools_pkg = types.ModuleType("tools")
-    tools_pkg.__path__ = [os.path.join(project_root, "tools")]
-    tools_pkg.__package__ = "tools"
-    sys.modules["tools"] = tools_pkg
 
     main()

@@ -1,0 +1,58 @@
+# ══════════════════════════════════════════════════════════════
+# Colab 전용 최소 설치 목록
+# torch, torchvision, numpy, scipy, Pillow, pyyaml → Colab 기본 설치 생략
+#
+# [설치 순서 — 반드시 이 순서를 지키세요]
+#
+# Step 1: 기존 패키지 제거
+#   !pip uninstall vllm transformers torchaudio -y -q
+#
+# Step 2: vLLM 고정 설치 (torch는 vLLM이 자동 설치)
+#   !pip install "vllm==0.6.6.post1" -q
+#
+# Step 3: 이 파일 설치
+#   !pip install -r requirements-colab.txt -q
+#
+# Step 4: 런타임 재시작 후 실행
+#
+# ─── 버전 고정 이유 ───────────────────────────────────────────
+# transformers 4.48+  → vLLM 0.6.x 의 ProcessorMixin import 파괴
+# vllm >= 0.7.0       → AWQ CUDA 커널 ABI 불일치 (Colab torch 경로 충돌)
+# 따라서 transformers<4.48 + vllm==0.6.6 조합 고정
+# ══════════════════════════════════════════════════════════════
+
+# transformers: EXAONE4는 trust_remote_code=True 로 로딩하므로
+# 4.47.x 에서도 정상 동작. 4.48+ 금지 (ProcessorMixin 파괴)
+transformers>=4.47.0,<4.48.0
+accelerate
+
+# Agent Frameworks
+# smolagents: 기존 CodeAgent 백엔드 (C2_AGENT_BACKEND=smolagents)
+smolagents>=1.0.0
+# LangGraph: 그래프 기반 ReAct 백엔드 (기본, C2_AGENT_BACKEND=langgraph)
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+# Gemini API 프로바이더 (llm_provider=gemini 일 때 필요)
+langchain-google-genai>=2.0.0
+
+# Web UI
+gradio>=4.0.0
+plotly>=5.0.0
+
+# vLLM 서버 클라이언트 (OpenAI 호환 API)
+openai>=1.0.0
+
+# Computer Vision (headless — Colab은 디스플레이 없음)
+opencv-python-headless>=4.8.0
+
+# Graph RAG / Ontology
+rdflib>=6.0.0
+num2words
+# 워게임 상태 → 온톨로지 실시간 적재/검색 (미접속 시 in-memory 폴백)
+neo4j>=5.0.0
+# 전술채팅 멀티턴 대화 적재 (PostgreSQL) — 미접속 시 in-memory 폴백
+psycopg2-binary>=2.9.0
+
+# Utilities
+huggingface-hub>=0.20.0

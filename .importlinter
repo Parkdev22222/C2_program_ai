@@ -1,0 +1,43 @@
+[importlinter]
+root_package = c2
+include_external_packages = True
+
+[importlinter:contract:layers]
+name = C2 clean architecture layers
+type = layers
+layers =
+    c2.presentation
+    c2.infrastructure
+    c2.application
+    c2.domain
+
+[importlinter:contract:domain-no-outward]
+name = c2.domain는 상위 계층 및 레거시 top-level 패키지를 import 금지
+type = forbidden
+source_modules =
+    c2.domain
+forbidden_modules =
+    c2.application
+    c2.infrastructure
+    c2.presentation
+    wargame
+    tools
+    agent
+    ontology
+    ui
+    api
+
+[importlinter:contract:application-no-outward]
+name = c2.application는 infrastructure/presentation 및 레거시 top-level 패키지를 import 금지
+type = forbidden
+source_modules =
+    c2.application
+forbidden_modules =
+    c2.infrastructure
+    c2.presentation
+    wargame
+    tools
+    agent
+    ontology
+    ui
+    api

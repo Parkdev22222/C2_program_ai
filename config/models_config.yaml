@@ -1,89 +1,64 @@
-# ===== 객체 탐지 및 추적 (SAM3) =====
-object_detection:
-  # SAM3 가중치 경로 (로컬 디렉토리 또는 HuggingFace 모델 ID)
-  # ★ 실제 사용 중인 경로로 수정하세요 ★
-  checkpoint_path: "/content/drive/MyDrive/multi-source-intelligent-system-claude-realtime-report-ui-update/sam3_weights"
-  device: "cuda"
-  dtype: "bfloat16"
-  target_classes:
-    - "soldier"
-    - "military soldier"
-    - "tank"
-    - "military tank"
-    - "armored vehicle"
-    - "military truck"
-    - "helicopter"
-    - "military helicopter"
-    - "artillery"
-    - "military vehicle"
-  confidence_threshold: 0.01
-  iou_threshold: 0.5
-  # 추적 시 최소 마스크 면적 비율 (전체 픽셀 대비)
-  min_mask_area_ratio: 0.001
-  # SAM3를 N 프레임마다 한 번 실행 (메모리 절약, 기본 5)
-  # 30fps 영상 기준: 5→6fps 탐지, 10→3fps 탐지
-  detection_frame_step: 5
+# ===== LLM 프로바이더 선택 =====
+# "vllm"   : 직접 서빙한 EXAONE4 vLLM 서버 사용 (기본)
+# "gemini" : Google Gemini API 사용 (서버 기동 불필요)
+# 환경변수 C2_LLM_PROVIDER 가 이 값보다 우선함 (예: C2_LLM_PROVIDER=gemini)
+# ※ Gemini 는 LangGraph 백엔드(C2_AGENT_BACKEND=langgraph, 기본)에서 동작합니다.
+llm_provider: "vllm"
 
-# ===== 임베딩 모델 =====
-embedding:
-  model_name: "apple/MobileCLIP-S2"
-  image_size: 336
-  embedding_dim: 512        # open_clip MobileCLIP-S2: 512 / CLIP-ViT-L/14 fallback: 768
-  device: "cuda"
-  batch_size: 8
-
-# ===== 이벤트 설명 모델 (경량 VLM) =====
-event_description:
-  model_name: "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-  device: "cuda"
-  temperature: 0.7
-  max_new_tokens: 512
-  batch_size: 4
-
-# ===== EXAONE4 메인 에이전트 모델 =====
-# 상황 분석, 비디오 이해, 최종 응답 생성 담당
-# AWQ 4bit → 실사용 ~18GB
-# [수정] quantization을 명시적으로 전달해야 AWQ로 로딩됨
-#        미전달 시 FP16(~64GB)으로 로딩되어 EXAONE Deep 로딩 공간 없음
-agent_model:
-  model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
-  quantization: "awq"              # vLLM에 명시 전달 필수 (누락 시 FP16 로딩)
-  model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
-  tensor_parallel_size: 1          # A100 1장
-  gpu_memory_utilization: 0.30     # 80GB × 0.30 = 24GB 예약 (AWQ 실사용 ~18GB + KV 캐시 6GB)
-  dtype: "float16"
-  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
+# ===== Gemini API 설정 (llm_provider=gemini 일 때 사용) =====
+gemini_model:
+  model: "gemini-2.5-flash"        # 예: gemini-2.5-flash, gemini-2.5-pro
+  # API 키는 이 파일에 직접 넣지 말고 환경변수로 주입하세요.
+  #   export GOOGLE_API_KEY="<your-key>"   (또는 GEMINI_API_KEY)
+  # 아래는 키가 저장된 "환경변수 이름"일 뿐, 키 값이 아닙니다.
+  api_key_env: "GOOGLE_API_KEY"
   generation:
     temperature: 0.1
     max_tokens: 4096
 
-# ===== EXAONE Deep 전략/전술 전문 모델 =====
-# 군사 전략 및 전술 추천 생성 전담
-# 7.8B BF16 → 실사용 ~16GB
-# EXAONE4 AWQ 수정 후: 80GB - 24GB = 56GB 여유 → 7.8B 충분히 로딩 가능
-strategy_model:
-  model_id: "LGAI-EXAONE/EXAONE-Deep-7.8B"
-  tensor_parallel_size: 1          # A100 1장
-  gpu_memory_utilization: 0.35     # 80GB × 0.35 = 28GB 예약 (실사용 ~16GB + KV 캐시 12GB)
-  dtype: "bfloat16"
-  max_model_len: 32768             # 32768→16384: KV 캐시 메모리 절약
+# ===== EXAONE4 메인 에이전트 모델 =====
+# 상황 분석, 최종 응답 생성 담당
+# AWQ 4bit → 실사용 ~18GB
+#
+# vLLM 서빙 구조: 모델은 별도 프로세스의 vLLM 서버가 로드하고,
+# 애플리케이션은 serving.base_url(또는 host:port)로 OpenAI 호환 API 요청만 보냄.
+# 서버 기동: python scripts/launch_vllm_servers.py
+# 엔진 파라미터(gpu_memory_utilization 등)는 서버 기동 스크립트가 사용함.
+agent_model:
+  model_id: "LGAI-EXAONE/EXAONE-4.0-32B"
+  quantization: "awq_marlin"   # A100에서 빠른 4bit 커널 (호환 문제 시 "awq")
+  model_id_awq: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
+  tensor_parallel_size: 1
+  # ── GPU 환경별 설정 (단일 모델 전용 GPU 기준) ────────────────
+  # A100 80GB : gpu_memory_utilization: 0.90 / max_model_len: 32768
+  # A100 40GB : gpu_memory_utilization: 0.90 / max_model_len: 16384 (OOM 시 하향)
+  # ────────────────────────────────────────────────────────────
+  # KV 캐시를 크게 잡아 프리엠션/재연산을 없애고 동시 처리량을 높인다.
+  gpu_memory_utilization: 0.90
+  dtype: "float16"
+  max_model_len: 32768
+  # ── 추론 속도 최적화 ─────────────────────────────────────────
+  # awq_marlin : Ampere(A100)에서 기본 awq보다 빠른 4bit 커널 (실패 시 "awq"로 폴백)
+  # enforce_eager=false : CUDA 그래프 사용 → 디코드 속도 향상 (VRAM 여유 있을 때 권장)
+  # enable_prefix_caching : 반복되는 시스템 프롬프트/상황 블록 접두어 재사용 → TTFT 단축
+  # max_num_seqs : 동시 처리 시퀀스 상한 (KV 캐시가 크므로 높여 처리량 확보)
+  enforce_eager: false
+  enable_prefix_caching: true
+  max_num_seqs: 64
   generation:
-    temperature: 0.2
-    max_tokens: 8192
+    temperature: 0.1
+    max_tokens: 4096
+  serving:
+    host: "127.0.0.1"
+    port: 8000
+    # base_url을 지정하면 host/port보다 우선함 (예: "http://gpu-server:8000/v1")
+    # 환경변수 C2_AGENT_VLLM_BASE_URL이 최우선
+    base_url: ""
+    served_model_name: "exaone4-agent"
+    api_key: "EMPTY"
+    request_timeout: 600
 
 # ===== A100 80GB 단일 GPU 예상 메모리 사용량 =====
-# EXAONE4 AWQ 32B:       24GB  (gpu_util 0.30)
-# EXAONE Deep 7.8B BF16: 28GB  (gpu_util 0.35)
-# SmolVLM2 2.2B:          5GB
-# CLIP/embedding:          2GB
-# ─────────────────────────────
-# 합계:                  ~59GB  (80GB 중 74% → 여유 21GB)
-#
-# ===== GPU 증설 시 더 큰 모델 사용 =====
-# A100 80GB × 2장:
-#   strategy_model.model_id: "LGAI-EXAONE/EXAONE-Deep-32B"
-#   tensor_parallel_size: 2, gpu_memory_utilization: 0.80
-#
-# A100 80GB × 4장:
-#   agent_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.45
-#   strategy_model: tensor_parallel_size: 2, gpu_memory_utilization: 0.80
+# EXAONE4 AWQ 32B 가중치 ~19GB + KV 캐시(gpu_util 0.90 → 예약 ~72GB 중 나머지 전부)
+# gpu_util 0.30(≈24GB)에서는 KV 캐시가 작아 긴 컨텍스트/동시 요청 시 재연산으로 느려짐.
+# 0.90으로 올리면 KV 캐시가 커져 프리엠션이 사라지고 처리량이 크게 향상됨.

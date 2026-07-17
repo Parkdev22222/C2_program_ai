@@ -17,6 +17,7 @@ env/
 # Runtime data
 data/wargame_state.db
 data/*.db
+config/ui_state.json
 
 # Logs
 *.log
@@ -30,3 +31,10 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# DEM 캐시 (AWS Terrarium 타일 — 자동 다운로드)
+data/korea_dem_*.npy
+data/korea_dem_*.json
+logs/
+.claude/settings.local.json
+.claude/settings.json
