@@ -263,6 +263,12 @@ class WargameSession:
             except Exception:
                 pass
             self.ensure_ontology(engine)
+            # 임무계획 검증용 company_id allow-list를 현재 시나리오의 BLUFOR 부대로 동적 갱신
+            try:
+                from c2.application.planning.mission_session import update_valid_company_ids
+                update_valid_company_ids({u.id for u in engine.units if u.side == "BLUFOR"})
+            except Exception:
+                pass
         return self.engine
 
     def reset(self, units=None) -> dict:

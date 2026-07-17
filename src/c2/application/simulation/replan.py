@@ -250,7 +250,7 @@ def request_recon_plan(session, history: list = None) -> dict:
             └─ 워게임 엔진에 즉시 적용 (dry_run=True 사용 금지)
     Step 5. 응답에 최종 JSON 블록 출력
     ─────────────────────────────────────────────
-    금지: validate/approve 툴 호출, 공격부대(Alpha/Bravo/Charlie/Echo) 임무 부여,
+    금지: validate/approve 툴 호출, 공격부대(보병1중대/보병2중대/전차중대/대전차중대) 임무 부여,
           정찰+공격 임무 동시 생성
 
     반환: {"history": [...], "plan_text": "<json 문자열 또는 "">", "plan": dict|None}
@@ -315,7 +315,7 @@ def request_recon_plan(session, history: list = None) -> dict:
         f"3. 최종 정찰 임무계획 JSON 직접 생성 (EXAONE4 담당)\n"
         f"   → recommend_recon_routes()의 unit_id·waypoints를 기반으로 최종 mission_plans JSON을 직접 작성한다.\n"
         f"   → unit_id·waypoints 좌표는 recommend_recon_routes() 결과에서 가져올 것 (임의 좌표 금지)\n"
-        f"   → mission_type은 반드시 'recon', 공격부대(Alpha/Bravo/Charlie/Echo) 포함 금지\n"
+        f"   → mission_type은 반드시 'recon', 공격부대(보병1중대/보병2중대/전차중대/대전차중대) 포함 금지\n"
         f"4. apply_wargame_mission_plan(plan_json=<Step 3에서 생성한 JSON>, dry_run=False)\n"
         f"   → 워게임 엔진에 즉시 적용 (dry_run=True 절대 금지)\n"
         f"5. 응답에 최종 JSON 블록 출력\n\n"
@@ -378,7 +378,7 @@ def request_recon_plan(session, history: list = None) -> dict:
         plans = applied_plan.get("mission_plans", [])
         plan_text = _json.dumps(applied_plan, ensure_ascii=False, indent=2)
         unit_lines = "\n".join(f"  - **{p['company_id']}** (정찰) → {p.get('objective', '')} ({len(p.get('waypoints', []))}개 경유지)" for p in plans)
-        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(Alpha/Bravo/Charlie/Echo)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
+        result_msg = (f"**🔍 정찰 임무계획 생성 완료** ({agent_label})\n\n**OPFOR 탐지 현황:**\n  - 정확히 탐지됨: {opfor_sum.get('detected', 0)}개\n  - 개략위치 파악: {opfor_sum.get('approximate', 0)}개\n  - 탐지 상실: {opfor_sum.get('lost', 0)}개\n\n**파견 정찰부대 (unit_type=정찰 한정):** {len(plans)}개\n{unit_lines}\n\n⚠️ **공격부대(보병1중대/보병2중대/전차중대/대전차중대)는 대기 중입니다.** 정찰 완료로 적 위치가 탐지되면 **⚔️ 공격 임무계획** 버튼을 눌러 공격을 개시하세요.\n\n```json\n{plan_text}\n```")
         history[-1] = (history[-1][0], result_msg)
         return {"history": history, "plan_text": plan_text, "plan": applied_plan}
     finally:
@@ -664,14 +664,14 @@ def evaluate_and_learn(session, history: list = None) -> dict:
         "",
         "■ 규칙 작성 필수 지침:",
         "  1. 규칙은 반드시 어떤 전투 상황에도 재사용 가능한 일반적 원칙으로 작성",
-        "  2. 특정 좌표([x,y]), 고도 수치(m), 거리 수치(km), 특정 부대명(Red1, Alpha 등) 절대 포함 금지",
+        "  2. 특정 좌표([x,y]), 고도 수치(m), 거리 수치(km), 특정 부대명(적보병1중대, 보병1중대 등) 절대 포함 금지",
         "  3. 부대명 대신 병종(전차, 자주포, 기계화보병, 정찰, 대전차)으로 표현",
         "  4. 수치 대신 상대적 표현 사용: '고지대', '근거리', '측방', '전방', '후방', '우세', '취약'",
         "",
-        "  ✗ 나쁜 예: '고도 226m의 [13723, 14083]에서 Red5(자주포) 격멸'",
+        "  ✗ 나쁜 예: '고도 226m의 [13723, 14083]에서 적자주포중대(자주포) 격멸'",
         "  ✓ 좋은 예: '적 자주포보다 고지대를 선점하여 화력 우위 확보 시 자주포 격멸 효과적'",
         "",
-        "  ✗ 나쁜 예: 'Alpha가 (12.3km, 4.5km)에서 Red3와 2km 거리 교전 시 효과적'",
+        "  ✗ 나쁜 예: '보병1중대가 (12.3km, 4.5km)에서 적전차중대와 2km 거리 교전 시 효과적'",
         "  ✓ 좋은 예: '전차는 2~3km 거리에서 기계화보병 지원을 받아 교전 시 전투 효과 극대화'",
         "",
         "■ 출력 형식 (JSON·코드블록 불필요):",

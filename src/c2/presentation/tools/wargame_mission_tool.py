@@ -134,10 +134,10 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
               "plan_id": "plan_abc123",
               "mission_plans": [
                 {
-                  "company_id": "Alpha",
+                  "company_id": "보병1중대",
                   "mission_type": "attack",
                   "waypoints": [[x, y], ...],
-                  "objective": "Red1 격멸"
+                  "objective": "적보병1중대 격멸"
                 }
               ]
             }

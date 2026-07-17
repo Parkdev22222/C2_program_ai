@@ -54,9 +54,9 @@ def setup_cheorwon_bn() -> list:
     """철원 축선 기계화대대 교전 (가상) — 6 vs 6.
 
     docs/scenario_cheorwon.md 반영판. 변경점:
-      - 정찰 부대 없음: 양측 정찰(Delta/Red4)을 기계화보병 중대로 대체.
+      - 정찰 부대 없음: 양측 정찰(보병3중대/적보병3중대)을 기계화보병 중대로 대체.
         정찰은 UAV가 담당한다고 가정 → 엔진 full_recon 모드로 처음부터 전 위치 detected.
-      - 자주포 실사거리: K9(Foxtrot) 40km / 북한 곡산(Red5) 60km(RAP) 를 indirect_range로 반영.
+      - 자주포 실사거리: K9(자주포중대) 40km / 북한 곡산(적자주포중대) 60km(RAP) 를 indirect_range로 반영.
     """
     return [
         # ── BLUFOR (대한민국) — 남서부 방어 → 역습 ──────────────────
@@ -134,9 +134,9 @@ def setup_custom_scenario(blufor_defs: list, opfor_defs: list) -> list:
     사용자 정의 시나리오 생성.
 
     Args:
-        blufor_defs: [{"id": "Alpha", "unit_type": "기계화보병", "x": None, "y": None}, ...]
+        blufor_defs: [{"id": "보병1중대", "unit_type": "기계화보병", "x": None, "y": None}, ...]
                      x, y가 None이면 BLUFOR 구역 내 랜덤 배치
-        opfor_defs:  [{"id": "Red1",  "unit_type": "전차",       "x": None, "y": None}, ...]
+        opfor_defs:  [{"id": "적보병1중대",  "unit_type": "전차",       "x": None, "y": None}, ...]
                      x, y가 None이면 OPFOR 구역 내 랜덤 배치
 
     Returns:

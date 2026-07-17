@@ -266,7 +266,7 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
     특정 부대의 상세 정보와 최근 이동 이력을 반환합니다.
 
     Args:
-        unit_id: 부대 ID (예: "Alpha", "Charlie", "Red1", "Red3")
+        unit_id: 부대 ID (예: "보병1중대", "전차중대", "적보병1중대", "적전차중대")
 
     Returns:
         {

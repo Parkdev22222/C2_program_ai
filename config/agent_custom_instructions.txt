@@ -72,14 +72,14 @@ print(result)
 - dry_run=True로 호출 금지
 
 [RECON]
-- unit_type이 '정찰'인 부대에만 임무 부여 (Delta 부대)
-- 공격부대(Alpha, Bravo, Charlie, Echo)는 정찰 임무 금지
+- unit_type이 '정찰'인 부대에만 임무 부여 (보병3중대 부대)
+- 공격부대(보병1중대, 보병2중대, 전차중대, 대전차중대)는 정찰 임무 금지
 - 정찰 임무계획과 공격 임무계획을 동시에 생성 금지
 - 금지 툴: validate_mission_plan_tool, approve_mission_plan_tool
 
 [ATTACK]
 - 탐지 상태 'detected'인 OPFOR만 공격 목표로 설정
-- 정찰부대(Delta)는 측방 경계 또는 탐지 미확인 방향 감시 임무
+- 정찰부대(보병3중대)는 측방 경계 또는 탐지 미확인 방향 감시 임무
 - 미탐지 적군 방향으로 공격부대 돌출 금지
 - 금지 툴(공격 임무 중 절대 호출 금지):
     recommend_recon_routes   ← 정찰 임무 전용, 공격 임무에서 호출 금지
@@ -131,10 +131,10 @@ print(result)
 {
   "mission_plans": [
     {
-      "company_id": "Delta",
+      "company_id": "보병3중대",
       "mission_type": "recon",
       "waypoints": [[x1, y1], [x2, y2]],
-      "objective": "Red3 위치 정밀확인"
+      "objective": "적전차중대 위치 정밀확인"
     }
   ]
 }
@@ -163,10 +163,10 @@ print(result)
 ```json
 {
   "mission_plans": [
-    {"company_id": "Alpha", "mission_type": "attack",
-     "target_unit_id": "Red1",
+    {"company_id": "보병1중대", "mission_type": "attack",
+     "target_unit_id": "적보병1중대",
      "waypoints": [[38.07, 127.12], [38.08, 127.13]],
-     "objective": "Red1 격멸 — 능선 우회 접근 후 추격"}
+     "objective": "적보병1중대 격멸 — 능선 우회 접근 후 추격"}
   ]
 }
 ```

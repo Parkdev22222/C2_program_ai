@@ -130,9 +130,9 @@ def get_wargame_tactical_recommendation() -> dict:
             "game_time": str,
             "matchup_recommendations": [
                 {
-                    "blufor_unit":    str,   # "Alpha"
+                    "blufor_unit":    str,   # "보병1중대"
                     "blufor_type":    str,   # "기계화보병"
-                    "recommended_target": str,  # "Red1"
+                    "recommended_target": str,  # "적보병1중대"
                     "target_type":    str,
                     "advantage":      str,   # "유리" | "불리" | "균등" | "매우유리" | "매우불리"
                     "firepower_multiplier": float,

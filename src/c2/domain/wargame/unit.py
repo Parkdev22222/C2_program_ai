@@ -63,7 +63,7 @@ class AirSupport:
 
 @dataclass
 class Unit:
-    id: str                             # "Alpha" | "Bravo" | "Red1" | "Red2"
+    id: str                             # "보병1중대" | "보병2중대" | "적보병1중대" | "적보병2중대"
     side: str                           # "BLUFOR" | "OPFOR"
     x: float                            # 지도 좌표 (m, 동쪽)
     y: float                            # 지도 좌표 (m, 북쪽)

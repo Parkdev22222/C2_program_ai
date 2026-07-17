@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 맵 상수 / allow-list
 # ─────────────────────────────────────────────
 MAP_MAX = 30_000.0
-VALID_COMPANY_IDS = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"}
+VALID_COMPANY_IDS = {"보병1중대", "보병2중대", "전차중대", "보병3중대", "대전차중대", "자주포중대"}
 VALID_MISSION_TYPES = {"recon", "attack", "defend", "flank", "withdraw", "hold"}
 VALID_SUPPORT_TYPES = {"cas", "strike", "artillery", "helicopter"}
 

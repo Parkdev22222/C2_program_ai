@@ -27,9 +27,9 @@ def analyze_coa_wargame(coa_list: list, objective: str = "") -> dict:
               {
                 "coa_id": "COA-1",
                 "name": "정면 공격",
-                "description": "Alpha/Bravo가 정면 돌파",
+                "description": "보병1중대/보병2중대가 정면 돌파",
                 "mission_plans": [
-                  {"company_id": "Alpha", "mission_type": "attack", "waypoints": [[x,y]], "objective": "..."},
+                  {"company_id": "보병1중대", "mission_type": "attack", "waypoints": [[x,y]], "objective": "..."},
                   ...
                 ]
               },
