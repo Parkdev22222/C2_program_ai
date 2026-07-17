@@ -81,9 +81,8 @@ def cmd_ui(args):
 
     # 조립 루트(composition root) — EventStore/HarnessStore 기본 팩토리, 계획 자문
     # (recon/attack/fire advisor), presentation 8개 툴 엔진등록 훅을 여기서 전역
-    # wiring한다. web_api(ui/web_api.py)는 현재(Task 30 이전) gradio_app의 자체
-    # WargameSession을 통해 엔진을 지연 생성하지만, 그 엔진도 여기서 미리 등록해 둔
-    # 동일한 전역 팩토리/자문을 사용하게 되므로 29A RuntimeError 풋건이 방지된다.
+    # wiring한다. web_api(ui/web_api.py)는 c2.presentation.web.api 경유로 이 전역
+    # 팩토리/자문을 사용해 엔진을 지연 생성한다.
     from c2.composition.container import build_session
     build_session(agent=agent)
 
@@ -181,7 +180,7 @@ def cmd_check_env(args):
         print(f"[WARN] vLLM 서버 설정 확인 실패: {e}")
 
     # 기타 패키지
-    packages = ["gradio", "cv2", "numpy"]
+    packages = ["numpy"]
     for pkg in packages:
         try:
             mod = __import__(pkg)
