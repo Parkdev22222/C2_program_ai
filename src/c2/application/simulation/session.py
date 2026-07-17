@@ -126,6 +126,7 @@ class WargameSession:
         self.planner: Optional[Any] = None
         self.graph_store: Optional[Any] = None
         self.ontology_writer: Optional[Any] = None
+        self.harness_controller: Optional[Any] = None
 
         # 세션이 소유하는 자동 재계획 이벤트 큐. 큐 이벤트 형식(CLAUDE.md):
         #   ("detection",    enemy_id, unit_type, x, y)
@@ -385,3 +386,129 @@ class WargameSession:
         from c2.application.simulation.replan import evaluate_and_learn as _impl
 
         return _impl(self, history)
+
+    # ── 하니스(학습/평가) 세션 ops (Task 29D) — 데이터(dict) 반환 ──────────
+    #
+    # `HarnessController`(`c2.application.harness.controller`)는 이미 application
+    # 계층이므로(Task 26) 세션이 직접 구성/보유한다(application → application, 허용).
+    # HarnessDB(인프라)는 컨트롤러 내부의 DI 팩토리(`set_default_harness_db_factory`,
+    # 레거시 `wargame.harness` shim이 기본 wiring)에 위임되며 세션은 이를 import하지
+    # 않는다. 마크다운/Gradio 튜플 조립은 gradio 래퍼가 담당한다.
+
+    def init_harness_controller(self):
+        """하네스 컨트롤러를 초기화한다 (세션당 1회, 실패 시 None)."""
+        if self.harness_controller is not None:
+            return self.harness_controller
+        try:
+            from c2.application.harness.controller import HarnessController
+
+            def _harness_engine_factory():
+                engine = self._engine_factory()
+                try:
+                    engine.full_recon = True  # 철원 시나리오: UAV 완전정찰
+                except Exception:
+                    pass
+                self.register_engine(engine)
+                return engine
+
+            self._ensure_planner()
+            self.harness_controller = HarnessController(
+                engine_factory=_harness_engine_factory,
+                agent=self.agent,
+                planner=self.planner,
+            )
+            logger.info("HarnessController initialized")
+        except Exception as e:
+            logger.warning(f"Failed to init HarnessController: {e}")
+            self.harness_controller = None
+        return self.harness_controller
+
+    def harness_start_training(self, n_episodes: int, replan_interval: int) -> dict:
+        """하네스 학습을 시작한다 — {"ok", "reason", "chat_entry", "status_message"} 반환."""
+        ctrl = self.harness_controller or self.init_harness_controller()
+        if ctrl is None:
+            return {
+                "ok": False,
+                "reason": "init_failed",
+                "chat_entry": ("🔬 하네스 학습", "HarnessController 초기화 실패"),
+                "status_message": "초기화 실패",
+            }
+
+        if ctrl._running:
+            return {
+                "ok": False,
+                "reason": "already_running",
+                "chat_entry": None,
+                "status_message": "이미 실행 중",
+            }
+
+        def _progress_cb(current, total, metrics):
+            pass  # 폴링 방식으로 UI 업데이트
+
+        ctrl.start_training(
+            n_episodes=int(n_episodes),
+            replan_interval_ticks=int(replan_interval),
+            on_progress=_progress_cb,
+        )
+        return {
+            "ok": True,
+            "reason": "started",
+            "chat_entry": ("🔬 하네스 학습 시작", f"{n_episodes}개 에피소드 학습 시작..."),
+            "status_message": f"학습 시작: {n_episodes}개 에피소드",
+        }
+
+    def harness_status(self) -> dict:
+        """하네스 학습 진행 상황 — {"initialized", "progress", "stats"} 반환."""
+        ctrl = self.harness_controller
+        if ctrl is None:
+            return {"initialized": False}
+        return {
+            "initialized": True,
+            "progress": ctrl.get_progress(),
+            "stats": ctrl.get_db_stats(),
+        }
+
+    def harness_stop_training(self) -> dict:
+        """실행 중인 하네스 학습을 중지한다 — {"stopped", "chat_entry"} 반환."""
+        ctrl = self.harness_controller
+        if ctrl is not None and ctrl._running:
+            ctrl.stop_training()
+            return {"stopped": True, "chat_entry": ("🔬 하네스", "학습 중지 요청")}
+        return {"stopped": False, "chat_entry": None}
+
+    def harness_rules(self) -> dict:
+        """현재 활성 규칙 데이터를 반환한다 (마크다운 조립은 gradio 래퍼 담당).
+
+        컨트롤러 미초기화 시 `replan_hooks.get_instruction_section()`(presentation
+        agent 지시사항 폴백)으로 원문(raw) 텍스트를 반환한다.
+        """
+        ctrl = self.harness_controller
+        if ctrl is None:
+            recon_text = self.replan_hooks.get_instruction_section("RECON")
+            attack_text = self.replan_hooks.get_instruction_section("ATTACK")
+            learned_text = self.replan_hooks.get_instruction_section("LEARNED_RULES")
+            if not recon_text and not attack_text and not learned_text:
+                return {"initialized": False}
+            result: dict = {
+                "initialized": False,
+                "recon_text": recon_text,
+                "attack_text": attack_text,
+                "learned_text": learned_text,
+            }
+        else:
+            rules = ctrl.get_active_rules()
+            result = {
+                "initialized": True,
+                "recon_rules": rules.get("RECON", []),
+                "attack_rules": rules.get("ATTACK", []),
+                "learned_rules": rules.get("LEARNED_RULES", []),
+            }
+
+        try:
+            from c2.application.harness.tactical_memory import get_tactical_memory
+
+            result["penalty_zones"] = get_tactical_memory().get_penalty_zones()
+        except Exception:
+            result["penalty_zones"] = []
+
+        return result

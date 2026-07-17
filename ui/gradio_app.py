@@ -923,72 +923,56 @@ def get_situation_memory_status() -> str:
 
 
 def _init_harness_controller():
-    """하네스 컨트롤러를 초기화합니다."""
+    """하네스 컨트롤러를 초기화합니다.
+
+    Task 29D: 실제 구성(engine_factory/agent/planner 배선)은
+    `_session.init_harness_controller()`로 이관됐다. 레거시 전역
+    `_harness_controller`는 이 파일의 다른 곳에서 참조하지 않지만 하위호환을
+    위해 세션 상태와 동기화해 유지한다.
+    """
     global _harness_controller
-    if not _WARGAME_OK:
+    if not _WARGAME_OK or _session is None:
         return None
-    try:
-        from wargame.harness import HarnessController
-        from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
-        from wargame.llm_planner import MissionPlanner
-
-        def _engine_factory():
-            units = setup_bn_vs_bn()
-            eng = WargameEngine(units)
-            eng.full_recon = True  # 철원 시나리오: UAV 완전정찰
-            _wg_register_engine(eng)
-            return eng
-
-        agent = _get_agent()
-        planner = _wg_planner
-        _harness_controller = HarnessController(
-            engine_factory=_engine_factory,
-            agent=agent,
-            planner=planner,
-        )
-        logger.info("HarnessController initialized")
-        return _harness_controller
-    except Exception as e:
-        logger.warning(f"Failed to init HarnessController: {e}")
-        return None
+    _harness_controller = _session.init_harness_controller()
+    return _harness_controller
 
 
 def harness_start_training(n_episodes: int, replan_interval: int, history: list):
-    """하네스 학습을 시작합니다."""
+    """하네스 학습을 시작합니다 — Gradio 얇은 래퍼.
+
+    Task 29D: 오케스트레이션은 `_session.harness_start_training()`(dict 반환)으로
+    이관됐다. 여기서는 결과 dict로부터 Gradio 히스토리/상태문자열만 조립한다.
+    """
     global _harness_controller
     history = list(history or [])
-
-    ctrl = _harness_controller or _init_harness_controller()
-    if ctrl is None:
-        history.append(("🔬 하네스 학습", "HarnessController 초기화 실패"))
+    if _session is None:
+        history.append(("🔬 하네스 학습", "워게임 초기화 실패"))
         return history, "초기화 실패", ""
 
-    if ctrl._running:
-        return history, "이미 실행 중", ""
-
-    history.append(("🔬 하네스 학습 시작", f"{n_episodes}개 에피소드 학습 시작..."))
-
-    def _progress_cb(current, total, metrics):
-        pass  # 폴링 방식으로 UI 업데이트
-
-    ctrl.start_training(
-        n_episodes=int(n_episodes),
-        replan_interval_ticks=int(replan_interval),
-        on_progress=_progress_cb,
-    )
-    _save_ui_state(harness_history=history)
-    return history, f"학습 시작: {n_episodes}개 에피소드", ""
+    result = _session.harness_start_training(n_episodes, replan_interval)
+    _harness_controller = _session.harness_controller
+    if result.get("chat_entry"):
+        history.append(result["chat_entry"])
+    if result.get("ok"):
+        _save_ui_state(harness_history=history)
+    return history, result.get("status_message", ""), ""
 
 
 def harness_get_status():
-    """하네스 학습 진행 상황을 반환합니다."""
-    global _harness_controller
-    ctrl = _harness_controller
-    if ctrl is None:
+    """하네스 학습 진행 상황을 반환합니다 — Gradio 얇은 래퍼.
+
+    Task 29D: 진행상황/통계 데이터는 `_session.harness_status()`(dict 반환)로
+    조회하고, 여기서는 표시 문자열만 조립한다.
+    """
+    if _session is None:
         return "하네스 미초기화", "", ""
 
-    progress = ctrl.get_progress()
-    stats = ctrl.get_db_stats()
+    result = _session.harness_status()
+    if not result.get("initialized"):
+        return "하네스 미초기화", "", ""
+
+    progress = result.get("progress") or {}
+    stats = result.get("stats") or {}
 
     current = progress.get("current", 0)
     total = progress.get("total", 0)
@@ -1021,36 +1005,43 @@ def harness_get_status():
 
 
 def harness_stop_training(history: list):
-    global _harness_controller
+    """하네스 학습을 중지합니다 — Gradio 얇은 래퍼.
+
+    Task 29D: 오케스트레이션은 `_session.harness_stop_training()`(dict 반환)으로 이관.
+    """
     history = list(history or [])
-    ctrl = _harness_controller
-    if ctrl and ctrl._running:
-        ctrl.stop_training()
-        history.append(("🔬 하네스", "학습 중지 요청"))
+    if _session is not None:
+        result = _session.harness_stop_training()
+        if result.get("chat_entry"):
+            history.append(result["chat_entry"])
     _save_ui_state(harness_history=history)
     return history
 
 
 def harness_get_rules():
-    """현재 활성 규칙을 마크다운으로 반환합니다."""
-    global _harness_controller
-    ctrl = _harness_controller
-    if ctrl is None:
-        try:
-            from agent.battlefield_agent import get_instruction_section
-            learned = get_instruction_section("LEARNED_RULES")
-            recon = get_instruction_section("RECON")
-            attack = get_instruction_section("ATTACK")
-        except Exception:
-            return "하네스 미초기화"
-    else:
-        rules = ctrl.get_active_rules()
-        learned_list = rules.get("LEARNED_RULES", [])
-        recon_list = rules.get("RECON", [])
-        attack_list = rules.get("ATTACK", [])
+    """현재 활성 규칙을 마크다운으로 반환합니다 — Gradio 얇은 래퍼.
+
+    Task 29D: 규칙/패널티존 데이터는 `_session.harness_rules()`(dict 반환)로
+    조회하고, 여기서는 마크다운 조립만 담당한다.
+    """
+    if _session is None:
+        return "하네스 미초기화"
+
+    result = _session.harness_rules()
+    if not result.get("initialized") and "recon_text" not in result:
+        return "하네스 미초기화"
+
+    if result.get("initialized"):
+        learned_list = result.get("learned_rules", [])
+        recon_list = result.get("recon_rules", [])
+        attack_list = result.get("attack_rules", [])
         learned = "\n".join(f"- {r['text']} *(신뢰도 {r['confidence']:.2f}, {r['win_count']}승/{r['loss_count']}패)*" for r in learned_list)
         recon = "\n".join(f"- {r['text']}" for r in recon_list)
         attack = "\n".join(f"- {r['text']}" for r in attack_list)
+    else:
+        recon = result.get("recon_text", "")
+        attack = result.get("attack_text", "")
+        learned = result.get("learned_text", "")
 
     parts = []
     if recon:
@@ -1061,19 +1052,14 @@ def harness_get_rules():
         parts.append(f"**[LEARNED_RULES]**\n{learned}")
 
     # 전술 메모리 패널티 존 표시
-    try:
-        from wargame.harness.tactical_memory import get_tactical_memory
-        tm = get_tactical_memory()
-        zones = tm.get_penalty_zones()
-        if zones:
-            zone_lines = [
-                f"- **({z['x']/1000:.1f}km, {z['y']/1000:.1f}km)** r={z['radius']/1000:.1f}km "
-                f"패널티={z['penalty']:.2f} 피격={z.get('hit_count',1)}회: {z['reason'][:60]}"
-                for z in zones[:10]
-            ]
-            parts.append(f"**[⚠️ 패널티 존 ({len(zones)}개)]**\n" + "\n".join(zone_lines))
-    except Exception:
-        pass
+    zones = result.get("penalty_zones") or []
+    if zones:
+        zone_lines = [
+            f"- **({z['x']/1000:.1f}km, {z['y']/1000:.1f}km)** r={z['radius']/1000:.1f}km "
+            f"패널티={z['penalty']:.2f} 피격={z.get('hit_count',1)}회: {z['reason'][:60]}"
+            for z in zones[:10]
+        ]
+        parts.append(f"**[⚠️ 패널티 존 ({len(zones)}개)]**\n" + "\n".join(zone_lines))
 
     return "\n\n".join(parts) if parts else "학습된 규칙 없음"
 
@@ -1238,6 +1224,11 @@ input[type="checkbox"] { accent-color: var(--green) !important; }
 def create_app(agent=None) -> gr.Blocks:
     global _agent
     _agent = agent
+    # Task 29D: 세션(`_session.agent`)에도 동일 에이전트를 주입한다 — 하네스
+    # 컨트롤러(`_session.init_harness_controller()`)와 `_session.request_attack_plan()`
+    # 등 replan 오케스트레이션이 `session.agent`를 참조하므로 필요.
+    if _session is not None:
+        _session.agent = agent
     ui_cfg = _load_ui_config()
     with gr.Blocks(
         title=ui_cfg.get("title", "C2 지휘통제 AI"),
