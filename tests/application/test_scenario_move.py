@@ -13,26 +13,30 @@ from c2.domain.wargame.unit import Unit
 
 def test_scenario_importable_from_application():
     mod = importlib.import_module("c2.application.simulation.scenario")
-    assert hasattr(mod, "setup_bn_vs_bn")
     assert hasattr(mod, "setup_cheorwon_bn")
     assert hasattr(mod, "setup_custom_scenario")
-    assert hasattr(mod, "setup_bn_vs_bn_blufor_random")
+    # 영문 시나리오(setup_bn_vs_bn 계열)는 제거되었다.
+    assert not hasattr(mod, "setup_bn_vs_bn")
+    assert not hasattr(mod, "setup_bn_vs_bn_blufor_random")
 
 
-def test_setup_bn_vs_bn_is_deterministic_unit_list():
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+def test_setup_cheorwon_bn_is_deterministic_unit_list():
+    from c2.application.simulation.scenario import setup_cheorwon_bn
 
-    units = setup_bn_vs_bn()
-    assert len(units) == 10
+    units = setup_cheorwon_bn()
+    assert len(units) == 12
     assert all(isinstance(u, Unit) for u in units)
 
+    # 모든 부대명은 한국어 중대명 (아군·적군)
     ids = sorted(u.id for u in units)
-    assert ids == sorted(
-        ["Charlie", "Alpha", "Bravo", "Delta", "Echo", "Red1", "Red2", "Red3", "Red4", "Red5"]
-    )
+    assert ids == sorted([
+        "보병1중대", "보병2중대", "보병3중대", "전차중대", "대전차중대", "자주포중대",
+        "적보병1중대", "적보병2중대", "적보병3중대", "적전차중대", "적대전차중대", "적자주포중대",
+    ])
+    assert all(not u.id.isascii() or "중대" in u.id for u in units), "영문 부대명이 남아있으면 안 됨"
 
     # 두 번 호출해도 동일한 결과 (비랜덤 고정 배치)
-    units2 = setup_bn_vs_bn()
+    units2 = setup_cheorwon_bn()
     snap1 = sorted((u.id, u.x, u.y, u.combat_power, u.firepower_index) for u in units)
     snap2 = sorted((u.id, u.x, u.y, u.combat_power, u.firepower_index) for u in units2)
     assert snap1 == snap2

@@ -10,14 +10,14 @@ from pathlib import Path
 
 from c2.application.simulation.session import WargameSession
 from c2.application.simulation.engine import WargameEngine
-from c2.application.simulation.scenario import setup_bn_vs_bn
+from c2.application.simulation.scenario import setup_cheorwon_bn
 from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
 
 def _make_session() -> WargameSession:
     def factory():
         db = WargameDB(db_path=Path(tempfile.mkdtemp()) / "s.db")
-        return WargameEngine(setup_bn_vs_bn(), db=db)
+        return WargameEngine(setup_cheorwon_bn(), db=db)
 
     return WargameSession(engine_factory=factory)
 

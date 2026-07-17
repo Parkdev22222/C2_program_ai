@@ -20,13 +20,13 @@ import pytest
 
 def _make_engine_factory():
     from c2.application.simulation.engine import WargameEngine
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+    from c2.application.simulation.scenario import setup_cheorwon_bn
     from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
     tmp_dir = Path(tempfile.mkdtemp())
 
     def factory():
-        return WargameEngine(setup_bn_vs_bn(), db=WargameDB(tmp_dir / "s.db"))
+        return WargameEngine(setup_cheorwon_bn(), db=WargameDB(tmp_dir / "s.db"))
 
     return factory
 
@@ -165,7 +165,7 @@ class TestRequestAttackPlan:
             "reasoning": "테스트 공격",
             "mission_plans": [
                 {
-                    "company_id": "Alpha",
+                    "company_id": "보병1중대",
                     "mission_type": "attack",
                     "waypoints": [[20000, 20000]],
                     "objective": "적 공격",
@@ -183,9 +183,9 @@ class TestRequestAttackPlan:
         assert "history" in result and "plan_text" in result
         assert agent.agent.calls, "공격 임무계획이 agent.agent.run()을 호출하지 않음"
 
-        alpha = next(u for u in eng.units if u.id == "Alpha")
-        assert alpha.waypoints, "Alpha 부대에 waypoints가 적용되지 않음"
-        assert list(alpha.waypoints[-1][:2]) == [20000, 20000]
+        target = next(u for u in eng.units if u.id == "보병1중대")
+        assert target.waypoints, "보병1중대에 waypoints가 적용되지 않음"
+        assert list(target.waypoints[-1][:2]) == [20000, 20000]
 
 
 # ── (c) chat_send ──────────────────────────────────────────────────

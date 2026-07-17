@@ -2,7 +2,7 @@ import random
 import tempfile
 from pathlib import Path
 
-from c2.application.simulation.scenario import setup_bn_vs_bn
+from c2.application.simulation.scenario import setup_cheorwon_bn
 from c2.application.simulation.engine import WargameEngine
 from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
@@ -10,7 +10,7 @@ from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 def _engine():
     random.seed(7)
     db = WargameDB(db_path=Path(tempfile.mkdtemp()) / "m.db")
-    return WargameEngine(setup_bn_vs_bn(), db=db)
+    return WargameEngine(setup_cheorwon_bn(), db=db)
 
 
 def test_mission_plan_sets_waypoints_and_target():

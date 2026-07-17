@@ -20,13 +20,13 @@ import pytest
 
 def _make_engine_factory():
     from c2.application.simulation.engine import WargameEngine
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+    from c2.application.simulation.scenario import setup_cheorwon_bn
     from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
     tmp_dir = Path(tempfile.mkdtemp())
 
     def factory():
-        return WargameEngine(setup_bn_vs_bn(), db=WargameDB(tmp_dir / "s.db"))
+        return WargameEngine(setup_cheorwon_bn(), db=WargameDB(tmp_dir / "s.db"))
 
     return factory
 
@@ -113,6 +113,7 @@ class TestStartPause:
         assert isinstance(result, dict)
         assert "running" in result
         assert "label" in result
+        session.stop()  # 틱 스레드 정지 (누수 방지 — 전역 random 오염 차단)
 
     def test_toggles_running_state(self):
         session = _make_session()

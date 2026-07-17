@@ -22,13 +22,13 @@ import pytest
 
 def _make_engine_factory():
     from c2.application.simulation.engine import WargameEngine
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+    from c2.application.simulation.scenario import setup_cheorwon_bn
     from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
     tmp_dir = Path(tempfile.mkdtemp())
 
     def factory():
-        return WargameEngine(setup_bn_vs_bn(), db=WargameDB(tmp_dir / "s.db"))
+        return WargameEngine(setup_cheorwon_bn(), db=WargameDB(tmp_dir / "s.db"))
 
     return factory
 

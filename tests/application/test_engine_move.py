@@ -35,9 +35,9 @@ def test_construction_uses_conftest_injected_default_factory():
     """tests/conftest.py 의 autouse fixture 가 주입한 기본 팩토리로 db 미주입 WargameEngine(units)
     생성 + 1틱이 동작함을 확인 (Task 33: 레거시 wargame.engine shim import 없이)."""
     from c2.application.simulation.engine import WargameEngine
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+    from c2.application.simulation.scenario import setup_cheorwon_bn
 
-    units = setup_bn_vs_bn()
+    units = setup_cheorwon_bn()
     eng = WargameEngine(units)  # db 미주입 → conftest에서 wiring한 기본 WargameDB 팩토리
     eng._tick()
     state = eng.get_state()

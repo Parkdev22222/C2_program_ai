@@ -94,9 +94,9 @@ def _default_engine_factory():
     위임한다 — 여기서 infra를 직접 import하지 않는다.
     """
     from c2.application.simulation.engine import WargameEngine
-    from c2.application.simulation.scenario import setup_bn_vs_bn
+    from c2.application.simulation.scenario import setup_cheorwon_bn
 
-    return WargameEngine(setup_bn_vs_bn())
+    return WargameEngine(setup_cheorwon_bn())
 
 
 class WargameSession:
@@ -269,12 +269,12 @@ class WargameSession:
         """엔진 리셋 — 콜백 4종을 반드시 재등록한다 (CLAUDE.md).
 
         `units`가 주어지지 않으면 engine_factory와 동일한 기본 시나리오
-        (`setup_bn_vs_bn`)로 새로 배치한다.
+        (`setup_cheorwon_bn`)로 새로 배치한다.
         """
         if units is None:
-            from c2.application.simulation.scenario import setup_bn_vs_bn
+            from c2.application.simulation.scenario import setup_cheorwon_bn
 
-            units = setup_bn_vs_bn()
+            units = setup_cheorwon_bn()
 
         if self.engine is None:
             self.ensure_engine()

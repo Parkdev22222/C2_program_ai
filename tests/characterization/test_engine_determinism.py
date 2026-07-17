@@ -2,34 +2,33 @@ import random
 import tempfile
 from pathlib import Path
 
-from c2.application.simulation.scenario import setup_bn_vs_bn
+from c2.application.simulation.scenario import setup_cheorwon_bn
 from c2.application.simulation.engine import WargameEngine
 from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
 # 900틱 동안 BLUFOR 공격부대가 OPFOR 표적을 향해 실제로 진격·교전하도록
-# 강제하는 임무계획. 좌표는 setup_bn_vs_bn()의 OPFOR 초기 배치 좌표
-# (wargame/scenario.py) — 시나리오 자체가 바뀌지 않는 한 안정적이다.
+# 강제하는 임무계획. 좌표는 setup_cheorwon_bn()의 OPFOR 초기 배치 좌표.
 # 이 임무계획이 없으면 부대가 hold 상태로 정지해 있어 combat_power/status가
 # 스폰 값 그대로 유지되고, 교전·피해 로직이 전혀 특성화되지 않는다.
 _CONTACT_PLAN = {
     "mission_plans": [
-        {"company_id": "Charlie", "mission_type": "attack", "target_unit_id": "Red3",
-         "waypoints": [[23000, 21000]]},
-        {"company_id": "Alpha", "mission_type": "attack", "target_unit_id": "Red1",
-         "waypoints": [[21000, 19500]]},
-        {"company_id": "Bravo", "mission_type": "attack", "target_unit_id": "Red2",
+        {"company_id": "전차중대", "mission_type": "attack", "target_unit_id": "적전차중대",
+         "waypoints": [[23500, 20500]]},
+        {"company_id": "보병1중대", "mission_type": "attack", "target_unit_id": "적보병1중대",
+         "waypoints": [[21000, 19000]]},
+        {"company_id": "보병2중대", "mission_type": "attack", "target_unit_id": "적보병2중대",
          "waypoints": [[21000, 22500]]},
-        {"company_id": "Delta", "mission_type": "attack", "target_unit_id": "Red4",
-         "waypoints": [[19500, 17500]]},
-        {"company_id": "Echo", "mission_type": "attack", "target_unit_id": "Red5",
-         "waypoints": [[25000, 21000]]},
+        {"company_id": "보병3중대", "mission_type": "attack", "target_unit_id": "적보병3중대",
+         "waypoints": [[18000, 18500]]},
+        {"company_id": "대전차중대", "mission_type": "attack", "target_unit_id": "적대전차중대",
+         "waypoints": [[24000, 23000]]},
     ],
 }
 
 
 def _run(seed: int, ticks: int) -> list:
     random.seed(seed)
-    units = setup_bn_vs_bn()
+    units = setup_cheorwon_bn()
     db = WargameDB(db_path=Path(tempfile.mkdtemp()) / "char.db")
     eng = WargameEngine(units, db=db)
     # BLUFOR 공격부대를 OPFOR 쪽으로 진격시켜 실제 교전(피해 누적·상태 전이)이
