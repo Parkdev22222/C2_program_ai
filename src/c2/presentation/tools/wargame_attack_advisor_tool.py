@@ -9,7 +9,6 @@ import json
 import math
 import logging
 from typing import List, Tuple
-from smolagents import tool
 from c2.domain.wargame.coordinates import xy_to_latlon
 
 logger = logging.getLogger(__name__)
@@ -306,7 +305,6 @@ def _route_interdict_bonus(
     return min(bonus, 25.0)   # 최대 보너스 캡
 
 
-@tool
 def get_optimal_attack_positions(
     top_n: int = 3,
     opfor_routes_json: str = "",

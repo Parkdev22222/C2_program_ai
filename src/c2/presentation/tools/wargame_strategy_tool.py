@@ -7,7 +7,6 @@
 import logging
 import math
 from typing import List, Tuple
-from smolagents import tool
 from c2.domain.wargame.coordinates import xy_to_latlon, waypoints_xy_to_latlon
 
 logger = logging.getLogger(__name__)
@@ -117,7 +116,7 @@ def _elevation_info(x: float, y: float) -> str:
 
 # ── 메인 툴 ────────────────────────────────────────────────────────
 
-@tool
+
 def get_wargame_tactical_recommendation() -> dict:
     """
     워게임 시뮬레이터의 현재 전장 상황을 분석하여 다음 두 가지를 반환합니다.

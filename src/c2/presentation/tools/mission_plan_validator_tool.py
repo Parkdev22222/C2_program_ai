@@ -1,13 +1,12 @@
 """
 임무계획 검증기 smolagents Tool 래퍼
 
-mission_plan_validator.py의 함수들을 smolagents @tool로 노출합니다.
+mission_plan_validator.py의 함수들을 smolagents 로 노출합니다.
 """
 import json
-from smolagents import tool
 
 
-@tool
+
 def validate_mission_plan_tool(plan_json: str) -> dict:
     """
     JSON 임무계획의 유효성을 검증합니다. 실제 적용 없이 오류/경고만 반환합니다.
@@ -27,7 +26,7 @@ def validate_mission_plan_tool(plan_json: str) -> dict:
     return validate_mission_plan(plan)
 
 
-@tool
+
 def approve_mission_plan_tool(plan_id: str) -> dict:
     """
     사용자가 특정 plan_id의 임무계획을 승인합니다.
@@ -43,7 +42,7 @@ def approve_mission_plan_tool(plan_id: str) -> dict:
     return approve_plan(plan_id)
 
 
-@tool
+
 def get_pending_plan_tool() -> dict:
     """
     현재 사용자 승인을 기다리는 pending 임무계획과 세션 상태를 반환합니다.

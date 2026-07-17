@@ -13,7 +13,6 @@ import math
 import logging
 from typing import List, Tuple
 
-from smolagents import tool
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +163,7 @@ def _find_key_chokepoints(
 
 # ── 메인 툴 ────────────────────────────────────────────────────────────
 
-@tool
+
 def predict_opfor_routes() -> dict:
     """
     정찰에 의해 탐지된 OPFOR 부대가 아군(BLUFOR)을 공격하기 위해

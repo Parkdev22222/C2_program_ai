@@ -14,7 +14,6 @@
 import logging
 import math
 
-from smolagents import tool
 
 from c2.domain.wargame.coordinates import xy_to_latlon
 
@@ -75,7 +74,7 @@ def _air_method_for(unit_type, near_friendly):
     return "cas"                 # 그 외 → 근접항공지원
 
 
-@tool
+
 def get_fire_priority_schedule() -> dict:
     """포병·근접 항공(CAS) 화력지원을 위한 타격 우선순위 스케줄을 산출합니다.
 

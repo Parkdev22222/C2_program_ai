@@ -10,7 +10,6 @@ import math
 import logging
 from typing import List
 
-from smolagents import tool
 from c2.domain.wargame.coordinates import xy_to_latlon, waypoints_xy_to_latlon
 
 logger = logging.getLogger(__name__)
@@ -230,7 +229,6 @@ def _build_combined_recon_waypoints(
 # 공개 도구
 # ──────────────────────────────────────────────────────────────
 
-@tool
 def assess_recon_need() -> dict:
     """
     현재 BLUFOR 인텔 상태를 분석하여 정찰 임무의 필요성을 평가합니다.
@@ -336,7 +334,7 @@ def assess_recon_need() -> dict:
         return {"status": "error", "message": str(e)}
 
 
-@tool
+
 def recommend_recon_routes() -> dict:
     """
     탐지되지 않은 OPFOR 목표에 대해 정찰부대의 교전 회피 정찰 경로를 생성합니다.

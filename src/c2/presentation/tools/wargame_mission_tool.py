@@ -4,7 +4,6 @@
 import json
 import logging
 import math
-from smolagents import tool
 from c2.domain.wargame.coordinates import is_latlon_coords, waypoints_latlon_to_xy, latlon_to_xy
 
 logger = logging.getLogger(__name__)
@@ -124,7 +123,6 @@ def _snap_air_targets_to_opfor(air_plans: list) -> tuple:
     return snapped, snap_log, errors
 
 
-@tool
 def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
     """
     JSON 형태의 BLUFOR 임무계획을 워게임 시뮬레이터에 적용합니다.
@@ -317,7 +315,7 @@ def apply_wargame_mission_plan(plan_json: str, dry_run: bool = True) -> dict:
         }
 
 
-@tool
+
 def apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:
     """
     JSON 형태의 공중지원 계획을 워게임 시뮬레이터에 적용합니다.
@@ -414,7 +412,7 @@ def apply_wargame_air_support(support_json: str, dry_run: bool = True) -> dict:
         return {"status": "error", "message": str(e)}
 
 
-@tool
+
 def get_wargame_engine_status() -> dict:
     """
     워게임 시뮬레이터 엔진 상태를 반환합니다.

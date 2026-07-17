@@ -14,7 +14,6 @@
 Task 17: tools/graph_rag_tool.py 에서 c2.infrastructure.ontology.doctrine_loader 로
 rdflib 로딩/쿼리 로직 이동. 이 파일은 얇은 @tool 래퍼로 위임한다.
 """
-from smolagents import tool
 
 from c2.infrastructure.ontology.doctrine_loader import (
     get_attack_ontology_context,
@@ -32,7 +31,6 @@ __all__ = [
 
 # ── smolagents 에이전트용 @tool ───────────────────────────────────────────────
 
-@tool
 def graph_rag_military_query(query: str) -> str:
     """
     COHA 군사 전술 온톨로지에서 전술 개념과 관계를 검색합니다.

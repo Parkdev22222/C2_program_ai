@@ -5,7 +5,6 @@ WargameEngine SQLite DB를 통해 전장 상황을 조회합니다.
 """
 import logging
 import re as _re
-from smolagents import tool
 from c2.domain.wargame.coordinates import xy_to_latlon
 
 logger = logging.getLogger(__name__)
@@ -95,7 +94,6 @@ def _build_attack_status(current_tick: int, blufor_ids: set) -> dict:
     return result
 
 
-@tool
 def get_wargame_situation() -> dict:
     """
     현재 워게임 시뮬레이터의 전장 상황을 반환합니다.
@@ -207,7 +205,7 @@ def get_wargame_situation() -> dict:
         return {"status": "error", "message": str(e)}
 
 
-@tool
+
 def get_intelligence_report(side: str = "BLUFOR") -> dict:
     """
     특정 진영의 적 탐지 인텔 보고서를 반환합니다.
@@ -262,7 +260,7 @@ def get_intelligence_report(side: str = "BLUFOR") -> dict:
         return {"status": "error", "message": str(e)}
 
 
-@tool
+
 def get_wargame_unit_detail(unit_id: str) -> dict:
     """
     특정 부대의 상세 정보와 최근 이동 이력을 반환합니다.
@@ -326,7 +324,7 @@ def get_wargame_unit_detail(unit_id: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
-@tool
+
 def get_wargame_battle_log(n: int = 20) -> dict:
     """
     최근 전투 이벤트 로그를 반환합니다.

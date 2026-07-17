@@ -5,7 +5,6 @@ COA(Course of Action) 분석 도구
 각 COA의 장단점, 위험도, 권장 순위를 반환합니다.
 """
 import logging
-from smolagents import tool
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,6 @@ def register_wargame_engine(engine):
     _wargame_engine = engine
 
 
-@tool
 def analyze_coa_wargame(coa_list: list, objective: str = "") -> dict:
     """
     복수의 행동 방책(COA)을 현재 워게임 상태에 대입하여 비교 평가합니다.
