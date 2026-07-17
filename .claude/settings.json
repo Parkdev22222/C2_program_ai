@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONPATH=\".:src\" /Users/parkjeongho/Library/Python/3.9/bin/lint-imports)",
+      "Bash(/usr/bin/python3 -m pytest tests/ -v)",
+      "Bash(/usr/bin/python3 -c ' *)"
+    ]
+  }
+}
