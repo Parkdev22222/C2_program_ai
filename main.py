@@ -79,6 +79,14 @@ def cmd_ui(args):
     exaone4_model = preload_models()
     agent = init_agent(exaone4_model)
 
+    # 조립 루트(composition root) — EventStore/HarnessStore 기본 팩토리, 계획 자문
+    # (recon/attack/fire advisor), presentation 8개 툴 엔진등록 훅을 여기서 전역
+    # wiring한다. web_api(ui/web_api.py)는 현재(Task 30 이전) gradio_app의 자체
+    # WargameSession을 통해 엔진을 지연 생성하지만, 그 엔진도 여기서 미리 등록해 둔
+    # 동일한 전역 팩토리/자문을 사용하게 되므로 29A RuntimeError 풋건이 방지된다.
+    from c2.composition.container import build_session
+    build_session(agent=agent)
+
     from ui.web_api import start_server
     start_server(agent=agent, host=args.host, port=args.port)
 
@@ -183,7 +191,7 @@ def cmd_check_env(args):
             print(f"[FAIL] {pkg} 미설치")
 
     # 디렉토리
-    dirs = ["config", "core_src", "agent", "tools", "ui", "data"]
+    dirs = ["config", "agent", "tools", "ui", "data"]
     print("\n--- 디렉토리 확인 ---")
     for d in dirs:
         p = Path(d)
