@@ -5,11 +5,13 @@ import re
 import yaml
 import logging
 from pathlib import Path
+
+from c2._paths import config_path
 from typing import List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).parent.parent / "config"
+CONFIG_DIR = config_path()  # <repo>/config (파일 위치와 무관하게 견고하게 해석)
 
 
 def _load_agent_config() -> dict:
