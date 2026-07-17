@@ -2,7 +2,7 @@
 
 > **성격**: 방어 시뮬레이션 훈련용 **가상(fictional)** 시나리오. 실제 부대·작전계획이 아니며,
 > 공개된 편제·장비 정보를 근사해 워게임 엔진(30 km × 30 km 철원 지형)에 맞게 재구성한 것입니다.
-> 좌표계·병종·스탯은 `wargame/scenario.py`·`wargame/engine.py` 규격을 따릅니다.
+> 좌표계·병종·스탯은 `c2.application.simulation.scenario`·`c2.application.simulation.engine` 규격을 따릅니다.
 >
 > **구현 반영판** (`setup_cheorwon_bn`, UI 기본 시나리오):
 > - **정찰 병종 없음** — 양측 정찰(Delta/Red4)을 기계화보병 중대로 대체.
@@ -143,7 +143,7 @@
 
 ## 8. 엔진 반영 방법 (다음 단계)
 
-이 편성을 `wargame/scenario.py`에 `setup_cheorwon_bn()` 함수로 추가하면 바로 구동 가능합니다
+이 편성을 `c2.application.simulation.scenario`에 `setup_cheorwon_bn()` 함수로 추가하면 바로 구동 가능합니다
 (현재 5 vs 5 `setup_bn_vs_bn`의 6 vs 6 확장판). 필요 시:
 
 - BLUFOR: Alpha, Bravo(기보) / Charlie(전차) / Delta(정찰) / Echo(대전차) / **Foxtrot(자주포, 신규)**

@@ -52,14 +52,12 @@ print(result)
 
 ## 보유 도구 목록
 
-- **videodb_query_tool**: 비디오 데이터베이스에서 객체/이벤트/의미론적 검색
-- **pdf_rag_tool**: 군사 교범 및 문서 검색
 - **assess_recon_need**: 정찰 필요 여부 판단 — OPFOR 탐지 현황(detected/approximate/lost) 반환
 - **recommend_recon_routes**: 교전 회피 정찰 경로 생성 — 정찰부대 임무계획 JSON 반환
-- **recon_advisor_tool**: recommend_recon_routes() 결과를 EXAONE Deep에게 전술 검토받아 텍스트 조언 반환
 - **predict_opfor_routes**: OPFOR 예상 접근 경로·병목 예측
 - **get_optimal_attack_positions**: 공중지원 우선순위 스케줄 + 각 BLUFOR 부대별 주요 고지 반환 (간결)
-- **strategy_advisor_tool**: EXAONE Deep 모델에게 전략/전술 추천 요청
+- **get_fire_priority_schedule**: 적 병종·현황을 반영한 화력지원 타격 우선순위 스케줄링
+- **graph_rag_military_query**: COHA 군사 전술 온톨로지 교리 컨텍스트 검색
 - **apply_wargame_mission_plan**: 임무계획을 워게임 엔진에 즉시 적용 (dry_run=False)
 - **apply_wargame_air_support**: 공중지원 계획 적용 (dry_run=False)
 

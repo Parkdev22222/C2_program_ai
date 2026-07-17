@@ -13,8 +13,8 @@ Python 워게임 시뮬레이터와 연동하여 정찰·공격 임무계획 수
 
 | 레이어 | 색상 | 구성 요소 |
 |--------|------|-----------|
-| **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`ui/web_api.py`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
-| **Agent / Planner** | 초록 | `BattlefieldAgent` (smolagents CodeAgent, EXAONE4) + `MissionPlanner` + `DetectionWorker` |
+| **UI Layer** | 파랑 | FastAPI 웹 대시보드 (`c2.presentation.web.api`) — AI 채팅, 워게임 시뮬레이터, Leaflet 전장 지도 |
+| **Agent / Planner** | 초록 | `LangGraphBattlefieldAgent`(기본) 또는 `BattlefieldAgent`(smolagents CodeAgent, EXAONE4) + `MissionPlanner` + 자동 재계획 워커(`c2.application.simulation.replan`) |
 | **Tools** | 주황·청록·보라 | 에이전트가 코드로 호출하는 도구 레이어 — 17개 도구, 스텝당 1개 제한 |
 | **Core Systems** | 보라·빨강 | WargameEngine, EXAONE4 LLM (vLLM 서빙), rdflib 온톨로지 |
 | **Data / External** | 빨강 | 시나리오, SQLite DB, COHA 온톨로지 TTL |
@@ -100,8 +100,8 @@ sleep 5 && nvidia-smi                      # GPU 메모리 반환 확인 후 재
 
 | 값 | 백엔드 | 구현 | 도구 호출 방식 |
 |----|--------|------|----------------|
-| `langgraph` (기본) | LangGraph StateGraph(ReAct) | `agent/langgraph_agent.py` | function calling (tool call) |
-| `smolagents` | smolagents CodeAgent | `agent/battlefield_agent.py` | 코드 생성형 |
+| `langgraph` (기본) | LangGraph StateGraph(ReAct) | `src/c2/presentation/agent/langgraph_agent.py` | function calling (tool call) |
+| `smolagents` | smolagents CodeAgent | `src/c2/presentation/agent/battlefield_agent.py` | 코드 생성형 |
 
 ```bash
 # LangGraph 백엔드로 UI 실행 (기본값이라 생략 가능)
@@ -113,8 +113,8 @@ C2_AGENT_BACKEND=smolagents python main.py ui
 
 두 백엔드는 다음을 **완전히 동일하게** 공유합니다.
 
-- 툴셋: `build_battlefield_tools()` 단일 소스 (`agent/battlefield_agent.py`)
-  → LangGraph 는 `agent/langgraph_tools.py`가 각 smolagents 툴을 LangChain
+- 툴셋: `build_battlefield_tools()` 단일 소스 (`src/c2/presentation/agent/battlefield_agent.py`)
+  → LangGraph 는 `src/c2/presentation/agent/langgraph_tools.py`가 각 smolagents 툴을 LangChain
     `StructuredTool`로 감싸 재사용하므로 워게임 엔진 연동·반환 구조가 같습니다.
 - 시스템 지시사항: `config/agent_custom_instructions.txt`
 - 매 판단마다 Neo4j 온톨로지 상황 자동 주입 (`ontology_situation_block()`)
@@ -195,7 +195,7 @@ python main.py ui
 - 접속정보가 없으면 자동으로 **in-memory**로 동작합니다(별도 설정 불필요, 프로세스 종료 시 소멸).
 - 대화 턴은 `c2_chat_turns` 테이블에 적재되며, 각 턴은 LangChain 메시지(Human/AI/Tool)를
   직렬화해 저장합니다. `pip install psycopg2-binary` 필요(requirements 포함).
-- 유지 턴 수는 `agent/langgraph_agent.py`의 `_MEMORY_TURNS`(기본 2)로 조정합니다.
+- 유지 턴 수는 `src/c2/presentation/agent/langgraph_agent.py`의 `_MEMORY_TURNS`(기본 2)로 조정합니다.
 
 ---
 
@@ -287,7 +287,7 @@ FastAPI 서버를 백그라운드 스레드로 띄운 뒤 Colab 포트를 노출
 ```python
 import threading, time
 from main import init_agent
-from ui.web_api import start_server
+from c2.presentation.web.api import start_server
 
 # vLLM 서버(:8000)에 연결하는 에이전트 생성
 agent = init_agent()
@@ -349,11 +349,11 @@ serve_kernel_port_as_window(7860)
 기본은 음향표정 수준의 `approximate`(오차 반경 700 m), 확률 35%로 대포병 레이더가 정확
 위치(`detected`)를 포착합니다. 사격을 멈추면 Dead Reckoning 감쇠로 `lost` 처리되므로,
 쏘고 즉시 진지변환(shoot-and-scoot)하지 않으면 대포병 사격의 표적이 됩니다.
-(파라미터: `engine.py:_COUNTER_BATTERY_DETECT_PROB` / `_COUNTER_BATTERY_APPROX_RADIUS`)
+(파라미터: `c2.application.simulation.engine:_COUNTER_BATTERY_DETECT_PROB` / `_COUNTER_BATTERY_APPROX_RADIUS`)
 
 **포병 화력 감쇠**: 자주포가 피해를 입어 전투력이 낮아질수록 간접사격 위력이 **초선형(제곱)**으로
 약해집니다. CP 100%→100%, 75%→56%, 50%→25%, 25%→6% 수준. 즉 피격당한 포병은 화력지원
-효율이 급격히 떨어지므로 보호가 중요합니다. (파라미터: `engine.py:_SPG_FIRE_DEGRADE_EXP`)
+효율이 급격히 떨어지므로 보호가 중요합니다. (파라미터: `c2.application.simulation.engine:_SPG_FIRE_DEGRADE_EXP`)
 
 ### 전장 지도 범례
 
@@ -616,45 +616,49 @@ COHA(Command and Ontology for Hostile Action) 군사 전술 온톨로지를 rdfl
 
 ## 파일 구조
 
+4계층 클린 아키텍처(`src/c2/{domain,application,infrastructure,presentation}/` +
+`src/c2/composition/` 조립 루트)로 구성되어 있습니다. 레거시 top-level 패키지
+(`agent/`, `wargame/`, `tools/`, `ui/gradio_app.py`)는 모두 삭제되었습니다.
+계층별 상세 매핑·의존성 규칙·import-linter 계약은 `CLAUDE.md`를 참고하세요.
+
 ```
 C2_program_ai/
-├── agent/
-│   ├── battlefield_agent.py       # EXAONE4 메인 에이전트 + SingleToolGuard 패치
-│   ├── vllm_client.py             # vLLM 서빙 공용 클라이언트 (OpenAI 호환 API)
-│   └── model_loader.py            # EXAONE4 서빙 클라이언트 로더
-├── scripts/
-│   └── launch_vllm_servers.py     # vLLM 서버 기동 (EXAONE4 :8000)
-├── wargame/
-│   ├── engine.py                  # 워게임 시뮬레이션 엔진 (FOW, 교전, 공중지원, 자동재계획)
-│   ├── models.py                  # Unit, AirSupport, WargameDB 데이터 모델
-│   ├── scenario.py                # 대대 vs 대대 초기 편제
-│   ├── terrain.py                 # 지형 고도·엄폐 맵
-│   └── llm_planner.py             # LLM 기반 임무계획 쿼리 생성기
-├── tools/
-│   ├── wargame_query_tool.py      # 워게임 조회 (4개 도구)
-│   ├── wargame_mission_tool.py    # 임무계획 실행 (3개 도구)
-│   ├── wargame_recon_tool.py      # 정찰 임무 (2개 도구)
-│   ├── wargame_strategy_tool.py   # 전술 권고 (1개 도구)
-│   ├── wargame_opfor_routes_tool.py  # OPFOR 경로 예측 (1개 도구)
-│   ├── wargame_attack_advisor_tool.py  # 최적 공격 위치 (1개 도구)
-│   ├── graph_rag_tool.py          # COHA 온톨로지 Graph RAG (1개 도구)
-│   ├── coa_analysis_tool.py       # COA 분석 (1개 도구)
-│   ├── mission_plan_validator.py  # 임무계획 검증 엔진 (Pydantic 스키마)
-│   ├── mission_plan_validator_tool.py  # 승인 대기 조회 (1개 도구)
-│   ├── single_tool_guard.py       # 스텝당 1 도구 제한 가드
-│   └── coord_utils.py             # 좌표 변환 유틸리티
+├── src/c2/
+│   ├── domain/                    # 순수 값 객체/규칙 (표준 라이브러리만 의존)
+│   │   ├── wargame/               # unit.py, combat.py, coordinates.py, terrain.py
+│   │   ├── planning/               # mission_plan.py (MAP_MAX, Pydantic 스키마)
+│   │   └── ontology/                # models.py (KnowledgeNode/Edge/Evidence)
+│   ├── application/                # 유스케이스/오케스트레이션 (domain + 포트만 의존)
+│   │   ├── ports/                   # LLMClient/EventStore/OntologyStore/ConversationStore/HarnessStore
+│   │   ├── simulation/               # engine.py, scenario.py, session.py, replan.py
+│   │   ├── agent/                     # mission_planner.py
+│   │   ├── ontology/                   # wargame_builder.py, writer.py, retrieval.py, coa_view.py
+│   │   ├── harness/                     # 학습/평가 하네스
+│   │   └── planning/                     # mission_session.py (의도분류/pending-plan)
+│   ├── infrastructure/              # 포트 구현체
+│   │   ├── llm/                       # vllm_client.py, model_loader.py, langgraph_llm.py
+│   │   ├── ontology/                   # doctrine_loader.py(Graph RAG), graph_store.py, in_memory_store.py
+│   │   └── persistence/                 # sqlite_event_store.py(WargameDB), harness_db.py, conversation_store.py
+│   ├── presentation/                 # 에이전트 바인딩 + 웹 API
+│   │   ├── agent/                      # battlefield_agent.py, langgraph_agent.py, langgraph_tools.py
+│   │   ├── tools/                        # wargame_query/mission/recon/strategy/attack_advisor/fire_priority/opfor_routes_tool.py, coa_analysis_tool.py, graph_rag_tool.py, ontology_query_tool.py, mission_plan_validator_tool.py, single_tool_guard.py
+│   │   └── web/api.py                     # FastAPI 앱(create_app/start_server) — HTML 대시보드 REST API
+│   └── composition/
+│       └── container.py                   # build_session() — 전 계층 wiring (조립 루트)
 ├── ui/
-│   ├── web_api.py                 # FastAPI 웹 대시보드 서버 (UI 진입점, Leaflet 지도)
-│   └── gradio_app.py              # 워게임 UI 로직 + 자동 재계획 워커 (web_api에서 사용)
+│   └── dashboard/index.html          # HTML/Leaflet 대시보드 (FastAPI가 정적 서빙)
+├── scripts/
+│   └── launch_vllm_servers.py        # vLLM 서버 기동 (EXAONE4 :8000)
 ├── config/
-│   ├── agent_config.yaml          # 에이전트 설정
+│   ├── agent_config.yaml             # 에이전트 설정
 │   ├── agent_custom_instructions.txt  # 에이전트 시스템 프롬프트
-│   └── models_config.yaml         # ML 모델 설정
+│   └── models_config.yaml            # ML 모델 설정
 ├── data/
-│   ├── coha_full_ontology.ttl     # COHA 군사 전술 온톨로지 (OWL/Turtle)
-│   └── wargame_state.db           # SQLite 워게임 상태 DB
-├── c2_agent_architecture.png      # 시스템 아키텍처 다이어그램
-├── main.py
+│   ├── coha_full_ontology.ttl        # COHA 군사 전술 온톨로지 (OWL/Turtle)
+│   └── wargame_state.db              # SQLite 워게임 상태 DB
+├── tests/                             # pytest 스위트
+├── c2_agent_architecture.png          # 시스템 아키텍처 다이어그램
+├── main.py                            # 진입점 (ui / query / check-env)
 └── requirements.txt
 ```
 

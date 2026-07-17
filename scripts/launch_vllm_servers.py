@@ -13,7 +13,7 @@ EXAONE4를 OpenAI 호환 vLLM 서버(`vllm serve`)로 기동합니다.
 서버가 기동 중 죽으면 해당 로그의 마지막 부분을 자동으로 출력합니다.
 
 기동 후 애플리케이션(python main.py ui 등)을 별도 프로세스로 실행하면
-agent/model_loader.py가 이 서버로 요청을 보냅니다.
+c2.infrastructure.llm.model_loader가 이 서버로 요청을 보냅니다.
 """
 import argparse
 import signal
