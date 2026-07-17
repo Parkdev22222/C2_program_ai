@@ -15,6 +15,7 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
+from c2._paths import data_path
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_HARNESS_DB_PATH = Path(__file__).resolve().parents[4] / "data" / "harness.db"
+_HARNESS_DB_PATH = data_path("harness.db")
 
 
 class HarnessDB:

@@ -18,11 +18,12 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from c2._paths import config_path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-TACTICAL_MEMORY_FILE = Path(__file__).resolve().parents[4] / "config" / "tactical_memory.json"
+TACTICAL_MEMORY_FILE = config_path("tactical_memory.json")
 
 _DEFAULT_DATA = {
     "version": 2,

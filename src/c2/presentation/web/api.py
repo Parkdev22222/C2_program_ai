@@ -14,6 +14,7 @@ import threading
 import traceback
 import uuid
 from pathlib import Path
+from c2._paths import repo_root
 from typing import Any, Dict, List, Optional
 
 # FastAPI 의존성
@@ -245,7 +246,7 @@ def _status_text(state: dict) -> str:
 
 
 # ── FastAPI 앱 팩토리 ────────────────────────────────────────────────────────
-_DASHBOARD_DIR = Path(__file__).resolve().parents[4] / "ui" / "dashboard"
+_DASHBOARD_DIR = repo_root() / "ui" / "dashboard"
 
 
 # ── 요청 모델 ────────────────────────────────────────────────────────────────

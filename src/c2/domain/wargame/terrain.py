@@ -17,6 +17,7 @@ import math
 import os
 import urllib.request
 from pathlib import Path
+from c2._paths import repo_root
 from typing import Tuple
 
 import numpy as np
@@ -68,7 +69,7 @@ TY_MAX  = 1579
 # 데이터 디렉터리: 저장소 루트의 data/ (이 파일 위치와 무관하게 절대 경로로 해석)
 # src/c2/domain/wargame/terrain.py 기준 repo root 는 parents[4]
 # (terrain.py -> wargame -> domain -> c2 -> src -> <repo root>)
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = repo_root()
 DATA_DIR  = _REPO_ROOT / "data"
 DEM_FILE  = DATA_DIR / "korea_dem_cheorwon.npy"
 META_FILE = DATA_DIR / "korea_dem_meta.json"

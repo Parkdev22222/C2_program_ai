@@ -20,13 +20,14 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from c2._paths import config_path
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
 # src/c2/infrastructure/llm/langgraph_llm.py 기준 5단계 상위가 리포지토리 루트
-_CONFIG_PATH = Path(__file__).resolve().parents[4] / "config" / "models_config.yaml"
+_CONFIG_PATH = config_path("models_config.yaml")
 
 
 def _full_cfg() -> dict:

@@ -14,6 +14,7 @@ TYPE_CHECKING)를 참조하여 런타임 의존을 없앤다
 import logging
 from datetime import datetime
 from pathlib import Path
+from c2._paths import config_path
 from typing import TYPE_CHECKING, Dict, List, Optional
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # agent_custom_instructions.txt 경로
-INSTRUCTIONS_FILE = Path(__file__).resolve().parents[4] / "config" / "agent_custom_instructions.txt"
+INSTRUCTIONS_FILE = config_path("agent_custom_instructions.txt")
 
 # 지원하는 섹션 목록
 SECTIONS = ["RECON", "ATTACK", "EXECUTION", "LEARNED_RULES"]

@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from c2._paths import data_path
 
 logger = logging.getLogger(__name__)
 
 # 이 파일: <repo>/src/c2/infrastructure/ontology/doctrine_loader.py
 # parents[0]=ontology, [1]=infrastructure, [2]=c2, [3]=src, [4]=<repo>
-_ONTOLOGY_PATH = Path(__file__).resolve().parents[4] / "data" / "coha_full_ontology.ttl"
+_ONTOLOGY_PATH = data_path("coha_full_ontology.ttl")
 
 # 모듈 레벨 캐시 (프로세스 내 1회 로드)
 _graph = None

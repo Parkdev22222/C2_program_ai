@@ -11,6 +11,7 @@ __call__(messages, stop_sequences, **kwargs) → ChatMessage 인터페이스를 
 import yaml
 import logging
 from pathlib import Path
+from c2._paths import config_path
 from typing import Optional, Dict, Any
 
 from c2.infrastructure.llm.vllm_client import VLLMServerClient, resolve_base_url
@@ -18,7 +19,7 @@ from c2.infrastructure.llm.vllm_client import VLLMServerClient, resolve_base_url
 logger = logging.getLogger(__name__)
 
 # src/c2/infrastructure/llm/model_loader.py 기준 5단계 상위가 리포지토리 루트
-CONFIG_PATH = Path(__file__).resolve().parents[4] / "config" / "models_config.yaml"
+CONFIG_PATH = config_path("models_config.yaml")
 
 AGENT_BASE_URL_ENV = "C2_AGENT_VLLM_BASE_URL"
 AGENT_DEFAULT_PORT = 8000

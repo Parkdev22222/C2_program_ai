@@ -6,7 +6,7 @@ C2 군사 전략 AI - 메인 진입점
   (vLLM 서버로 서빙 — scripts/launch_vllm_servers.py)
 
 사용 예시:
-  python main.py ui                          # HTML 대시보드 UI 실행 (기본 포트 7861)
+  python main.py ui                          # HTML 대시보드 UI 실행 (기본 포트 7860)
   python main.py query --query "적 기갑 전술 추천"
   python main.py check-env                  # 환경 확인
 """
@@ -14,6 +14,15 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+
+# ─────────────────────────────────────────────
+# src/ 를 import 경로에 추가 (c2 패키지는 src/c2/ 아래에 위치)
+# `python main.py` 로 직접 실행할 때 `import c2` 가 되도록 보장한다.
+# (pytest 는 pyproject 의 pythonpath 설정으로 처리되지만, 스크립트 실행은 별도)
+# ─────────────────────────────────────────────
+_SRC = Path(__file__).resolve().parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 logging.basicConfig(
     level=logging.WARNING,

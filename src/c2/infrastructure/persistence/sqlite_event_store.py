@@ -10,12 +10,13 @@
 import sqlite3
 import threading
 from pathlib import Path
+from c2._paths import data_path
 from typing import List
 
 from c2.domain.wargame.unit import Unit
 
 # src/c2/infrastructure/persistence/sqlite_event_store.py 기준 4단계 상위가 리포지토리 루트
-DB_PATH = Path(__file__).resolve().parents[4] / "data" / "wargame_state.db"
+DB_PATH = data_path("wargame_state.db")
 
 
 class WargameDB:
