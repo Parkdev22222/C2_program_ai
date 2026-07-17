@@ -24,6 +24,7 @@ try:
     from wargame import WargameEngine, setup_cheorwon_bn as setup_bn_vs_bn
     from wargame.llm_planner import MissionPlanner
     from wargame.terrain import get_heightmap, GRID_W, GRID_H, MAP_W, MAP_H
+    from c2.application.simulation.session import WargameSession
     _WARGAME_OK = True
 except Exception as _wg_err:
     _WARGAME_OK = False
@@ -358,54 +359,77 @@ def _wg_register_engine(engine):
             pass
 
 
+def _wg_graph_store_factory():
+    """온톨로지 그래프 스토어 생성 + 조회 툴 등록 (WargameSession.graph_store_factory로 주입)."""
+    from ontology.factory import build_graph_store
+    from tools.ontology_query_tool import register_graph_store
+    from ontology.wargame_builder import WARGAME_SCENARIO_ID
+    gs = build_graph_store()
+    register_graph_store(gs, WARGAME_SCENARIO_ID)
+    return gs
+
+
+def _wg_ontology_writer_factory(engine, graph_store):
+    """OntologyWriter 생성 (WargameSession.ontology_writer_factory로 주입)."""
+    from ontology.writer import OntologyWriter
+    return OntologyWriter(engine, graph_store)
+
+
+# Task 29A: 엔진 생명주기(엔진/콜백4종/온톨로지/8개 툴등록)를 소유하는
+# WargameSession 싱글턴. application 계층은 tools/ui/infra를 직접 import하지
+# 않으므로, 아래 훅/팩토리를 gradio_app(presentation 경계)에서 주입한다.
+_session = WargameSession(
+    engine_factory=lambda: WargameEngine(setup_bn_vs_bn()),
+    tool_register_hook=_wg_register_engine,
+    graph_store_factory=_wg_graph_store_factory,
+    ontology_writer_factory=_wg_ontology_writer_factory,
+) if _WARGAME_OK else None
+
+
 def _wg_ensure_ontology(engine) -> None:
     """온톨로지 그래프 스토어 + 실시간 적재기(OntologyWriter)를 준비한다.
 
-    스토어는 세션당 1회 생성(환경변수 OI_NEO4J_* 있으면 Neo4j, 없으면 in-memory 폴백)
-    하고 온톨로지 조회 툴에 등록한다. writer 는 엔진 상태를 이벤트 + 주기 스냅샷으로
-    KG에 적재한다. 엔진 인스턴스가 바뀌면 writer 의 엔진 참조를 갱신한다.
+    Task 29A: 실제 준비 로직은 `_session.ensure_ontology()`로 위임됐다. 레거시
+    전역(`_wg_graph_store`/`_wg_ontology_writer`)은 파일 하위 다른 함수들이 계속
+    직접 참조하므로 세션 상태와 동기화해 유지한다.
     """
     global _wg_graph_store, _wg_ontology_writer
-    try:
-        if _wg_graph_store is None:
-            from ontology.factory import build_graph_store
-            from tools.ontology_query_tool import register_graph_store
-            from ontology.wargame_builder import WARGAME_SCENARIO_ID
-            _wg_graph_store = build_graph_store()
-            register_graph_store(_wg_graph_store, WARGAME_SCENARIO_ID)
-        if _wg_ontology_writer is None:
-            from ontology.writer import OntologyWriter
-            _wg_ontology_writer = OntologyWriter(engine, _wg_graph_store)
-            _wg_ontology_writer.start()
-        else:
-            _wg_ontology_writer.engine = engine
-    except Exception as e:
-        logger.warning(f"온톨로지 적재기 초기화 실패 (무시): {e}")
+    if _session is None:
+        return
+    _session.ensure_ontology(engine)
+    _wg_graph_store = _session.graph_store
+    _wg_ontology_writer = _session.ontology_writer
 
 
 def _wg_ensure_engine() -> Optional["WargameEngine"]:
-    global _wg_engine, _wg_planner
-    if not _WARGAME_OK:
+    """엔진 확보 — Task 29A: 실제 생성/콜백4종등록/툴등록/온톨로지 준비는
+    `_session.ensure_engine()`(c2.application.simulation.session.WargameSession)에
+    위임한다. 레거시 전역(`_wg_engine`/`_wg_planner`/`_wg_graph_store`/
+    `_wg_ontology_writer`)은 이 파일의 다른 함수들이 아직 직접 참조하므로 세션
+    상태와 동기화해 유지한다 (전량 이관은 Task 29B/29C에서 진행).
+    """
+    global _wg_engine, _wg_planner, _wg_graph_store, _wg_ontology_writer
+    if not _WARGAME_OK or _session is None:
         return None
     if _wg_engine is None:
-        units = setup_bn_vs_bn()
-        _bl = [u.id for u in units if u.side == "BLUFOR"]
-        _op = [u.id for u in units if u.side == "OPFOR"]
+        engine = _session.ensure_engine()
+        _wg_engine = engine
+        _wg_planner = MissionPlanner()
+        _wg_graph_store = _session.graph_store
+        _wg_ontology_writer = _session.ontology_writer
+        # `_session.ensure_engine()`은 콜백 4종을 세션 자체 큐(`_session.detection_queue`)로
+        # 등록한다. Task 29B에서 `_detection_worker`가 세션 큐 소비로 이관되기 전까지는
+        # 이 파일의 기존 워커가 `_detection_queue`(전역)를 소비하므로, 콜백을 그 워커가
+        # 읽는 큐로 향하는 이 파일의 enqueue 함수로 재등록해 자동 재계획 파이프라인을
+        # 그대로 보존한다 (CLAUDE.md: 콜백 4종 유지).
+        engine.on_new_opfor_detection = _detection_enqueue
+        engine.on_blufor_cp_threshold = _cp_threshold_enqueue
+        engine.on_blufor_air_hit = _air_hit_enqueue
+        engine.on_target_moved = _target_moved_enqueue
+        _bl = [u.id for u in engine.units if u.side == "BLUFOR"]
+        _op = [u.id for u in engine.units if u.side == "OPFOR"]
         logger.warning("[시나리오] setup_cheorwon_bn 로드 — BLUFOR %d개%s / OPFOR %d개%s",
                        len(_bl), _bl, len(_op), _op)
-        _wg_engine = WargameEngine(units)
-        _wg_planner = MissionPlanner()
-        _wg_register_engine(_wg_engine)
-        # 자동 탐지 임무계획 콜백 등록
-        _wg_engine.on_new_opfor_detection = _detection_enqueue
-        # BLUFOR 전투력 임계값 임무계획 콜백 등록
-        _wg_engine.on_blufor_cp_threshold = _cp_threshold_enqueue
-        # BLUFOR 유닛 공중지원 피격 임무계획 콜백 등록
-        _wg_engine.on_blufor_air_hit = _air_hit_enqueue
-        # UAV 완전 정찰: 처음부터 양측 전 위치 detected (철원 시나리오 가정)
-        _wg_engine.full_recon = True
-        # 온톨로지 실시간 적재기 준비
-        _wg_ensure_ontology(_wg_engine)
     return _wg_engine
 
 
