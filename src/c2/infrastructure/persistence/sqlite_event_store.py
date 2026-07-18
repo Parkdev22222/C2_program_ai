@@ -133,6 +133,22 @@ class WargameDB:
     def current_session_id(self) -> str:
         return self._session_id
 
+    def _prune_old_sessions(self, conn) -> None:
+        """sessions를 최신순 _MAX_SESSIONS개만 남기고, 그 밖 세션의 events/sessions를 삭제.
+        호출자가 이미 잡은 conn/락 안에서 실행한다."""
+        keep = [
+            r[0]
+            for r in conn.execute(
+                "SELECT session_id FROM sessions ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (_MAX_SESSIONS,),
+            ).fetchall()
+        ]
+        if not keep:
+            return
+        placeholders = ",".join("?" * len(keep))
+        conn.execute(f"DELETE FROM events   WHERE session_id NOT IN ({placeholders})", keep)
+        conn.execute(f"DELETE FROM sessions WHERE session_id NOT IN ({placeholders})", keep)
+
     def _start_session(self, scenario: str = "") -> str:
         """새 session_id를 발급해 sessions 레지스트리에 기록하고 오래된 세션을 정리한다.
         live-state 테이블(units/snapshots/unit_realtime)은 건드리지 않는다."""
@@ -143,7 +159,8 @@ class WargameDB:
                 "INSERT INTO sessions(session_id, created_at, scenario) VALUES (?,?,?)",
                 (sid, created, scenario),
             )
-        self._session_id = sid
+            self._prune_old_sessions(conn)
+            self._session_id = sid
         return sid
 
     def reset_for_new_session(self, scenario: str = "") -> str:

@@ -64,3 +64,51 @@ def test_reset_for_new_session_wipes_live_state(tmp_path):
     db.reset_for_new_session()
     assert db.load_units() == []
     assert db.get_latest_unit_states() == []
+
+
+def test_prune_keeps_only_recent_sessions(tmp_path):
+    import c2.infrastructure.persistence.sqlite_event_store as ses
+
+    db = WargameDB(db_path=tmp_path / "s.db")
+    max_n = ses._MAX_SESSIONS
+
+    first_sid = db.current_session_id()
+    db.log_event(1, 60.0, "COMBAT", "first")
+
+    # 최초 세션 포함 총 (max_n + 2)개 세션을 만든다
+    for i in range(max_n + 1):
+        db.reset_for_new_session()
+        db.log_event(1, 60.0, "COMBAT", f"s{i}")
+
+    # 가장 오래된 세션(first_sid)은 정리되어 events가 없어야 한다
+    assert db.get_recent_events(n=10, session_id=first_sid) == []
+
+    # sessions 레지스트리에도 max_n개만 남아야 한다
+    import sqlite3
+    conn = sqlite3.connect(str(tmp_path / "s.db"))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == max_n
+
+
+def test_prune_clears_legacy_events(tmp_path):
+    import sqlite3
+
+    # session_id 컬럼이 이미 있는 DB에 'legacy' 행을 직접 주입한 뒤 새 세션 발급
+    path = tmp_path / "s.db"
+    db = WargameDB(db_path=path)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "INSERT INTO events(tick,game_time,event_type,message,session_id) "
+            "VALUES (1,60.0,'COMBAT','legacy-row','legacy')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db.reset_for_new_session()
+    # legacy는 sessions에 없으므로 정리 대상 → 조회 불가
+    assert db.get_recent_events(n=10, session_id="legacy") == []
