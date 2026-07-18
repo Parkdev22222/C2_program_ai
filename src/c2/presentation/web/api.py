@@ -270,9 +270,15 @@ if _FASTAPI_OK:
         x: Optional[float] = None
         y: Optional[float] = None
 
+    class ScenarioControlPointDef(BaseModel):
+        id: str
+        x: float
+        y: float
+
     class ScenarioApplyRequest(BaseModel):
         blufor: List[ScenarioUnitDef]
         opfor: List[ScenarioUnitDef]
+        control_points: Optional[List[ScenarioControlPointDef]] = None
 
 
 _app_singleton: Any = None
@@ -525,6 +531,8 @@ def create_app(agent: Any = None) -> Any:
                              "x": u.x, "y": u.y} for u in req.blufor],
                 "opfor": [{"id": u.id, "unit_type": u.unit_type,
                             "x": u.x, "y": u.y} for u in req.opfor],
+                "control_points": [{"id": c.id, "x": c.x, "y": c.y}
+                                   for c in (req.control_points or [])],
             }
             result = _get_session().apply_custom_scenario(config)
             if result.get("ok"):

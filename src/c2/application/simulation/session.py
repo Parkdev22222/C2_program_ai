@@ -361,6 +361,18 @@ class WargameSession:
                 self.ensure_engine()
                 self.engine.reset(units)
 
+            # 통제구역: 사용자가 지도 클릭으로 지정했으면 반영, 없으면 기본 3곳
+            from c2.domain.wargame.control_point import ControlPoint, default_control_points
+            cp_defs = scenario_config.get("control_points") or []
+            if cp_defs:
+                cps = [
+                    ControlPoint(str(c["id"]), float(c["x"]), float(c["y"]))
+                    for c in cp_defs
+                ]
+                self.engine.set_control_points(cps)
+            else:
+                self.engine.set_control_points(default_control_points())
+
             self._ensure_planner()
             # 콜백 4종 재등록 (CLAUDE.md) — 세션 enqueue → 세션 큐 → 세션 워커
             self._register_callbacks(self.engine)

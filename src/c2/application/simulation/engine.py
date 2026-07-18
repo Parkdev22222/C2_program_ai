@@ -2129,6 +2129,14 @@ class WargameEngine:
                         f"{u.id}({u.unit_type}) 전투력 회복 (CP {cp:.0f}%)",
                     )
 
+    def set_control_points(self, points: List[ControlPoint]) -> None:
+        """커스텀 통제구역 설정(시나리오 설정용). 소유·유지 타이머·승자를 초기화한다.
+        비어 있으면 기본 3곳으로 되돌린다."""
+        self._control_points = list(points) if points else default_control_points()
+        self._cp_owner = {cp.id: None for cp in self._control_points}
+        self._cp_majority_since = {"BLUFOR": None, "OPFOR": None}
+        self._cp_winner = None
+
     def _update_control_points(self, dt: float):
         """통제구역 점령 갱신 + 다수(≥2) 유지 승리 판정. 매 틱 호출."""
         for cp in self._control_points:

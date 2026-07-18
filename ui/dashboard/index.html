@@ -424,6 +424,18 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Noto S
         <div class="sc-coord-hint">X/Y 비워두면 적군 구역 내 랜덤 배치 (x 17,000~28,000 / y 17,000~28,500)</div>
         <button class="sc-add-btn" onclick="addUnit('opfor')">+ 적군 부대 추가</button>
       </div>
+      <!-- 통제구역 -->
+      <div style="grid-column:1 / -1">
+        <div class="sc-side-title" style="color:var(--amber)">◆ 통제구역 (승리 목표)</div>
+        <table class="sc-unit-table" id="cp-table">
+          <thead><tr>
+            <th>통제구역 ID</th><th>X (m)</th><th>Y (m)</th><th>지도</th><th></th>
+          </tr></thead>
+          <tbody id="cp-tbody"></tbody>
+        </table>
+        <div class="sc-coord-hint">📍 버튼을 눌러 지도에서 통제구역 위치를 클릭 선택 (반경 2,000m 고정). 승리조건: 3곳 중 ≥2곳을 500틱 유지 또는 적 전멸.<br>비워두면 기본 3곳(통제-알파/브라보/찰리) 사용.</div>
+        <button class="sc-add-btn" onclick="addCp()">+ 통제구역 추가</button>
+      </div>
     </div>
     <div class="sc-footer">
       <div class="sc-hint">
@@ -1172,6 +1184,12 @@ const DEFAULT_OPFOR = [
   {id:'적자주포중대',  unit_type:'자주포',     x:26500, y:21000},
 ];
 
+const DEFAULT_CP = [
+  {id:'통제-알파',  x:12000, y:14000},
+  {id:'통제-브라보', x:15000, y:15000},
+  {id:'통제-찰리',  x:14000, y:12000},
+];
+
 let _scCounter = 0;
 const _scPreviewMarkers = {};  // 시나리오 위치 미리보기 마커
 
@@ -1197,6 +1215,42 @@ function makeUnitRow(side, u) {
 function renderTable(side, units) {
   document.getElementById(`${side}-tbody`).innerHTML =
     units.map(u => makeUnitRow(side, u)).join('');
+}
+
+function makeCpRow(cp) {
+  const key = ++_scCounter;
+  return `<tr id="scrow-${key}" data-side="cp">
+    <td><input type="text" value="${cp.id||''}" placeholder="예: 통제-알파" style="width:90px" data-field="id"></td>
+    <td><input type="number" value="${cp.x != null ? cp.x : ''}" placeholder="X" data-field="x" oninput="updateScPreviewMarkers()"></td>
+    <td><input type="number" value="${cp.y != null ? cp.y : ''}" placeholder="Y" data-field="y" oninput="updateScPreviewMarkers()"></td>
+    <td><button class="sc-pick-btn" onclick="startMapPick('scrow-${key}')" title="지도에서 위치 클릭 선택" style="color:var(--amber)">📍</button></td>
+    <td><button class="sc-del-btn" onclick="delRow('scrow-${key}');updateScPreviewMarkers()">✕</button></td>
+  </tr>`;
+}
+
+function renderCpTable(cps) {
+  document.getElementById('cp-tbody').innerHTML = cps.map(makeCpRow).join('');
+}
+
+function addCp() {
+  const n = document.getElementById('cp-tbody').children.length + 1;
+  const tmp = document.createElement('tbody');
+  tmp.innerHTML = makeCpRow({id: `통제${n}`, x: null, y: null});
+  document.getElementById('cp-tbody').appendChild(tmp.firstElementChild);
+}
+
+function readCpRows() {
+  const rows = document.getElementById('cp-tbody').querySelectorAll('tr');
+  const result = [];
+  for (const row of rows) {
+    const get = f => row.querySelector(`[data-field="${f}"]`);
+    const id = get('id')?.value.trim();
+    const xVal = get('x')?.value.trim();
+    const yVal = get('y')?.value.trim();
+    if (!id || xVal === '' || yVal === '') continue;  // 좌표 없는 통제구역은 제외
+    result.push({id, x: parseFloat(xVal), y: parseFloat(yVal)});
+  }
+  return result;
 }
 
 function addUnit(side) {
@@ -1240,9 +1294,12 @@ function updateScPreviewMarkers() {
   for (const k of Object.keys(_scPreviewMarkers)) {
     map.removeLayer(_scPreviewMarkers[k]); delete _scPreviewMarkers[k];
   }
-  // BLUFOR + OPFOR 각 행 마커 추가
-  [['blufor-tbody','#40aaff'], ['opfor-tbody','#ff4040']].forEach(([tbodyId, color]) => {
-    for (const row of document.getElementById(tbodyId).querySelectorAll('tr')) {
+  // BLUFOR + OPFOR + 통제구역 각 행 마커 추가
+  [['blufor-tbody','#40aaff'], ['opfor-tbody','#ff4040'], ['cp-tbody','#ffb300']].forEach(([tbodyId, color]) => {
+    const tbodyEl = document.getElementById(tbodyId);
+    if (!tbodyEl) return;
+    const isCp = tbodyId === 'cp-tbody';
+    for (const row of tbodyEl.querySelectorAll('tr')) {
       const id   = row.querySelector('[data-field="id"]')?.value;
       const xStr = row.querySelector('[data-field="x"]')?.value;
       const yStr = row.querySelector('[data-field="y"]')?.value;
@@ -1251,10 +1308,15 @@ function updateScPreviewMarkers() {
       if (isNaN(x) || isNaN(y)) continue;
       const [lat, lon] = xyToLatlon(x, y);
       const icon = L.divIcon({
-        html: `<div style="padding:2px 5px;background:${color};border:2px solid ${color};border-radius:2px;color:#000d1a;font-family:'Courier New',monospace;font-size:9px;font-weight:700;white-space:nowrap;opacity:.85">${id}</div>`,
+        html: `<div style="padding:2px 5px;background:${color};border:2px solid ${color};border-radius:2px;color:#000d1a;font-family:'Courier New',monospace;font-size:9px;font-weight:700;white-space:nowrap;opacity:.85">${isCp ? '◆ ' : ''}${id}</div>`,
         className:'', iconSize:[null,20], iconAnchor:[0,10],
       });
       _scPreviewMarkers[`sc_${id}`] = L.marker([lat,lon],{icon,zIndexOffset:200}).addTo(map);
+      if (isCp) {  // 통제구역 점령 반경(2000m) 미리보기 원
+        _scPreviewMarkers[`sccirc_${id}`] = L.circle([lat,lon], {
+          radius: 2000, color, weight: 1.5, fillColor: color, fillOpacity: 0.08, dashArray: '6,5',
+        }).addTo(map);
+      }
     }
   });
 }
@@ -1277,7 +1339,9 @@ function startMapPick(rowId) {
   const row = document.getElementById(rowId);
   const unitId = row.querySelector('[data-field="id"]').value || '부대';
   const side = row.dataset.side;
-  const color = side === 'blufor' ? 'var(--blue)' : 'var(--red)';
+  const color = side === 'blufor' ? 'var(--blue)'
+              : side === 'opfor' ? 'var(--red)' : 'var(--amber)';
+  const what = side === 'cp' ? '통제구역 위치' : '시작 위치';
 
   // 모달 뒤로 숨기기 (지도 보이도록)
   document.getElementById('scenario-modal').style.opacity = '0.08';
@@ -1286,7 +1350,7 @@ function startMapPick(rowId) {
   // 안내 배너 표시
   const banner = document.getElementById('sc-pick-banner');
   document.getElementById('sc-pick-msg').innerHTML =
-    `📍 지도를 클릭하여 <b style="color:${color}">${unitId}</b> 의 시작 위치를 선택하세요`;
+    `📍 지도를 클릭하여 <b style="color:${color}">${unitId}</b> 의 ${what}를 선택하세요`;
   banner.style.display = 'flex';
 
   document.getElementById('map').style.cursor = 'crosshair';
@@ -1326,6 +1390,7 @@ function cancelMapPick() {
 function openScenarioModal() {
   renderTable('blufor', DEFAULT_BLUFOR);
   renderTable('opfor',  DEFAULT_OPFOR);
+  renderCpTable(DEFAULT_CP);
   document.getElementById('sc-status').textContent = '';
   document.getElementById('sc-status').className = '';
   document.getElementById('scenario-modal').classList.add('show');
@@ -1345,6 +1410,7 @@ document.getElementById('scenario-modal').addEventListener('click', e => {
 async function applyScenario() {
   const blufor = readTableRows('blufor');
   const opfor  = readTableRows('opfor');
+  const control_points = readCpRows();
   const statusEl = document.getElementById('sc-status');
 
   if (blufor.length === 0) { statusEl.textContent = '❌ BLUFOR 부대가 없습니다'; statusEl.className='err'; return; }
@@ -1357,6 +1423,13 @@ async function applyScenario() {
     statusEl.textContent = `❌ 중복 ID: ${dupIds.join(', ')}`;
     statusEl.className = 'err'; return;
   }
+  // 통제구역 ID 중복 체크
+  const cpIds = control_points.map(c => c.id);
+  const dupCp = cpIds.filter((id, i) => cpIds.indexOf(id) !== i);
+  if (dupCp.length > 0) {
+    statusEl.textContent = `❌ 통제구역 중복 ID: ${dupCp.join(', ')}`;
+    statusEl.className = 'err'; return;
+  }
 
   statusEl.textContent = '적용 중...'; statusEl.className = '';
 
@@ -1364,7 +1437,7 @@ async function applyScenario() {
     const r = await fetch('/api/scenario/apply', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({blufor, opfor}),
+      body: JSON.stringify({blufor, opfor, control_points}),
     });
     const d = await r.json();
     if (d.ok) {
