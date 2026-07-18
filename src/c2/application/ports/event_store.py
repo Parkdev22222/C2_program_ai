@@ -43,3 +43,9 @@ class EventStore(Protocol):
 
     def clear(self) -> None:
         ...
+
+    def current_session_id(self) -> str:
+        ...
+
+    def reset_for_new_session(self, scenario: str = "") -> str:
+        ...
