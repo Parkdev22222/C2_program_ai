@@ -679,12 +679,14 @@ class WargameEngine:
         with self._lock:
             units_data = []
             for u in self.units:
+                _vx, _vy = self._unit_velocity.get(u.id, (0.0, 0.0))
                 units_data.append({
                     "id":             u.id,
                     "side":           u.side,
                     "unit_type":      u.unit_type,
                     "x":              round(u.x, 1),
                     "y":              round(u.y, 1),
+                    "velocity":       [round(_vx, 2), round(_vy, 2)],
                     "elevation":      round(terrain.elevation(u.x, u.y), 1),
                     "combat_power":   round(u.combat_power, 1),
                     "status":         u.status,

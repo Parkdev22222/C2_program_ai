@@ -64,6 +64,27 @@ def _iso(game_time: float) -> str:
     return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# 이동 방향 8방위 라벨 (map 좌표: x=동+, y=북+; atan2(vy,vx) 0°=동, 반시계)
+_COMPASS_8 = ["동", "북동", "북", "북서", "서", "남서", "남", "남동"]
+_MOVING_SPEED_MIN = 0.3   # m/s 미만이면 정지로 간주
+
+
+def _heading_from_velocity(velocity) -> tuple:
+    """velocity [vx, vy] → (방위 라벨 | None, 방위각(도) | None, 속도 m/s, 이동중 여부).
+
+    정지(속도 < _MOVING_SPEED_MIN)면 방위=None.
+    """
+    if not velocity or len(velocity) < 2:
+        return None, None, 0.0, False
+    vx, vy = float(velocity[0]), float(velocity[1])
+    speed = math.hypot(vx, vy)
+    if speed < _MOVING_SPEED_MIN:
+        return None, None, round(speed, 2), False
+    ang = math.degrees(math.atan2(vy, vx)) % 360.0   # 0°=동, 90°=북
+    idx = int((ang + 22.5) % 360 // 45)
+    return _COMPASS_8[idx], round(ang, 1), round(speed, 2), True
+
+
 def _event_node_properties(event: BattleEvent) -> dict:
     """KG Event 노드 페이로드 — 원본 _event_node_properties 와 동일 규칙."""
     props = asdict(event)
@@ -99,6 +120,21 @@ def _parse_event_actors(event_type: str, msg: str) -> tuple[str | None, str | No
         m = re.search(r"(\w+)", msg)
         if m:
             return None, m.group(1)
+    elif event_type == "FRATRICIDE_INDIRECT":
+        # "{spg}(자주포)⚠아군오사→{defender}(...): ..." — 아군 자주포가 아군 피격
+        m = re.search(r"(\w+)\([^)]*\)⚠아군오사→\s*(\w+)", msg)
+        if m:
+            return m.group(1), m.group(2)
+    elif event_type == "FRATRICIDE_AIR":
+        # "[SIDE] {call_sign}⚠아군오사→{defender}: ..." — 공격자=호출부호(비유닛)
+        m = re.search(r"⚠아군오사→\s*(\w+)", msg)
+        if m:
+            return None, m.group(1)
+    elif event_type == "COUNTER_BATTERY":
+        # "{spg}(자주포) 대포병 피해 ..." — 피해자=사격한 자주포 자신
+        m = re.search(r"(\w+)\(", msg)
+        if m:
+            return None, m.group(1)
     return None, None
 
 
@@ -108,7 +144,15 @@ _EVENT_TYPE_MAP = {
     "INDIRECT": ("폭발/원격 공격", "포격/포병/미사일 공격"),
     "AIR_STRIKE": ("폭발/원격 공격", "공습/드론 공격"),
     "DESTROYED": ("전투", "장비/부대 파괴"),
+    # 아군 오사(fratricide) — 아군 화력에 의한 아군 피해
+    "FRATRICIDE_INDIRECT": ("폭발/원격 공격", "아군 포격 오사(fratricide)"),
+    "FRATRICIDE_AIR": ("폭발/원격 공격", "아군 공습 오사(fratricide)"),
+    # 대포병 — 정적 포격 노출로 인한 자주포 피해
+    "COUNTER_BATTERY": ("폭발/원격 공격", "대포병 사격"),
 }
+
+# 아군 오사(같은 편 공격→피격) 이벤트 타입 — friendly_fire 엣지 생성 대상
+_FRATRICIDE_TYPES = {"FRATRICIDE_INDIRECT", "FRATRICIDE_AIR"}
 
 
 class WargameOntologyBuilder:
@@ -148,6 +192,9 @@ class WargameOntologyBuilder:
                 "current_action": u.get("current_action", ""),
                 "x_m": u.get("x"),
                 "y_m": u.get("y"),
+                # 최신 이동 방향(8방위)·속도 — 적 부대 기동 방향 파악용
+                "heading": _heading_from_velocity(u.get("velocity"))[0],
+                "speed_mps": _heading_from_velocity(u.get("velocity"))[2],
             },
         )
 
@@ -158,6 +205,7 @@ class WargameOntologyBuilder:
         uid = u["id"]
         lat, lon = xy_to_latlon(u.get("x", 0), u.get("y", 0))
         obs_id = f"KGN-OBS-{uid}-{tick}"
+        heading, heading_deg, speed, moving = _heading_from_velocity(u.get("velocity"))
         node = KnowledgeNode(
             kg_node_id=obs_id,
             scenario_id=self.scenario_id,
@@ -176,6 +224,11 @@ class WargameOntologyBuilder:
                 "x_m": u.get("x"),
                 "y_m": u.get("y"),
                 "elevation": u.get("elevation"),
+                # 이동 방향(8방위)·방위각·속도·이동중 여부
+                "heading": heading,
+                "heading_deg": heading_deg,
+                "speed_mps": speed,
+                "moving": moving,
                 "tick": tick,
             },
         )
@@ -320,6 +373,24 @@ class WargameOntologyBuilder:
                         observed_at=iso,
                     )
                 )
+            # 아군 오사(friendly_fire) 엣지 — 같은 편 공격자→피격자 (아군 포격/공습에 의한 아군 피해)
+            if (
+                etype in _FRATRICIDE_TYPES
+                and attacker in units_by_id
+                and defender in units_by_id
+                and units_by_id[attacker].get("side") == units_by_id[defender].get("side")
+            ):
+                edges.append(
+                    KnowledgeEdge(
+                        kg_edge_id=f"KGE-FF-{key}",
+                        scenario_id=self.scenario_id,
+                        source_node_id=f"KGN-UNIT-{attacker}",
+                        target_node_id=f"KGN-UNIT-{defender}",
+                        relation="friendly_fire",
+                        evidence_ids=(f"EVD-{key}",),
+                        observed_at=iso,
+                    )
+                )
 
             evidences.append(
                 Evidence(
@@ -373,6 +444,53 @@ class WargameOntologyBuilder:
             )
         return edges
 
+    # -- 적 기동 방향 → advances_toward 엣지 --------------------------
+    def _movement_edges(self, state: dict, iso: str) -> list[KnowledgeEdge]:
+        """탐지된 이동 중 OPFOR가 어느 BLUFOR 부대 쪽으로 접근하는지 기록한다.
+
+        FOW 준수: 아군 인텔에 detected/approximate 로 잡힌 OPFOR만 대상.
+        이동 방향 벡터(velocity)가 최근접 BLUFOR를 향할 때(각도 < 90°) advances_toward 엣지 생성.
+        """
+        edges: list[KnowledgeEdge] = []
+        units = state.get("units", []) or []
+        blufor = [u for u in units if u.get("side") == "BLUFOR" and u.get("status") != "destroyed"]
+        if not blufor:
+            return edges
+        tick = state.get("tick", 0)
+        detected = {
+            e.get("unit_id")
+            for e in (state.get("intelligence", {}) or {}).get("BLUFOR", []) or []
+            if e.get("unit_id")
+        }
+        for u in units:
+            if u.get("side") != "OPFOR" or u["id"] not in detected:
+                continue
+            vel = u.get("velocity")
+            _lab, _deg, speed, moving = _heading_from_velocity(vel)
+            if not moving:
+                continue
+            ox, oy = u.get("x", 0), u.get("y", 0)
+            nearest = min(
+                blufor,
+                key=lambda b: (b.get("x", 0) - ox) ** 2 + (b.get("y", 0) - oy) ** 2,
+            )
+            # 이동 벡터가 최근접 BLUFOR 방향과 같은 반구(내적>0)면 '접근 중'
+            dx, dy = nearest.get("x", 0) - ox, nearest.get("y", 0) - oy
+            vx, vy = float(vel[0]), float(vel[1])
+            if dx * vx + dy * vy <= 0:
+                continue
+            edges.append(
+                KnowledgeEdge(
+                    kg_edge_id=f"KGE-ADV-{u['id']}-{nearest['id']}-{tick}",
+                    scenario_id=self.scenario_id,
+                    source_node_id=f"KGN-UNIT-{u['id']}",
+                    target_node_id=f"KGN-UNIT-{nearest['id']}",
+                    relation="advances_toward",
+                    observed_at=iso,
+                )
+            )
+        return edges
+
     # -- 공개 진입점 ---------------------------------------------------
     def build(
         self, state: dict, events: list[dict] | None = None
@@ -395,6 +513,7 @@ class WargameOntologyBuilder:
 
         edges.extend(self._detection_edges(state, iso))
         edges.extend(self._threat_edges(state, iso))
+        edges.extend(self._movement_edges(state, iso))
 
         if events:
             ev_nodes, ev_edges, ev_evidences = self._event_records(events, units_by_id)

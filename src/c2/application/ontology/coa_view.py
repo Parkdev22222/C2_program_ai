@@ -44,6 +44,9 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
                 "combat_power": _cur("combat_power"),
                 "status": _cur("status") or "",
                 "current_action": _cur("current_action") or "",
+                # 이동 방향(8방위)·속도 — 적 부대 기동 방향 인지용
+                "heading": _cur("heading"),
+                "speed_mps": _cur("speed_mps"),
                 "observed_at": (obs.observed_at if obs else un.observed_at),
             }
         )
@@ -58,7 +61,8 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
     # 적↔아군 관계 (observes=탐지 / engages=교전 / threatens=위협).
     # 틱마다 같은 (source,target,relation) 쌍이 반복 적재되므로 중복은 최신 1건만 유지
     # → 관계 목록이 턴 수에 비례해 늘지 않도록 압축.
-    _FORCE_RELS = {"observes", "engages", "threatens"}
+    # observes=탐지 / engages=교전 / threatens=위협 / friendly_fire=아군 오사 / advances_toward=적 접근
+    _FORCE_RELS = {"observes", "engages", "threatens", "friendly_fire", "advances_toward"}
     _latest_rel: dict = {}
     for e in kg_edges:
         if e.relation not in _FORCE_RELS:
@@ -123,6 +127,8 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
     detected_targets = {d["target"] for d in detections}
     engagements = [r for r in force_relations if r["relation"] == "engages"]
     threats = [r for r in force_relations if r["relation"] == "threatens"]
+    friendly_fire = [r for r in force_relations if r["relation"] == "friendly_fire"]
+    advancing = [r for r in force_relations if r["relation"] == "advances_toward"]
     # 탐지된 적 부대 요약 (병종 포함) — 아군 방책 판단 시 적 편성 인지용
     detected_enemies = [
         {
@@ -150,5 +156,8 @@ def serialize_situation(kg_nodes, kg_edges, evidences) -> dict:
             "recent_events": len(events),
             "engagements": len(engagements),
             "threats": len(threats),
+            # 아군 오사(아군 화력에 의한 아군 피해) / 접근 중인 적 부대 수
+            "friendly_fire_incidents": len(friendly_fire),
+            "advancing_enemies": len(advancing),
         },
     }
