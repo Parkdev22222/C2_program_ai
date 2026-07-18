@@ -146,6 +146,15 @@ class WargameDB:
         self._session_id = sid
         return sid
 
+    def reset_for_new_session(self, scenario: str = "") -> str:
+        """새 게임 세션을 시작한다. 실시간 상태 테이블(units/snapshots/unit_realtime)만
+        비우고 events는 보존한 뒤 새 session_id를 발급한다."""
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM units")
+            conn.execute("DELETE FROM snapshots")
+            conn.execute("DELETE FROM unit_realtime")
+        return self._start_session(scenario)
+
     # ── Unit CRUD ─────────────────────────────────────────────────
 
     def save_units(self, units: List[Unit]):
