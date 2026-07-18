@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Callable, Tuple, TYPE_CHECKING
 
 from c2.domain.wargame.unit import Unit, AirSupport, AIR_SUPPORT_PRESETS
 from c2.domain.wargame.terrain import terrain
+from c2.domain.wargame.control_point import ControlPoint, default_control_points
 
 if TYPE_CHECKING:
     # 타입 힌트용 포트 (sibling application port import 허용). 런타임 의존 없음.
@@ -70,6 +71,9 @@ _CB_DAMAGE_RATE    = 80.0    # 대포병 피해율 %/h (최대 램프)
 _CB_RAMP           = 180.0   # 피해 램프 게임초
 _CB_MOVE_RESET     = 300.0   # 이 거리 이상 이동 시 정적 타이머 리셋 (m)
 _INDIRECT_CP_FLOOR = 16.0   # 간접포는 이 CP 이하로 격멸 불가 (제압까지만) — DESTROYED_THRESHOLD(15.0)보다 반드시 커야 함 (같으면 _update_status가 즉시 격멸 판정)
+
+_CP_CAPTURE_RADIUS = 2_000.0   # 통제구역 점령 판정 반경 (m)
+_CP_HOLD_TO_WIN    = 300.0     # ≥2곳 다수 유지 승리 게임초
 
 # ── 병종 상성 계수 (_MATCHUP) → c2.domain.wargame.combat 이동 ──────────
 
@@ -254,6 +258,12 @@ class WargameEngine:
         self._air_use_count: Dict[str, int] = {"BLUFOR": 0, "OPFOR": 0}
         self._air_reset_at: int = self._AIR_RESET_TICKS  # 다음 리셋 틱
 
+        # 통제구역(control point) — 점령 소유/다수유지 승리 타이머
+        self._control_points = default_control_points()
+        self._cp_owner: Dict[str, Optional[str]] = {cp.id: None for cp in self._control_points}
+        self._cp_majority_since: Dict[str, Optional[float]] = {"BLUFOR": None, "OPFOR": None}
+        self._cp_winner: Optional[str] = None
+
         self.db.save_units(units)
         self.db.save_snapshot(0, 0.0, units)
 
@@ -368,6 +378,9 @@ class WargameEngine:
             self._opfor_air_cooldown         = 0.0
             self._air_use_count  = {"BLUFOR": 0, "OPFOR": 0}
             self._air_reset_at   = self._AIR_RESET_TICKS
+            self._cp_owner = {cp.id: None for cp in self._control_points}
+            self._cp_majority_since = {"BLUFOR": None, "OPFOR": None}
+            self._cp_winner = None
             self.db.reset_for_new_session()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
@@ -705,6 +718,19 @@ class WargameEngine:
                 "units":              units_data,
                 "running":            self.running,
                 "winner":             self._check_winner(),
+                "control_points": [
+                    {
+                        "id": cp.id, "x": round(cp.x, 1), "y": round(cp.y, 1),
+                        "owner": self._cp_owner.get(cp.id),
+                        "blufor_near": sum(
+                            1 for u in self.units if u.side == "BLUFOR" and u.is_active()
+                            and math.hypot(u.x - cp.x, u.y - cp.y) <= _CP_CAPTURE_RADIUS),
+                        "opfor_near": sum(
+                            1 for u in self.units if u.side == "OPFOR" and u.is_active()
+                            and math.hypot(u.x - cp.x, u.y - cp.y) <= _CP_CAPTURE_RADIUS),
+                    }
+                    for cp in self._control_points
+                ],
                 "opfor_ai_fire_count": self.opfor_ai_fire_count,
                 "intelligence":       intel_data,
                 "air_supports": [
@@ -751,6 +777,7 @@ class WargameEngine:
         self._resolve_combat(dt)
         self._resolve_indirect_fire(dt)
         self._resolve_air_support(dt)
+        self._update_control_points(dt)
         self._update_opfor_ai(dt)
         self._update_status(dt)
         self.tick      += 1
@@ -2064,6 +2091,33 @@ class WargameEngine:
                         f"{u.id}({u.unit_type}) 전투력 회복 (CP {cp:.0f}%)",
                     )
 
+    def _update_control_points(self, dt: float):
+        """통제구역 점령 갱신 + 다수(≥2) 유지 승리 판정. 매 틱 호출."""
+        for cp in self._control_points:
+            blu = sum(1 for u in self.units if u.side == "BLUFOR" and u.is_active()
+                      and math.hypot(u.x - cp.x, u.y - cp.y) <= _CP_CAPTURE_RADIUS)
+            opf = sum(1 for u in self.units if u.side == "OPFOR" and u.is_active()
+                      and math.hypot(u.x - cp.x, u.y - cp.y) <= _CP_CAPTURE_RADIUS)
+            new_owner = self._cp_owner.get(cp.id)
+            if blu > opf:
+                new_owner = "BLUFOR"
+            elif opf > blu:
+                new_owner = "OPFOR"
+            # 동수/무부대 → 이전 소유 유지
+            if new_owner != self._cp_owner.get(cp.id):
+                self._cp_owner[cp.id] = new_owner
+                self.db.log_event(self.tick, self.game_time, "CP_CAPTURE",
+                                  f"{cp.id} 통제 → {new_owner}")
+        for side in ("BLUFOR", "OPFOR"):
+            held = sum(1 for o in self._cp_owner.values() if o == side)
+            if held >= 2:
+                if self._cp_majority_since[side] is None:
+                    self._cp_majority_since[side] = self.game_time
+                elif self.game_time - self._cp_majority_since[side] >= _CP_HOLD_TO_WIN:
+                    self._cp_winner = side
+            else:
+                self._cp_majority_since[side] = None
+
     def _check_winner(self) -> Optional[str]:
         blu_alive = any(u.is_active() for u in self.units if u.side == "BLUFOR")
         opf_alive = any(u.is_active() for u in self.units if u.side == "OPFOR")
@@ -2073,6 +2127,8 @@ class WargameEngine:
             return "BLUFOR"
         if not blu_alive:
             return "OPFOR"
+        if self._cp_winner:
+            return self._cp_winner
         return None
 
 
