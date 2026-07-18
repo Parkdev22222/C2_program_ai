@@ -219,6 +219,7 @@ class WargameEngine:
         # OPFOR 전략 상태 머신
         self._opfor_strategy: str = "recon"      # "recon" | "defend" | "attack"
         self._opfor_strategy_decided: bool = False
+        self._opfor_retaking: bool = False
         self._opfor_defend_positions: Dict[str, Tuple[float, float]] = {}
 
         # 신규 탐지 자동 임무계획 훅
@@ -372,6 +373,7 @@ class WargameEngine:
             self._init_intelligence()
             self._opfor_strategy          = "recon"
             self._opfor_strategy_decided  = False
+            self._opfor_retaking          = False
             self._opfor_defend_positions  = {}
             self._auto_plan_triggered_ids   = set()
             self._blufor_cp_thresholds_fired = {}
@@ -1544,6 +1546,23 @@ class WargameEngine:
         if not active_opfor:
             return
 
+        # ── BLUFOR가 통제구역을 확보하면 전 부대 총력 탈환 (방어/공격 override) ──
+        blufor_held = [
+            (cp.x, cp.y) for cp in self._control_points
+            if self._cp_owner.get(cp.id) == "BLUFOR"
+        ]
+        if blufor_held:
+            if not self._opfor_retaking:
+                self._opfor_retaking = True
+                self.db.log_event(
+                    self.tick, self.game_time, "OPFOR_AI",
+                    f"OPFOR 탈환 공격 개시 — BLUFOR 확보 통제구역 {len(blufor_held)}곳"
+                )
+            self._opfor_retake_strategy(active_opfor, blufor_held)
+            return
+        else:
+            self._opfor_retaking = False
+
         # ② 정찰 단계 → 임무 결정
         if not self._opfor_strategy_decided:
             if len(detected_blu) >= _OPFOR_DETECT_THRESHOLD:
@@ -1771,6 +1790,24 @@ class WargameEngine:
                 if len(selected) >= n:
                     break
         return [(x, y) for _, x, y in selected]
+
+    def _opfor_retake_strategy(self, active_opfor: list, held_positions: list):
+        """BLUFOR 확보 통제구역을 전 부대 총력으로 탈환.
+        기동부대는 가장 가까운 확보 CP로 진격, 자주포는 그 방향 화력지원."""
+        non_spg = [u for u in active_opfor if u.unit_type != "자주포"]
+        spg     = [u for u in active_opfor if u.unit_type == "자주포"]
+        for u in non_spg:
+            tx, ty = min(held_positions, key=lambda c: math.hypot(u.x - c[0], u.y - c[1]))
+            if math.hypot(u.x - tx, u.y - ty) < _CP_CAPTURE_RADIUS * 0.5:
+                u.waypoints = []
+            else:
+                u.waypoints = [[tx, ty]]
+            u.current_action = "attack"
+        if spg and held_positions:
+            cx = sum(c[0] for c in held_positions) / len(held_positions)
+            cy = sum(c[1] for c in held_positions) / len(held_positions)
+            for u in spg:
+                self._ai_standoff(u, cx, cy, "OPFOR_AI")
 
     def _opfor_defend_strategy(self, active_opfor: list):
         """
