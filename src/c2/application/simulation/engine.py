@@ -69,6 +69,7 @@ _CB_EXPOSURE_DELAY = 120.0   # 정적 사격 후 대포병 개시 게임초
 _CB_DAMAGE_RATE    = 80.0    # 대포병 피해율 %/h (최대 램프)
 _CB_RAMP           = 180.0   # 피해 램프 게임초
 _CB_MOVE_RESET     = 300.0   # 이 거리 이상 이동 시 정적 타이머 리셋 (m)
+_INDIRECT_CP_FLOOR = 15.0   # 간접포는 이 CP 이하로 격멸 불가 (제압까지만)
 
 # ── 병종 상성 계수 (_MATCHUP) → c2.domain.wargame.combat 이동 ──────────
 
@@ -1235,7 +1236,9 @@ class WargameEngine:
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ind = enemy.combat_power
-                enemy.combat_power = max(0.0, enemy.combat_power - damage)
+                if enemy.combat_power > _INDIRECT_CP_FLOOR:
+                    enemy.combat_power = max(_INDIRECT_CP_FLOOR, enemy.combat_power - damage)
+                # else: 이미 바닥 이하(직사 저하) → 간접포 무피해
                 self._check_blufor_cp_threshold(enemy, _cp_before_ind)
                 # 간접사격 피탄 시 공격자 측 인텔리전스에 위치 노출 반영
                 ie = self._intelligence[spg.side].get(enemy.id)
@@ -1275,7 +1278,9 @@ class WargameEngine:
                     * fprox * (1.0 - fcover) * fmatch * fp_mult * spg_fire_degrade * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ff = f.combat_power
-                f.combat_power = max(0.0, f.combat_power - fdmg)
+                if f.combat_power > _INDIRECT_CP_FLOOR:
+                    f.combat_power = max(_INDIRECT_CP_FLOOR, f.combat_power - fdmg)
+                # else: 이미 바닥 이하 → 간접포 무피해
                 self._check_blufor_cp_threshold(f, _cp_before_ff)
                 ff_key = (spg.id, f.id)
                 ff_acc = self._indirect_accum.get(ff_key, 0.0) + fdmg
