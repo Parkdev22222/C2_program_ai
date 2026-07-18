@@ -262,7 +262,7 @@ class WargameEngine:
         # 통제구역(control point) — 점령 소유/다수유지 승리 타이머
         self._control_points = default_control_points()
         self._cp_owner: Dict[str, Optional[str]] = {cp.id: None for cp in self._control_points}
-        self._cp_majority_since: Dict[str, Optional[float]] = {"BLUFOR": None, "OPFOR": None}
+        self._cp_majority_since: Dict[str, Optional[int]] = {"BLUFOR": None, "OPFOR": None}  # tick when side attained ≥2 CP majority
         self._cp_winner: Optional[str] = None
 
         self.db.save_units(units)
