@@ -13,15 +13,15 @@ from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 _CONTACT_PLAN = {
     "mission_plans": [
         {"company_id": "전차중대", "mission_type": "attack", "target_unit_id": "적전차중대",
-         "waypoints": [[23500, 20500]]},
+         "waypoints": [[21000, 20000]]},
         {"company_id": "보병1중대", "mission_type": "attack", "target_unit_id": "적보병1중대",
-         "waypoints": [[21000, 19000]]},
+         "waypoints": [[20000, 19000]]},
         {"company_id": "보병2중대", "mission_type": "attack", "target_unit_id": "적보병2중대",
-         "waypoints": [[21000, 22500]]},
+         "waypoints": [[19000, 20500]]},
         {"company_id": "보병3중대", "mission_type": "attack", "target_unit_id": "적보병3중대",
-         "waypoints": [[18000, 18500]]},
+         "waypoints": [[18500, 18500]]},
         {"company_id": "대전차중대", "mission_type": "attack", "target_unit_id": "적대전차중대",
-         "waypoints": [[24000, 23000]]},
+         "waypoints": [[21500, 21500]]},
     ],
 }
 
