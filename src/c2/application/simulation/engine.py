@@ -63,6 +63,8 @@ _INDIRECT_MAX_RANGE = 15_000.0   # 자주포 간접사격 최대 사거리
 _INDIRECT_MIN_RANGE =    800.0   # 자주포 간접사격 최소 사거리 (근거리 사각지대)
 _SPG_CLOSE_RANGE    =  1_000.0   # 이 거리 이내에서 자주포는 근거리 취약 패널티 적용
 _SPG_CLOSE_MULT     =      1.8   # 근거리 교전 시 자주포 피해 배율 (1.0 = 패널티 없음)
+_SPG_FIRE_BUDGET       = 300.0   # 자주포 연속사격 가능 게임초 (소진 시 재보급)
+_SPG_RESUPPLY_COOLDOWN = 240.0   # 재보급 대기 게임초 (이 동안 사격 불가)
 
 # ── 병종 상성 계수 (_MATCHUP) → c2.domain.wargame.combat 이동 ──────────
 
@@ -186,6 +188,8 @@ class WargameEngine:
         self._blufor_llm_units: set = set()
         # 자주포 간접사격 현황 (지도 표시용) — {shooter_id: {...}}, 사격 시 갱신·정지 후 잔류
         self._spg_fire_state: Dict[str, dict] = {}
+        self._spg_ammo: Dict[str, float] = {}
+        self._spg_resupply_until: Dict[str, float] = {}
         # 교전/포격 누적 피해 (이벤트 로깅용) — {(attacker_id, defender_id): 누적 %}
         self._combat_accum: Dict[Tuple[str, str], float] = {}
         self._indirect_accum: Dict[Tuple[str, str], float] = {}
@@ -333,6 +337,8 @@ class WargameEngine:
             self.units             = units
             self.air_supports      = []
             self._spg_fire_state   = {}
+            self._spg_ammo           = {}
+            self._spg_resupply_until = {}
             self._combat_accum     = {}
             self._indirect_accum   = {}
             self.tick              = 0
@@ -1106,6 +1112,9 @@ class WargameEngine:
             return
 
         for spg in spgs:
+            # 재보급 쿨다운 중이면 이번 틱 사격 불가
+            if self.game_time < self._spg_resupply_until.get(spg.id, 0.0):
+                continue
             enemy_side = "OPFOR" if spg.side == "BLUFOR" else "BLUFOR"
             enemies    = [u for u in self.units if u.side == enemy_side and u.is_active()]
             intel      = self._intelligence[spg.side]
@@ -1143,6 +1152,17 @@ class WargameEngine:
                 aoe_radius = 1_800.0
 
             cx, cy = target_entry["known_x"], target_entry["known_y"]
+
+            # 탄약 소모 (사격 시) — 소진 시 재보급 진입(이번 틱 사격 스킵)
+            self._spg_ammo[spg.id] = self._spg_ammo.get(spg.id, _SPG_FIRE_BUDGET) - dt
+            if self._spg_ammo[spg.id] <= 0.0:
+                self._spg_ammo[spg.id] = _SPG_FIRE_BUDGET
+                self._spg_resupply_until[spg.id] = self.game_time + _SPG_RESUPPLY_COOLDOWN
+                self.db.log_event(
+                    self.tick, self.game_time, "AMMO_RESUPPLY",
+                    f"{spg.id}(자주포) 탄약 소진 — 재보급 {_SPG_RESUPPLY_COOLDOWN:.0f}s",
+                )
+                continue
 
             # 지도 표시용 사격 현황 기록 (사격 중 매 틱 갱신, 정지 후 잔류)
             self._spg_fire_state[spg.id] = {
