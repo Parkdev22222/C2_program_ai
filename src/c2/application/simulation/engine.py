@@ -73,7 +73,7 @@ _CB_MOVE_RESET     = 300.0   # 이 거리 이상 이동 시 정적 타이머 리
 _INDIRECT_CP_FLOOR = 16.0   # 간접포는 이 CP 이하로 격멸 불가 (제압까지만) — DESTROYED_THRESHOLD(15.0)보다 반드시 커야 함 (같으면 _update_status가 즉시 격멸 판정)
 
 _CP_CAPTURE_RADIUS = 2_000.0   # 통제구역 점령 판정 반경 (m)
-_CP_HOLD_TO_WIN    = 300.0     # ≥2곳 다수 유지 승리 게임초
+_CP_HOLD_TO_WIN_TICKS = 500     # ≥2곳 다수 연속 유지 승리 틱수
 
 # ── 병종 상성 계수 (_MATCHUP) → c2.domain.wargame.combat 이동 ──────────
 
@@ -721,6 +721,7 @@ class WargameEngine:
                 "control_points": [
                     {
                         "id": cp.id, "x": round(cp.x, 1), "y": round(cp.y, 1),
+                        "radius": _CP_CAPTURE_RADIUS,
                         "owner": self._cp_owner.get(cp.id),
                         "blufor_near": sum(
                             1 for u in self.units if u.side == "BLUFOR" and u.is_active()
@@ -2112,8 +2113,8 @@ class WargameEngine:
             held = sum(1 for o in self._cp_owner.values() if o == side)
             if held >= 2:
                 if self._cp_majority_since[side] is None:
-                    self._cp_majority_since[side] = self.game_time
-                elif self.game_time - self._cp_majority_since[side] >= _CP_HOLD_TO_WIN:
+                    self._cp_majority_since[side] = self.tick
+                elif self.tick - self._cp_majority_since[side] >= _CP_HOLD_TO_WIN_TICKS:
                     self._cp_winner = side
             else:
                 self._cp_majority_since[side] = None

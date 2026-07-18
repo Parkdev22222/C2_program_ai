@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from c2.domain.wargame.unit import Unit
 from c2.domain.wargame.control_point import ControlPoint, default_control_points
-from c2.application.simulation.engine import WargameEngine, _CP_HOLD_TO_WIN
+from c2.application.simulation.engine import WargameEngine, _CP_HOLD_TO_WIN_TICKS
 from c2.infrastructure.persistence.sqlite_event_store import WargameDB
 
 
@@ -29,6 +29,7 @@ def test_presence_majority_captures_point():
     cps = {c["id"]: c for c in state["control_points"]}
     assert cps["통제-브라보"]["owner"] == "BLUFOR"
     assert cps["통제-브라보"]["blufor_near"] >= 1
+    assert cps["통제-브라보"]["radius"] == 2000.0
 
 
 def test_holding_two_points_wins():
@@ -37,8 +38,8 @@ def test_holding_two_points_wins():
     b1 = _mk("보병1중대", "BLUFOR", 12_000.0, 14_000.0)
     b2 = _mk("보병2중대", "BLUFOR", 15_000.0, 15_000.0)
     eng = WargameEngine([b1, b2], db=db)
-    # _CP_HOLD_TO_WIN 게임초 이상 유지 (dt=30/틱)
-    ticks = int(_CP_HOLD_TO_WIN / 30) + 3
+    # _CP_HOLD_TO_WIN_TICKS 틱 이상 유지
+    ticks = _CP_HOLD_TO_WIN_TICKS + 3
     for _ in range(ticks):
         eng._tick()
     assert eng._check_winner() == "BLUFOR", "2곳을 유지시간 이상 점령하면 승리"
