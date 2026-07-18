@@ -94,7 +94,7 @@ _SUPPRESS_RECOVER_SEC = 120.0
 # 대포병 탐지(counter-battery): 자주포가 간접사격하면 위치가 적에게 노출된다.
 #   기본은 음향표정 수준의 approximate, 확률적으로 대포병 레이더가 정확 위치(detected)를 포착.
 #   사격을 멈추면 _update_intelligence의 ticks_since_lost 감쇠로 lost 처리 → shoot-and-scoot.
-_COUNTER_BATTERY_DETECT_PROB   = 0.35   # 사격 시 정확 위치(detected) 포착 확률(틱당)
+_COUNTER_BATTERY_DETECT_PROB   = 0.55   # 사격 시 정확 위치(detected) 포착 확률(틱당)
 _COUNTER_BATTERY_APPROX_RADIUS = 700    # approximate 노출 시 개략 위치 오차 반경(m)
 # 포병 화력지원 전투력 감쇠 지수: 간접사격 위력이 전투력(combat_power) 감소에
 # 초선형(제곱)으로 약해진다. effective_firepower()가 이미 선형 factor(cp/100)를 포함하므로
@@ -1206,6 +1206,34 @@ class WargameEngine:
                     )
                 elif damage > 0:
                     self._indirect_accum[ind_key] = ind_acc
+            # ── 아군 오사(fratricide): 같은 편 부대도 AoE 내면 동일 피해 (자기 자신 제외) ──
+            for f in [u2 for u2 in self.units
+                      if u2.side == spg.side and u2.is_active() and u2.id != spg.id]:
+                fdist = math.hypot(f.x - cx, f.y - cy)
+                if fdist > aoe_radius:
+                    continue
+                fprox  = 1.0 - fdist / aoe_radius
+                fcover = terrain.cover_factor(f.x, f.y) * 0.4
+                fmatch = _matchup_factor(spg.unit_type, f.unit_type)
+                fdmg   = (
+                    spg.effective_firepower() / 100.0
+                    * BASE_ATTRITION_RATE
+                    * fprox * (1.0 - fcover) * fmatch * fp_mult * spg_fire_degrade * dt_h
+                ) * random.uniform(0.6, 1.4)
+                _cp_before_ff = f.combat_power
+                f.combat_power = max(0.0, f.combat_power - fdmg)
+                self._check_blufor_cp_threshold(f, _cp_before_ff)
+                ff_key = (spg.id, f.id)
+                ff_acc = self._indirect_accum.get(ff_key, 0.0) + fdmg
+                if ff_acc >= _INDIRECT_LOG_THRESHOLD:
+                    self._indirect_accum[ff_key] = 0.0
+                    self.db.log_event(
+                        self.tick, self.game_time, "FRATRICIDE_INDIRECT",
+                        f"{spg.id}(자주포)⚠아군오사→{f.id}({f.unit_type}): -{ff_acc:.1f}% CP 누적 "
+                        f"(AoE반경{aoe_radius:.0f}m)",
+                    )
+                elif fdmg > 0:
+                    self._indirect_accum[ff_key] = ff_acc
             if hit_any:
                 pass  # 개별 로그로 충분
 
@@ -1326,6 +1354,25 @@ class WargameEngine:
                         self.tick, self.game_time, "AIR_STRIKE",
                         f"[{air.side}] {air.call_sign}→{u.id}: -{damage:.1f}% CP "
                         f"(거리{dist/1000:.1f}km)",
+                    )
+            # ── 아군 오사(fratricide): 같은 편 부대도 반경 내면 동일 피해 ──
+            for f in [u2 for u2 in self.units if u2.side == air.side and u2.is_active()]:
+                fdist = math.hypot(f.x - air.target_x, f.y - air.target_y)
+                if fdist > air.radius:
+                    continue
+                fprox  = 1.0 - fdist / air.radius
+                fcover = terrain.cover_factor(f.x, f.y) * 0.5
+                fraw   = (air.damage_rate * fprox * (1.0 - fcover) * eff_dt_h) * random.uniform(0.7, 1.3)
+                fmin   = 30.0 * fprox * (1.0 - fcover * 0.5) * (eff_dt / air.duration)
+                fdmg   = max(fraw, fmin)
+                _cp_before_ff = f.combat_power
+                f.combat_power = max(0.0, f.combat_power - fdmg)
+                self._check_blufor_cp_threshold(f, _cp_before_ff)
+                if fdmg >= 3.0:
+                    self.db.log_event(
+                        self.tick, self.game_time, "FRATRICIDE_AIR",
+                        f"[{air.side}] {air.call_sign}⚠아군오사→{f.id}: -{fdmg:.1f}% CP "
+                        f"(거리{fdist/1000:.1f}km)",
                     )
             # OPFOR 공중지원 피격 → 재계획 콜백 (공중지원 1회당 1번만)
             if blufor_hit_this_tick and not air.hit_reported:
