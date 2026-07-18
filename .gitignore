@@ -14,6 +14,11 @@ build/
 venv/
 env/
 
+# 로컬 환경변수 (.env.example 은 템플릿으로 커밋)
+.env
+.env.local
+.env.*.local
+
 # Runtime data
 data/wargame_state.db
 data/*.db

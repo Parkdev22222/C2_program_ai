@@ -26,6 +26,9 @@
 transformers>=4.47.0,<4.48.0
 accelerate
 
+# .env 파일로 환경변수 관리 (main.py 에서 자동 로드)
+python-dotenv>=1.0.0
+
 # Agent Frameworks
 # smolagents: 기존 CodeAgent 백엔드 (C2_AGENT_BACKEND=smolagents)
 smolagents>=1.0.0

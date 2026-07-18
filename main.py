@@ -24,6 +24,18 @@ _SRC = Path(__file__).resolve().parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+# ─────────────────────────────────────────────
+# .env 로딩 — 프로젝트 루트 .env 로 환경변수 관리 (템플릿: .env.example).
+# 이미 셸에 export 된 값은 덮어쓰지 않는다(override=False).
+# python-dotenv 미설치 시에는 조용히 건너뛴다(기존 export 방식으로도 동작).
+# ─────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+except ModuleNotFoundError:
+    pass
+
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
