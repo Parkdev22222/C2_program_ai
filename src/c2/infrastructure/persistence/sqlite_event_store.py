@@ -7,8 +7,12 @@
 이 모듈의 `WargameDB`/`DB_PATH`를 shim re-export한다.
 """
 
+from __future__ import annotations
+
 import sqlite3
 import threading
+import uuid
+from datetime import datetime
 from pathlib import Path
 from c2._paths import data_path
 from typing import List
@@ -17,6 +21,9 @@ from c2.domain.wargame.unit import Unit
 
 # src/c2/infrastructure/persistence/sqlite_event_store.py 기준 4단계 상위가 리포지토리 루트
 DB_PATH = data_path("wargame_state.db")
+
+# 이력 보존 정책: 최근 N개 세션의 이벤트만 유지
+_MAX_SESSIONS = 10
 
 
 class WargameDB:
@@ -75,7 +82,16 @@ class WargameDB:
         tick INTEGER,
         game_time REAL,
         event_type TEXT,
-        message TEXT
+        message TEXT,
+        session_id TEXT NOT NULL DEFAULT 'legacy'
+    )
+    """
+
+    _CREATE_SESSIONS = """
+    CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        scenario   TEXT NOT NULL DEFAULT ''
     )
     """
 
@@ -83,7 +99,9 @@ class WargameDB:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._path = str(db_path)
         self._lock = threading.Lock()
+        self._session_id = ""
         self._init_db()
+        self._start_session()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, check_same_thread=False)
@@ -96,11 +114,37 @@ class WargameDB:
             conn.execute(self._CREATE_SNAPSHOTS)
             conn.execute(self._CREATE_EVENTS)
             conn.execute(self._CREATE_UNIT_REALTIME)
+            conn.execute(self._CREATE_SESSIONS)
             # unit_type 컬럼 마이그레이션 (기존 DB 호환)
             try:
                 conn.execute("ALTER TABLE units ADD COLUMN unit_type TEXT NOT NULL DEFAULT ''")
             except Exception:
                 pass
+            # session_id 컬럼 마이그레이션 (기존 DB 호환)
+            try:
+                conn.execute(
+                    "ALTER TABLE events ADD COLUMN session_id TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            except Exception:
+                pass
+
+    # ── 세션 관리 ─────────────────────────────────────────────────
+
+    def current_session_id(self) -> str:
+        return self._session_id
+
+    def _start_session(self, scenario: str = "") -> str:
+        """새 session_id를 발급해 sessions 레지스트리에 기록하고 오래된 세션을 정리한다.
+        live-state 테이블(units/snapshots/unit_realtime)은 건드리지 않는다."""
+        sid = uuid.uuid4().hex[:12]
+        created = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions(session_id, created_at, scenario) VALUES (?,?,?)",
+                (sid, created, scenario),
+            )
+        self._session_id = sid
+        return sid
 
     # ── Unit CRUD ─────────────────────────────────────────────────
 
@@ -190,14 +234,17 @@ class WargameDB:
     def log_event(self, tick: int, game_time: float, event_type: str, msg: str):
         with self._lock, self._connect() as conn:
             conn.execute(
-                "INSERT INTO events(tick,game_time,event_type,message) VALUES(?,?,?,?)",
-                (tick, game_time, event_type, msg),
+                "INSERT INTO events(tick,game_time,event_type,message,session_id) "
+                "VALUES(?,?,?,?,?)",
+                (tick, game_time, event_type, msg, self._session_id),
             )
 
-    def get_recent_events(self, n: int = 30) -> List[dict]:
+    def get_recent_events(self, n: int = 30, session_id: str | None = None) -> List[dict]:
+        sid = session_id if session_id is not None else self._session_id
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT ?", (n,)
+                "SELECT * FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?",
+                (sid, n),
             ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
