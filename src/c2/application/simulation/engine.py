@@ -353,7 +353,7 @@ class WargameEngine:
             self._opfor_air_cooldown         = 0.0
             self._air_use_count  = {"BLUFOR": 0, "OPFOR": 0}
             self._air_reset_at   = self._AIR_RESET_TICKS
-            self.db.clear()
+            self.db.reset_for_new_session()
             self.db.save_units(units)
             self.db.save_snapshot(0, 0.0, units)
         if was_running:
