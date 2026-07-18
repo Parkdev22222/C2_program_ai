@@ -134,6 +134,7 @@ def _convert_state_to_api(state: dict) -> dict:
         "units": [],
         "intelligence": {"BLUFOR": []},
         "air_supports": [],
+        "control_points": [],
     }
 
     # 유닛 좌표 변환
@@ -183,6 +184,11 @@ def _convert_state_to_api(state: dict) -> dict:
             "lon": tlon,
             "radius": air.get("radius", 1500),
         })
+
+    # 통제구역 좌표 변환
+    for cp in state.get("control_points", []):
+        clat, clon = _xy_to_latlon(cp.get("x", 0), cp.get("y", 0))
+        result["control_points"].append({**cp, "lat": clat, "lon": clon})
 
     return result
 

@@ -534,6 +534,7 @@ const unitMarkers  = {};   // id → L.Marker
 const unitWpLines  = {};   // id → L.Polyline
 const airCircles   = {};   // call_sign → {circle, dot}
 const intelMarkers = {};   // unit_id → {marker, uncircle?}
+const cpLayers     = {};   // cp.id → {circle, marker}
 
 // 공중지원 타입별 색상
 const AIR_COLOR = {
@@ -675,6 +676,35 @@ function updateMap(state) {
         .bindTooltip(`${air.call_sign} (${air.support_type}) [${air.status}]`, {direction:'top'})
         .addTo(map);
       airCircles[air.call_sign] = {circle, dot};
+    }
+  }
+
+  // ── 통제구역(control points) ─────────────────────────────
+  for (const cp of state.control_points || []) {
+    const latlng = [cp.lat, cp.lon];
+    const color = cp.owner === 'BLUFOR' ? '#1E88E5'
+                : cp.owner === 'OPFOR'  ? '#E53935' : '#888';
+    const label = `${cp.id} (${cp.owner || '중립'})  아군${cp.blufor_near}/적${cp.opfor_near}`;
+    if (cpLayers[cp.id]) {
+      cpLayers[cp.id].circle.setLatLng(latlng).setStyle({color, fillColor: color});
+      cpLayers[cp.id].marker.setLatLng(latlng);
+      cpLayers[cp.id].marker.setIcon(L.divIcon({
+        html: `<div style="white-space:nowrap;font-size:11px;font-weight:700;color:${color};text-shadow:0 0 3px #000;">◆ ${label}</div>`,
+        className: '', iconSize: [10, 10], iconAnchor: [5, 5],
+      }));
+    } else {
+      const circle = L.circle(latlng, {
+        radius: 2000, color, weight: 1.5, fillColor: color, fillOpacity: 0.10,
+        dashArray: '6,5',
+      }).addTo(map);
+      const marker = L.marker(latlng, {
+        icon: L.divIcon({
+          html: `<div style="white-space:nowrap;font-size:11px;font-weight:700;color:${color};text-shadow:0 0 3px #000;">◆ ${label}</div>`,
+          className: '', iconSize: [10, 10], iconAnchor: [5, 5],
+        }),
+        zIndexOffset: 5,
+      }).addTo(map);
+      cpLayers[cp.id] = { circle, marker };
     }
   }
 
