@@ -31,10 +31,10 @@ from c2.domain.wargame.unit import Unit
 
 
 # ── 랜덤 배치 구역 정의 ────────────────────────────────────────────
-# BLUFOR: 남서부 분지 (지형상 아군 집결지)
-_BLUFOR_ZONE = dict(x_min=2_000, x_max=13_000, y_min=1_500, y_max=12_000)
-# OPFOR : 북동부 고원 (지형상 적 집결지)
-_OPFOR_ZONE  = dict(x_min=17_000, x_max=28_000, y_min=17_000, y_max=28_500)
+# BLUFOR: 남서부 분지 (대대 정면 ~5km)
+_BLUFOR_ZONE = dict(x_min=5_000, x_max=10_000, y_min=5_000, y_max=10_000)
+# OPFOR : 북동부 고원 (대대 정면 ~5km)
+_OPFOR_ZONE  = dict(x_min=18_000, x_max=23_000, y_min=18_000, y_max=23_000)
 # 같은 진영 부대 간 최소 이격 거리
 _MIN_SEP = 1_500.0
 
@@ -59,69 +59,69 @@ def setup_cheorwon_bn() -> list:
       - 자주포 실사거리: K9(자주포중대) 40km / 북한 곡산(적자주포중대) 60km(RAP) 를 indirect_range로 반영.
     """
     return [
-        # ── BLUFOR (대한민국) — 남서부 방어 → 역습 ──────────────────
+        # ── BLUFOR (대한민국) — 남서부 (대대 정면 ~5km) ──────────────
         Unit(id="보병1중대", side="BLUFOR", unit_type="기계화보병",
-             x=8_000.0, y=5_000.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             x=7_000.0, y=6_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#1E88E5"),
         Unit(id="보병2중대", side="BLUFOR", unit_type="기계화보병",
-             x=8_000.0, y=8_500.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             x=8_000.0, y=7_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#42A5F5"),
-        Unit(id="보병3중대", side="BLUFOR", unit_type="기계화보병",   # (구 정찰 → 보병중대)
-             x=12_000.0, y=10_000.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+        Unit(id="보병3중대", side="BLUFOR", unit_type="기계화보병",
+             x=9_500.0, y=9_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#26C6DA"),
         Unit(id="전차중대", side="BLUFOR", unit_type="전차",
-             x=5_500.0, y=6_500.0,
-             combat_power=100.0, firepower_index=160.0, max_speed=2.0,
+             x=6_000.0, y=7_000.0,
+             combat_power=100.0, firepower_index=160.0, max_speed=6.0,
              status="active", waypoints=[], current_action="hold", color="#00BCD4"),
         Unit(id="대전차중대", side="BLUFOR", unit_type="대전차",
-             x=11_000.0, y=6_000.0,
-             combat_power=100.0, firepower_index=90.0, max_speed=2.2,
+             x=9_000.0, y=6_000.0,
+             combat_power=100.0, firepower_index=90.0, max_speed=5.5,
              status="active", waypoints=[], current_action="hold", color="#B3E5FC"),
-        Unit(id="자주포중대", side="BLUFOR", unit_type="자주포",     # K9A1 — 실사거리 40km
-             x=3_500.0, y=4_000.0,
-             combat_power=100.0, firepower_index=130.0, max_speed=1.8,
-             indirect_range=40_000.0,
+        Unit(id="자주포중대", side="BLUFOR", unit_type="자주포",     # K9A1(실제 40km) — 게임 유효 15km
+             x=5_500.0, y=5_500.0,
+             combat_power=100.0, firepower_index=130.0, max_speed=4.0,
+             indirect_range=15_000.0,
              status="active", waypoints=[], current_action="hold", color="#4DD0E1"),
 
-        # ── OPFOR (북한) — 북동부 공격 ──────────────────────────────
+        # ── OPFOR (북한) — 북동부 (대대 정면 ~5km) ──────────────────
         Unit(id="적보병1중대", side="OPFOR", unit_type="기계화보병",
-             x=21_000.0, y=19_000.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             x=20_000.0, y=19_000.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#E53935"),
         Unit(id="적보병2중대", side="OPFOR", unit_type="기계화보병",
-             x=21_000.0, y=22_500.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+             x=19_000.0, y=20_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#EF5350"),
-        Unit(id="적보병3중대", side="OPFOR", unit_type="기계화보병",     # (구 정찰 → 보병중대)
-             x=18_000.0, y=18_500.0,
-             combat_power=100.0, firepower_index=100.0, max_speed=2.5,
+        Unit(id="적보병3중대", side="OPFOR", unit_type="기계화보병",
+             x=18_500.0, y=18_500.0,
+             combat_power=100.0, firepower_index=100.0, max_speed=5.0,
              status="active", waypoints=[], current_action="hold", color="#FF8A65"),
         Unit(id="적전차중대", side="OPFOR", unit_type="전차",
-             x=23_500.0, y=20_500.0,
-             combat_power=100.0, firepower_index=155.0, max_speed=2.0,
+             x=21_000.0, y=20_000.0,
+             combat_power=100.0, firepower_index=155.0, max_speed=6.0,
              status="active", waypoints=[], current_action="hold", color="#FF7043"),
         Unit(id="적대전차중대", side="OPFOR", unit_type="대전차",
-             x=24_000.0, y=23_000.0,
-             combat_power=100.0, firepower_index=85.0, max_speed=2.2,
+             x=21_500.0, y=21_500.0,
+             combat_power=100.0, firepower_index=85.0, max_speed=5.5,
              status="active", waypoints=[], current_action="hold", color="#FFAB91"),
-        Unit(id="적자주포중대", side="OPFOR", unit_type="자주포",         # M1978 곡산 — 실사거리 60km(RAP)
-             x=26_500.0, y=21_000.0,
-             combat_power=100.0, firepower_index=130.0, max_speed=1.8,
-             indirect_range=60_000.0,
+        Unit(id="적자주포중대", side="OPFOR", unit_type="자주포",         # M1978 곡산(실제 60km) — 게임 유효 18km
+             x=22_500.0, y=22_500.0,
+             combat_power=100.0, firepower_index=130.0, max_speed=4.0,
+             indirect_range=18_000.0,
              status="active", waypoints=[], current_action="hold", color="#FFCCBC"),
     ]
 
 
 # 부대 유형별 스탯 (setup_custom_scenario에서 사용)
 UNIT_TYPE_SPECS: dict = {
-    "기계화보병": {"firepower_index": 100.0, "max_speed": 2.5},
-    "전차":       {"firepower_index": 160.0, "max_speed": 2.0},
-    "정찰":       {"firepower_index":  45.0, "max_speed": 4.5},
-    "대전차":     {"firepower_index":  90.0, "max_speed": 2.2},
-    "자주포":     {"firepower_index": 130.0, "max_speed": 1.8},
+    "기계화보병": {"firepower_index": 100.0, "max_speed": 5.0},
+    "전차":       {"firepower_index": 160.0, "max_speed": 6.0},
+    "정찰":       {"firepower_index":  45.0, "max_speed": 7.0},
+    "대전차":     {"firepower_index":  90.0, "max_speed": 5.5},
+    "자주포":     {"firepower_index": 130.0, "max_speed": 4.0},
 }
 
 # 시나리오별 색상 팔레트
