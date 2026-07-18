@@ -69,7 +69,7 @@ _CB_EXPOSURE_DELAY = 120.0   # 정적 사격 후 대포병 개시 게임초
 _CB_DAMAGE_RATE    = 80.0    # 대포병 피해율 %/h (최대 램프)
 _CB_RAMP           = 180.0   # 피해 램프 게임초
 _CB_MOVE_RESET     = 300.0   # 이 거리 이상 이동 시 정적 타이머 리셋 (m)
-_INDIRECT_CP_FLOOR = 15.0   # 간접포는 이 CP 이하로 격멸 불가 (제압까지만)
+_INDIRECT_CP_FLOOR = 16.0   # 간접포는 이 CP 이하로 격멸 불가 (제압까지만) — DESTROYED_THRESHOLD(15.0)보다 반드시 커야 함 (같으면 _update_status가 즉시 격멸 판정)
 
 # ── 병종 상성 계수 (_MATCHUP) → c2.domain.wargame.combat 이동 ──────────
 
@@ -1236,8 +1236,10 @@ class WargameEngine:
                     * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ind = enemy.combat_power
+                applied_ind = 0.0
                 if enemy.combat_power > _INDIRECT_CP_FLOOR:
                     enemy.combat_power = max(_INDIRECT_CP_FLOOR, enemy.combat_power - damage)
+                    applied_ind = _cp_before_ind - enemy.combat_power
                 # else: 이미 바닥 이하(직사 저하) → 간접포 무피해
                 self._check_blufor_cp_threshold(enemy, _cp_before_ind)
                 # 간접사격 피탄 시 공격자 측 인텔리전스에 위치 노출 반영
@@ -1251,7 +1253,7 @@ class WargameEngine:
                     })
                 # 포격 이벤트 로깅 (누적 피해 기반) — 어떤 부대가 포격당했는지 반영
                 ind_key = (spg.id, enemy.id)
-                ind_acc = self._indirect_accum.get(ind_key, 0.0) + damage
+                ind_acc = self._indirect_accum.get(ind_key, 0.0) + applied_ind
                 if ind_acc >= _INDIRECT_LOG_THRESHOLD:
                     self._indirect_accum[ind_key] = 0.0
                     hit_any = True
@@ -1261,7 +1263,7 @@ class WargameEngine:
                         f"-{ind_acc:.1f}% CP 누적 "
                         f"(AoE반경{aoe_radius:.0f}m, 정확도:{det_status})",
                     )
-                elif damage > 0:
+                elif applied_ind > 0:
                     self._indirect_accum[ind_key] = ind_acc
             # ── 아군 오사(fratricide): 같은 편 부대도 AoE 내면 동일 피해 (자기 자신 제외) ──
             for f in [u2 for u2 in self.units
@@ -1278,12 +1280,14 @@ class WargameEngine:
                     * fprox * (1.0 - fcover) * fmatch * fp_mult * spg_fire_degrade * dt_h
                 ) * random.uniform(0.6, 1.4)
                 _cp_before_ff = f.combat_power
+                applied_ff = 0.0
                 if f.combat_power > _INDIRECT_CP_FLOOR:
                     f.combat_power = max(_INDIRECT_CP_FLOOR, f.combat_power - fdmg)
+                    applied_ff = _cp_before_ff - f.combat_power
                 # else: 이미 바닥 이하 → 간접포 무피해
                 self._check_blufor_cp_threshold(f, _cp_before_ff)
                 ff_key = (spg.id, f.id)
-                ff_acc = self._indirect_accum.get(ff_key, 0.0) + fdmg
+                ff_acc = self._indirect_accum.get(ff_key, 0.0) + applied_ff
                 if ff_acc >= _INDIRECT_LOG_THRESHOLD:
                     self._indirect_accum[ff_key] = 0.0
                     self.db.log_event(
@@ -1291,7 +1295,7 @@ class WargameEngine:
                         f"{spg.id}(자주포)⚠아군오사→{f.id}({f.unit_type}): -{ff_acc:.1f}% CP 누적 "
                         f"(AoE반경{aoe_radius:.0f}m)",
                     )
-                elif fdmg > 0:
+                elif applied_ff > 0:
                     self._indirect_accum[ff_key] = ff_acc
             if hit_any:
                 pass  # 개별 로그로 충분
