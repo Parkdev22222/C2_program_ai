@@ -10,6 +10,7 @@ import math
 import logging
 from typing import List, Tuple
 from c2.domain.wargame.coordinates import xy_to_latlon
+from c2.domain.wargame.unit import AIR_SUPPORT_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,25 @@ def _get_attack_ontology_ctx() -> str:
 def register_wargame_engine(engine):
     global _wargame_engine
     _wargame_engine = engine
+
+
+def _friendly_fire_risk(method: str, tx: float, ty: float, blufor_active: list) -> dict:
+    """표적(tx,ty)에 method 화력 투사 시 폭발 반경 내 활성 BLUFOR 부대를 산출.
+
+    blast_radius_m = AIR_SUPPORT_PRESETS[method].radius (cas1500/strike400/artillery2500/helicopter1000).
+    """
+    radius = AIR_SUPPORT_PRESETS.get(method, AIR_SUPPORT_PRESETS["cas"])["radius"]
+    endangered = []
+    for u in blufor_active:
+        d = math.hypot(float(u.get("x", 0)) - tx, float(u.get("y", 0)) - ty)
+        if d <= radius:
+            endangered.append({"unit_id": u["id"], "dist_m": int(d)})
+    endangered.sort(key=lambda e: e["dist_m"])
+    return {
+        "blast_radius_m": int(radius),
+        "in_blast": bool(endangered),
+        "endangered_units": endangered,
+    }
 
 
 # ── 교전 거리 상수 ─────────────────────────────────────────────────
@@ -464,6 +484,9 @@ def get_optimal_attack_positions(
             else:
                 method = _air_method_for(tgt.get("unit_type"), tgt.get("combat_power"))
                 reason = f"전투력 {tgt.get('combat_power')} — 우선순위 {i}/{air_remaining}"
+            ff = _friendly_fire_risk(method, tx, ty, blufor_active)
+            if ff["in_blast"]:
+                reason = f"⚠️ 아군 {len(ff['endangered_units'])}개 오사 위험 — " + reason
             air_support_schedule.append({
                 "priority": i,
                 "target_unit_id": tgt["unit_id"],
@@ -471,6 +494,7 @@ def get_optimal_attack_positions(
                 "target": [t_lat, t_lon],
                 "method": method,
                 "reason": reason,
+                "friendly_fire_risk": ff,
             })
 
         # ①-b 포병 동시지원 스케줄 — 위협도 상위 표적에는 공중지원과 '같은 좌표'로 포병(artillery)
@@ -480,6 +504,11 @@ def get_optimal_attack_positions(
         artillery_support_schedule = []
         for i, tgt in enumerate(detected_only[:_ARTY_TOP_N], 1):
             t_lat, t_lon = xy_to_latlon(tgt["known_x"], tgt["known_y"])
+            ff = _friendly_fire_risk("artillery", tgt["known_x"], tgt["known_y"], blufor_active)
+            arty_reason = (f"위협도 상위 {i} — 공중지원과 동일 좌표 동시 포병 투사(화력 집중), "
+                           f"전투력 {tgt.get('combat_power')}")
+            if ff["in_blast"]:
+                arty_reason = f"⚠️ 아군 {len(ff['endangered_units'])}개 오사 위험 — " + arty_reason
             artillery_support_schedule.append({
                 "priority": i,
                 "target_unit_id": tgt["unit_id"],
@@ -487,8 +516,8 @@ def get_optimal_attack_positions(
                 "target": [t_lat, t_lon],
                 "method": "artillery",
                 "concurrent_with_air": True,
-                "reason": (f"위협도 상위 {i} — 공중지원과 동일 좌표 동시 포병 투사(화력 집중), "
-                           f"전투력 {tgt.get('combat_power')}"),
+                "reason": arty_reason,
+                "friendly_fire_risk": ff,
             })
 
         # ② 각 BLUFOR 부대별 주요 고지 — 담당(최근접) 타겟 방향의 최적 고지대 사격 위치
