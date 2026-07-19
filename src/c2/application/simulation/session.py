@@ -143,6 +143,9 @@ class WargameSession:
         self._worker_stop = threading.Event()      # 탐지 워커 정지 신호
         self._detection_thread: Optional[threading.Thread] = None
 
+        # 공격 버튼 클릭 시 생성되는 3개 COA(courses of action) — 실행 전까지 보관.
+        self._pending_coas: list = []
+
     # ── 콜백 enqueue (엔진 틱 스레드에서 호출됨 — 큐에만 넣고 즉시 반환) ──
 
     def enqueue_detection(self, enemy_id: str, unit_type: str, x: float, y: float) -> None:
@@ -286,6 +289,7 @@ class WargameSession:
             self.ensure_engine()
         engine = self.engine
         engine.reset(units)
+        self._pending_coas = []
 
         self._ensure_planner()
         # 엔진 틱이 0으로 초기화되므로 재계획 쿨다운 기준도 초기화
@@ -328,6 +332,18 @@ class WargameSession:
     def get_state(self) -> dict:
         engine = self.ensure_engine()
         return engine.get_state()
+
+    # ── pending COAs (공격 버튼 클릭 시 생성된 3개 COA, 실행 전까지 보관) ──
+
+    @property
+    def pending_coas(self) -> list:
+        return self._pending_coas
+
+    def set_pending_coas(self, coas: list) -> None:
+        self._pending_coas = list(coas or [])
+
+    def clear_pending_coas(self) -> None:
+        self._pending_coas = []
 
     # ── 세션 ops (Task 29C) — 데이터(dict) 반환, figure 생성은 presentation 몫 ──
 
