@@ -109,7 +109,7 @@ _COA_DOCTRINE_HINT = {
 }
 
 
-def generate_attack_coas(session) -> dict:
+def generate_attack_coas(session, context_hint: str = "") -> dict:
     """공격 COA 3개 생성(엔진 미적용). 규칙기반 백본 + (에이전트 있으면) LLM 대체.
     반환: {"coas": [...], "history": [...]}."""
     history = []
@@ -136,6 +136,7 @@ def generate_attack_coas(session) -> dict:
             for coa in coas:
                 try:
                     query = (build_mission_query(state)
+                             + (("\n\n[재계획 트리거]\n" + context_hint) if context_hint else "")
                              + "\n\n" + _COA_DOCTRINE_HINT.get(coa["doctrine"], "")
                              + "\n\n⚠️ 계획(mission_plans/air_support_plans) JSON만 출력하라. "
                                "apply/적용 툴을 호출하지 말 것(엔진 적용 금지, 생성만).")
@@ -166,6 +167,13 @@ def generate_attack_coas(session) -> dict:
                 del eng.air_supports[_air_n:]
             except Exception:
                 pass
+
+    # 프리뷰=실행 경로 완전 일치: 각 COA plan을 미리 은밀기동 확장(엔진 상태 불변) 후 저장
+    for coa in coas:
+        try:
+            coa["plan"] = eng.expand_plan_waypoints(coa["plan"])
+        except Exception as _e:
+            logger.warning("[COA] waypoint 확장 실패(원본 유지): %s", _e)
 
     # 프리뷰 부착
     for coa in coas:
@@ -205,12 +213,16 @@ def execute_coa(session, index: int) -> dict:
         return {"ok": False, "error": "엔진 없음"}
     plan = coas[index].get("plan", {})
     try:
-        eng.apply_mission_plan(plan)
+        eng.apply_mission_plan(plan, stealth_expand=False)  # 이미 확장된 경로 → 재확장 없이 그대로(프리뷰와 일치)
         if plan.get("air_support_plans"):
             eng.apply_air_support_plan(plan)
         eng.start()   # 시뮬 재개
         label = coas[index].get("id", f"COA{index+1}")
         session.clear_pending_coas()
+        try:
+            session.auto_plan_status["coas"] = []   # 이벤트 COA 버튼 재출현 방지
+        except Exception:
+            pass
         return {"ok": True, "executed": label}
     except Exception as e:
         logger.exception("execute_coa 오류")
