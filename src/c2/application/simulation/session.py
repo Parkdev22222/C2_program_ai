@@ -426,6 +426,18 @@ class WargameSession:
 
         return _impl(self, history)
 
+    def generate_attack_coas(self) -> dict:
+        """공격 COA 3개 생성 — 오케스트레이션은 `replan.generate_attack_coas`에 위임."""
+        from c2.application.simulation.replan import generate_attack_coas as _impl
+
+        return _impl(self)
+
+    def execute_coa(self, index: int) -> dict:
+        """선택된 COA 실행 — 오케스트레이션은 `replan.execute_coa`에 위임."""
+        from c2.application.simulation.replan import execute_coa as _impl
+
+        return _impl(self, index)
+
     # ── 하니스(학습/평가) 세션 ops (Task 29D) — 데이터(dict) 반환 ──────────
     #
     # `HarnessController`(`c2.application.harness.controller`)는 이미 application

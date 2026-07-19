@@ -280,6 +280,9 @@ if _FASTAPI_OK:
         opfor: List[ScenarioUnitDef]
         control_points: Optional[List[ScenarioControlPointDef]] = None
 
+    class CoaExecuteRequest(BaseModel):
+        index: int
+
 
 _app_singleton: Any = None
 
@@ -432,17 +435,15 @@ def create_app(agent: Any = None) -> Any:
 
     def _run_attack_job(jid: str):
         _job_set(jid, "running")
-        _job_log(jid, "공격 임무계획 수립 시작...")
+        _job_log(jid, "공격 COA 3개 생성 시작...")
         try:
-            result = _get_session().request_attack_plan(history=[])
-            history = result.get("history", [])
-            plan_text = result.get("plan_text", "")
-            last_msg = history[-1][1] if history else ""
-            _job_log(jid, "공격 임무계획 완료")
+            result = _get_session().generate_attack_coas()
+            coas = result.get("coas", [])
+            _job_log(jid, f"COA {len(coas)}개 생성 완료")
             _job_set(jid, "done", {
-                "plan_text": plan_text,
-                "message": last_msg,
-                "type": "attack",
+                "coas": coas,
+                "message": f"COA {len(coas)}개 생성 완료 — 버튼 hover로 미리보기, 클릭 시 실행",
+                "type": "attack_coa",
             })
         except Exception as e:
             _job_log(jid, f"오류: {e}")
@@ -479,6 +480,14 @@ def create_app(agent: Any = None) -> Any:
         t = threading.Thread(target=_run_attack_job, args=(jid,), daemon=True, name=f"attack-{jid}")
         t.start()
         return JSONResponse({"job_id": jid})
+
+    @app.post("/api/mission/coa/execute")
+    async def api_coa_execute(req: "CoaExecuteRequest"):
+        try:
+            return JSONResponse(_get_session().execute_coa(req.index))
+        except Exception as e:
+            logger.exception("api_coa_execute 오류")
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     @app.post("/api/mission/evaluate")
     async def api_mission_evaluate():
