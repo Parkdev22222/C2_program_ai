@@ -138,7 +138,8 @@ class WargameSession:
 
         # 자동 재계획 상태/동기화 (replan 워커가 참조).
         self._auto_plan_lock = threading.Lock()   # 동시 자동 계획 방지
-        self.auto_plan_status: dict = {"active": False, "message": "", "started_at": 0.0}
+        self.auto_plan_status: dict = {"active": False, "message": "", "started_at": 0.0,
+                                       "coas": [], "coa_gen_id": 0}
         self.last_replan_tick: int = -30           # 30틱 쿨다운 기준
         self._worker_stop = threading.Event()      # 탐지 워커 정지 신호
         self._detection_thread: Optional[threading.Thread] = None
