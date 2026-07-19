@@ -43,10 +43,14 @@ def test_unit_halts_on_contact_and_resumes():
     eng = _engine([b, o])
     y0 = b.y
     eng._move_units(30.0)
-    # 정지 — waypoint 방향(y+) 전진 안 함, waypoint 보존
-    assert b.y == y0
+    # 교전 중에는 waypoint(y=25000) 방향으로 전진하지 않고 waypoint를 보존한다.
+    # BLUFOR는 교전 중 완전 정지가 아니라 고지 등 유리한 지형으로 소규모 재배치를
+    # 하므로(적 교전거리 ~1.5km 내) 정확한 좌표 대신 "적 방향으로 돌진하지 않았다"만
+    # 느슨하게 검증한다(지형 의존적이라 정확한 좌표는 단언하지 않음).
+    assert b.y < 12000
     assert b.waypoints == [[10000, 25000]]
+    y_after_combat = b.y
     # 적 격멸 → 다음 틱부터 waypoint 방향 전진 재개
     o.status = "destroyed"
     eng._move_units(30.0)
-    assert b.y > y0
+    assert b.y > y_after_combat
