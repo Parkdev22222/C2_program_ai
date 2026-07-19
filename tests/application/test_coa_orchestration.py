@@ -39,3 +39,32 @@ def test_execute_coa_bad_index():
     s = _session_started()
     generate_attack_coas(s)
     assert execute_coa(s, 9)["ok"] is False
+
+
+def test_generate_llm_branch_does_not_mutate_engine():
+    s = _session_started()
+    eng = s.ensure_engine()
+
+    # 엔진을 실제로 바꾸는 '나쁜' 에이전트 스텁 (생성 중 적용 시도 흉내)
+    class _BadAgent:
+        class _Inner:
+            def run(self_inner, q, reset=True):
+                # 생성 도중 엔진에 임무 적용을 시도(가드가 이를 되돌려야 함)
+                eng.apply_mission_plan({"mission_plans": [
+                    {"company_id": eng.units[0].id, "mission_type": "attack",
+                     "waypoints": [[9000, 9000]]}]})
+                return "{}"   # 유효 JSON 아님(mission_plans 없음) → 규칙기반 유지
+
+        agent = _Inner()
+
+        def reset_memory(self):
+            pass
+
+        def run(self, q, reset=False):
+            return "{}"
+
+    s.agent = _BadAgent()
+    before = {u.id: list(u.waypoints) for u in eng.units if u.side == "BLUFOR"}
+    generate_attack_coas(s)
+    after = {u.id: list(u.waypoints) for u in eng.units if u.side == "BLUFOR"}
+    assert before == after, "생성 단계에서 엔진 변경은 스냅샷 복원으로 되돌려져야 함"

@@ -126,19 +126,41 @@ def generate_attack_coas(session) -> dict:
     agent = session.agent
     planner = session.planner
     if agent is not None and planner is not None:
-        for coa in coas:
+        # 생성 중 에이전트가 실수로(또는 프롬프트 무시하고) apply 툴을 호출해도
+        # 엔진이 바뀌지 않도록 BLUFOR 기동 상태를 스냅샷 후 복원한다.
+        _snap = {u.id: (u.x, u.y, list(u.waypoints), u.current_action,
+                        u.target_unit_id, u.mission_lock_ticks, u.pursuing)
+                 for u in eng.units if u.side == "BLUFOR"}
+        try:
+            for coa in coas:
+                try:
+                    query = (build_mission_query(state)
+                             + "\n\n" + _COA_DOCTRINE_HINT.get(coa["doctrine"], "")
+                             + "\n\n⚠️ 계획(mission_plans/air_support_plans) JSON만 출력하라. "
+                               "apply/적용 툴을 호출하지 말 것(엔진 적용 금지, 생성만).")
+                    agent.reset_memory()
+                    raw = agent.agent.run(query, reset=True)
+                    p = planner._parse_json(str(raw))
+                    if p and p.get("mission_plans"):
+                        # LLM이 lat/lon 반환 가능 → 미터로 변환 후 대체(미적용)
+                        coa["plan"] = _convert_latlon_plan_to_meters(p)
+                except Exception as _e:
+                    logger.warning("[COA] LLM 생성 실패(%s) → 규칙기반 유지: %s", coa["id"], _e)
+        finally:
+            # 생성 단계 엔진 미적용 보장 — 스냅샷 복원
+            for u in eng.units:
+                if u.side == "BLUFOR" and u.id in _snap:
+                    x, y, wps, act, tgt, lock, pur = _snap[u.id]
+                    u.x, u.y = x, y
+                    u.waypoints = wps
+                    u.current_action = act
+                    u.target_unit_id = tgt
+                    u.mission_lock_ticks = lock
+                    u.pursuing = pur
             try:
-                query = (build_mission_query(state)
-                         + "\n\n" + _COA_DOCTRINE_HINT.get(coa["doctrine"], "")
-                         + "\n\n⚠️ 계획(mission_plans/air_support_plans) JSON만 출력하라. "
-                           "apply/적용 툴을 호출하지 말 것(엔진 적용 금지, 생성만).")
-                agent.reset_memory()
-                raw = agent.agent.run(query, reset=True)
-                p = planner._parse_json(str(raw))
-                if p and p.get("mission_plans"):
-                    coa["plan"] = p   # LLM 결과로 대체(미적용)
-            except Exception as _e:
-                logger.warning("[COA] LLM 생성 실패(%s) → 규칙기반 유지: %s", coa["id"], _e)
+                eng._blufor_llm_units.clear()
+            except Exception:
+                pass
 
     # 프리뷰 부착
     for coa in coas:
