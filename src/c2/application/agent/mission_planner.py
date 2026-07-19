@@ -641,3 +641,99 @@ class MissionPlanner:
             "mission_plans":    plans,
             "air_support_plans": air_support_plans,
         }
+
+
+def _coa_air_plans(state: dict, max_n: int) -> list:
+    """탐지 OPFOR 상위 max_n개에 공중지원(규칙기반). max_n<=0이면 빈 리스트."""
+    if max_n <= 0:
+        return []
+    air_use = state.get("air_use_count", {})
+    air_limit = state.get("air_use_limit", 5)
+    remaining = min(max_n, max(0, air_limit - air_use.get("BLUFOR", 0)))
+    detected = [e for e in state.get("intelligence", {}).get("BLUFOR", [])
+                if e.get("status") == "detected"]
+    detected.sort(key=lambda e: e.get("combat_power") or 0, reverse=True)
+    call_signs = ["EAGLE-1", "EAGLE-2", "EAGLE-3", "VIPER-1", "VIPER-2"]
+    plans = []
+    for idx, enemy in enumerate(detected[:remaining]):
+        cs = call_signs[idx] if idx < len(call_signs) else f"STRIKE-{idx+1}"
+        ut = enemy.get("unit_type", "")
+        if any(k in ut for k in ("전차", "장갑", "armor")):
+            s_type, radius, delay = "helicopter", 1000, 60
+        else:
+            s_type, radius, delay = "cas", 1500, 6
+        plans.append({"call_sign": cs, "support_type": s_type,
+                      "target": [int(enemy["known_x"]), int(enemy["known_y"])],
+                      "radius": radius, "delay": delay})
+    return plans
+
+
+def _coa_targets(state: dict):
+    """통제구역 목록(없으면 OPFOR 집결점 기반 3점) 반환 — (알파, 브라보, 찰리) 대응."""
+    cps = state.get("control_points", [])
+    if len(cps) >= 3:
+        return [(c["x"], c["y"]) for c in cps[:3]]
+    opfor = [u for u in state["units"] if u["side"] == "OPFOR" and u["status"] != "destroyed"]
+    if opfor:
+        cx = sum(u["x"] for u in opfor) / len(opfor)
+        cy = sum(u["y"] for u in opfor) / len(opfor)
+    else:
+        cx, cy = 15000, 15000
+    return [(cx - 2000, cy), (cx, cy), (cx + 2000, cy)]
+
+
+def build_rule_based_coas(state: dict) -> list:
+    """규칙기반 3개 COA(정면 집중 / 측방 기동 / 화력 우선) 생성. 서로 구별됨.
+    엔진 미적용 — plan JSON만 반환."""
+    blufor = [u for u in state["units"]
+              if u["side"] == "BLUFOR" and u["status"] != "destroyed"]
+    targets = _coa_targets(state)          # [알파, 브라보, 찰리]
+    alpha, bravo, charlie = targets[0], targets[1], targets[2]
+
+    def _attack_plan(u, dst, mid_offset=0.0):
+        """부대 u가 dst로 진격하는 mission_plan(중간 waypoint 1 + 목표)."""
+        mx = round(u["x"] + (dst[0] - u["x"]) * 0.55)
+        my = round(u["y"] + (dst[1] - u["y"]) * 0.55 + mid_offset)
+        return {"company_id": u["id"], "mission_type": "attack",
+                "waypoints": [[mx, my], [round(dst[0]), round(dst[1])]],
+                "objective": f"통제구역 확보 ({int(dst[0])},{int(dst[1])})"}
+
+    def _mk(u, dst, off):
+        cp = u["combat_power"]
+        if cp < 30:
+            return {"company_id": u["id"], "mission_type": "defend",
+                    "waypoints": [[round(u["x"]), round(u["y"])]], "objective": "현위치 방어"}
+        return _attack_plan(u, dst, off)
+
+    # COA1 정면 집중: 전원 중앙(브라보)로
+    coa1 = {"reasoning": "정면 집중 — 통제구역 중앙(브라보) 확보 우선, 기동부대 밀집 진격.",
+            "mission_plans": [_mk(u, bravo, 0.0) for u in blufor if u["combat_power"] > 5],
+            "air_support_plans": _coa_air_plans(state, 2)}
+    # COA2 측방 기동: 절반은 알파(좌), 절반은 찰리(우) — 측방 우회 offset
+    plans2 = []
+    for i, u in enumerate(blufor):
+        if u["combat_power"] <= 5:
+            continue
+        dst = alpha if i % 2 == 0 else charlie
+        plans2.append(_mk(u, dst, 600 if i % 2 == 0 else -600))
+    coa2 = {"reasoning": "측방 기동 — 통제구역 측면(알파·찰리)을 좌우로 나눠 우회 확보.",
+            "mission_plans": plans2, "air_support_plans": _coa_air_plans(state, 1)}
+    # COA3 화력 우선: 공중지원 최대, 기동부대는 중앙으로(보수적 접근)
+    # COA1과 mission_plans가 동일해질 수 있으므로(둘 다 bravo), 첫 부대 목표에 미세
+    # offset을 주어 서명(signature)이 달라지게 한다.
+    coa3_plans = []
+    for i, u in enumerate(blufor):
+        if u["combat_power"] <= 5:
+            continue
+        coa3_plans.append(_mk(u, bravo, 100.0 if i == 0 else 0.0))
+    coa3 = {"reasoning": "화력 우선 — 공중지원·포병 최대 투사 후 통제구역 진격.",
+            "mission_plans": coa3_plans, "air_support_plans": _coa_air_plans(state, 5)}
+
+    return [
+        {"id": "COA1", "label": "COA1 · 정면 집중", "doctrine": "frontal",
+         "summary": "통제구역 중앙 집중 확보 + 공중지원 2", "plan": coa1},
+        {"id": "COA2", "label": "COA2 · 측방 기동", "doctrine": "flank",
+         "summary": "좌우 측방 우회로 통제구역 확보 + 공중지원 1", "plan": coa2},
+        {"id": "COA3", "label": "COA3 · 화력 우선", "doctrine": "fires",
+         "summary": "공중지원 최대 투사 후 중앙 진격", "plan": coa3},
+    ]
