@@ -547,6 +547,8 @@ const unitWpLines  = {};   // id → L.Polyline
 const airCircles   = {};   // call_sign → {circle, dot}
 const intelMarkers = {};   // unit_id → {marker, uncircle?}
 const cpLayers     = {};   // cp.id → {circle, marker}
+let coaPreviewLayers = [];   // COA hover 프리뷰 임시 레이어
+let coaButtonsData = [];     // 현재 COA 데이터(프리뷰 포함)
 
 // 공중지원 타입별 색상
 const AIR_COLOR = {
@@ -1077,7 +1079,12 @@ function pollJob(jobId, label) {
             if (j2.status === 'done') {
               const res = j2.result || {};
               if (res.plan_text) document.getElementById('plan-box').textContent = res.plan_text;
-              addChatMessage('bot', `✅ ${label} 완료\n\n${res.message || ''}`);
+              if (res.coas && res.coas.length) {
+                addChatMessage('bot', `✅ ${label} — COA ${res.coas.length}개 생성. 버튼에 마우스를 올리면 지도 미리보기, 클릭하면 실행됩니다.`);
+                renderCoaButtons(res.coas);
+              } else {
+                addChatMessage('bot', `✅ ${label} 완료\n\n${res.message || ''}`);
+              }
               await poll(); await fetchStatusText(); await fetchEvents();
             } else if (j2.status === 'error') {
               addChatMessage('err', `❌ ${label} 오류: ${(j2.log||[]).slice(-2).join('\n')}`);
@@ -1098,7 +1105,12 @@ function pollJob(jobId, label) {
           document.getElementById('plan-box').textContent = res.plan_text;
         }
         const msg = res.message || `${label} 임무계획 완료`;
-        addChatMessage('bot', `✅ ${label} 완료\n\n${msg}`);
+        if (res.coas && res.coas.length) {
+          addChatMessage('bot', `✅ ${label} — COA ${res.coas.length}개 생성. 버튼에 마우스를 올리면 지도 미리보기, 클릭하면 실행됩니다.`);
+          renderCoaButtons(res.coas);
+        } else {
+          addChatMessage('bot', `✅ ${label} 완료\n\n${msg}`);
+        }
         await poll(); await fetchStatusText(); await fetchEvents();
       } else if (job.status === 'error') {
         hideLoading();
@@ -1113,6 +1125,81 @@ function pollJob(jobId, label) {
     }
   };
   setTimeout(check, 2000);
+}
+
+// ── COA(방책) 버튼/프리뷰 ────────────────────────────────────────
+function clearCoaPreview() {
+  for (const l of coaPreviewLayers) { try { map.removeLayer(l); } catch(_){} }
+  coaPreviewLayers = [];
+}
+
+function renderCoaPreview(preview) {
+  clearCoaPreview();
+  if (!preview) return;
+  for (const r of (preview.routes || [])) {
+    if (!r.latlon || r.latlon.length < 2) continue;
+    const line = L.polyline(r.latlon, {color: '#ffb300', weight: 3, opacity: 0.9, dashArray: '8,5'}).addTo(map);
+    coaPreviewLayers.push(line);
+    const end = r.latlon[r.latlon.length - 1];
+    const lbl = L.marker(end, {icon: L.divIcon({
+      html: `<div style="white-space:nowrap;font-size:10px;font-weight:700;color:#ffb300;text-shadow:0 0 3px #000">▶ ${r.unit_id}</div>`,
+      className:'', iconSize:[8,8], iconAnchor:[4,4]})}).addTo(map);
+    coaPreviewLayers.push(lbl);
+  }
+  for (const a of (preview.air_support || [])) {
+    const c = L.circle(a.target, {radius: a.radius || 1500, color: '#ff7043', weight: 2,
+      fillColor: '#ff7043', fillOpacity: 0.12, dashArray: '4,4'}).addTo(map);
+    coaPreviewLayers.push(c);
+    const dot = L.marker(a.target, {icon: L.divIcon({
+      html: `<div style="white-space:nowrap;font-size:10px;font-weight:700;color:#ff7043;text-shadow:0 0 3px #000">✜ ${a.call_sign} (${a.support_type})</div>`,
+      className:'', iconSize:[8,8], iconAnchor:[4,4]})}).addTo(map);
+    coaPreviewLayers.push(dot);
+  }
+}
+
+function renderCoaButtons(coas) {
+  coaButtonsData = coas || [];
+  clearCoaPreview();
+  const box = document.getElementById('chat-messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'coa-btn-wrap';
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin:8px 0';
+  coas.forEach((coa, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'coa-btn';
+    btn.style.cssText = 'display:flex;align-items:center;gap:12px;padding:16px 20px;'
+      + 'background:#12314f;border:1px solid #2f6ea5;border-radius:8px;color:#cfe8ff;'
+      + 'font-size:18px;font-weight:700;cursor:pointer;text-align:left';
+    btn.innerHTML = `<span style="font-size:20px">▷</span><span>${coa.label || coa.id}</span>`
+      + `<span style="margin-left:auto;font-size:11px;color:#8fb7dd;font-weight:400">${coa.summary||''}</span>`;
+    btn.addEventListener('mouseenter', () => renderCoaPreview(coa.preview));
+    btn.addEventListener('mouseleave', () => clearCoaPreview());
+    btn.addEventListener('click', () => executeCoa(i, coa.label || coa.id, wrap));
+    wrap.appendChild(btn);
+  });
+  box.appendChild(wrap);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function executeCoa(index, label, wrapEl) {
+  clearCoaPreview();
+  try {
+    const r = await fetch('/api/mission/coa/execute', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({index}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      addChatMessage('bot', `✅ ${label} 실행 — 공격 개시`);
+      if (wrapEl) wrapEl.remove();
+      coaButtonsData = [];
+      await poll(); await fetchStatusText(); await fetchEvents();
+    } else {
+      addChatMessage('err', `❌ 실행 실패: ${d.error || ''}`);
+    }
+  } catch(e) {
+    addChatMessage('err', `❌ 실행 요청 실패: ${e.message}`);
+  }
 }
 
 // ── 채팅 ─────────────────────────────────────────────────────────
@@ -1152,6 +1239,7 @@ async function sendChat() {
     });
     const d = await r.json();
     lastBot.textContent = d.response || '(응답 없음)';
+    if (d.coas && d.coas.length) { renderCoaButtons(d.coas); }
   } catch(e) {
     lastBot.className = 'msg err';
     lastBot.textContent = `오류: ${e.message}`;
