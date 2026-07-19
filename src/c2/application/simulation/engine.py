@@ -820,6 +820,24 @@ class WargameEngine:
 
     # ── 이동 ─────────────────────────────────────────────────────────
 
+    def _in_direct_combat(self, u: "Unit"):
+        """u가 상호 직사 사거리 내 적과 교전 접촉 중이면 가장 가까운 적을 반환, 아니면 None.
+        자주포(u/적)는 직사 교전 대상이 아니므로 제외한다(기존 _resolve_combat 규칙과 동일)."""
+        if u.unit_type == "자주포":
+            return None
+        enemy_side = "OPFOR" if u.side == "BLUFOR" else "BLUFOR"
+        nearest = None
+        nearest_d = float("inf")
+        for e in self.units:
+            if e.side != enemy_side or not e.is_active() or e.unit_type == "자주포":
+                continue
+            d = u.distance_to(e)
+            if _engagement_factor(u.unit_type, d) > 0 or _engagement_factor(e.unit_type, d) > 0:
+                if d < nearest_d:
+                    nearest_d = d
+                    nearest = e
+        return nearest
+
     def _move_units(self, dt: float):
         for u in self.units:
             if not u.is_active():
@@ -827,6 +845,10 @@ class WargameEngine:
             spd_mult = _status_speed_mult(u.status)
             if spd_mult <= 0:
                 continue   # suppressed: 이동 불가
+
+            # ── 기동 중 직사 교전 접촉 → 정지·교전 (waypoint 보존, 종료 시 자동 재개) ──
+            if self._in_direct_combat(u) is not None:
+                continue   # 그 자리 정지·교전 (이동 없음). BLUFOR 고지 기동은 Task 2에서 추가.
 
             # 추격 중: 매 틱 표적 현재 인지 위치로 경로를 갱신하여 지속 추종
             if u.pursuing:
