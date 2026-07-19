@@ -1160,6 +1160,8 @@ function renderCoaPreview(preview) {
 function renderCoaButtons(coas) {
   coaButtonsData = coas || [];
   clearCoaPreview();
+  // 이전에 렌더된(미클릭) COA 버튼 블록 제거 — 서버 pending_coas와 인덱스 불일치 방지
+  document.querySelectorAll('.coa-btn-wrap').forEach(el => el.remove());
   const box = document.getElementById('chat-messages');
   const wrap = document.createElement('div');
   wrap.className = 'coa-btn-wrap';
