@@ -64,6 +64,9 @@ _INDIRECT_MAX_RANGE = 15_000.0   # 자주포 간접사격 최대 사거리
 _INDIRECT_MIN_RANGE =    800.0   # 자주포 간접사격 최소 사거리 (근거리 사각지대)
 _SPG_CLOSE_RANGE    =  1_000.0   # 이 거리 이내에서 자주포는 근거리 취약 패널티 적용
 _SPG_CLOSE_MULT     =      1.8   # 근거리 교전 시 자주포 피해 배율 (1.0 = 패널티 없음)
+_COMBAT_REPOS_RADIUS = 300.0   # 교전 중 고지 후보 평가 반경 (m)
+_COMBAT_MOVE_MULT    = 0.4     # 교전 기동 속도 배율 (전투 속보)
+_COMBAT_COVER_WEIGHT = 150.0   # 지형 점수 엄폐 가중치
 _SPG_FIRE_BUDGET       = 300.0   # 자주포 연속사격 가능 게임초 (소진 시 재보급)
 _SPG_RESUPPLY_COOLDOWN = 240.0   # 재보급 대기 게임초 (이 동안 사격 불가)
 _CB_EXPOSURE_DELAY = 120.0   # 정적 사격 후 대포병 개시 게임초
@@ -838,6 +841,42 @@ class WargameEngine:
                     nearest = e
         return nearest
 
+    def _ground_score(self, x: float, y: float) -> float:
+        """지형 유리도 점수 = 고도 + 엄폐 × 가중치 (높을수록 유리)."""
+        return terrain.elevation(x, y) + terrain.cover_factor(x, y) * _COMBAT_COVER_WEIGHT
+
+    def _blufor_combat_reposition(self, u: "Unit", enemy: "Unit", dt: float):
+        """교전 중 BLUFOR가 적을 직사 사거리에 유지하며 주변 고지(고도+엄폐)로 소폭 기동.
+        현 위치보다 유리하고 사거리를 유지하는 후보로만 이동한다(없으면 현 위치 고수)."""
+        cur_score = self._ground_score(u.x, u.y)
+        best = None
+        best_score = cur_score
+        for i in range(8):
+            ang = math.radians(i * 45)
+            cx = max(0.0, min(29_999.0, u.x + math.cos(ang) * _COMBAT_REPOS_RADIUS))
+            cy = max(0.0, min(29_999.0, u.y + math.sin(ang) * _COMBAT_REPOS_RADIUS))
+            # 이동 후에도 적을 내 직사 사거리에 유지(교전 이탈 방지)
+            d_enemy = math.hypot(cx - enemy.x, cy - enemy.y)
+            if _engagement_factor(u.unit_type, d_enemy) <= 0:
+                continue
+            s = self._ground_score(cx, cy)
+            if s > best_score:
+                best_score = s
+                best = (cx, cy)
+        if best is None:
+            return   # 더 나은 고지 없음 → 현 위치 고수(계속 교전)
+        tx, ty = best
+        dx, dy = tx - u.x, ty - u.y
+        dist = math.hypot(dx, dy)
+        if dist <= 0:
+            return
+        step = min(
+            u.max_speed * _COMBAT_MOVE_MULT * terrain.movement_speed_factor(u.x, u.y) * dt,
+            dist,
+        )
+        u.x += dx / dist * step
+        u.y += dy / dist * step
+
     def _move_units(self, dt: float):
         for u in self.units:
             if not u.is_active():
@@ -847,8 +886,12 @@ class WargameEngine:
                 continue   # suppressed: 이동 불가
 
             # ── 기동 중 직사 교전 접촉 → 정지·교전 (waypoint 보존, 종료 시 자동 재개) ──
-            if self._in_direct_combat(u) is not None:
-                continue   # 그 자리 정지·교전 (이동 없음). BLUFOR 고지 기동은 Task 2에서 추가.
+            _contact = self._in_direct_combat(u)
+            if _contact is not None:
+                if u.side == "BLUFOR":
+                    self._blufor_combat_reposition(u, _contact, dt)  # 고지 기동하며 교전
+                # OPFOR: 그 자리 정지·교전 (이동 없음)
+                continue
 
             # 추격 중: 매 틱 표적 현재 인지 위치로 경로를 갱신하여 지속 추종
             if u.pursuing:
