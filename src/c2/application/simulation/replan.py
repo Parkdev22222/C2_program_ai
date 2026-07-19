@@ -131,6 +131,7 @@ def generate_attack_coas(session) -> dict:
         _snap = {u.id: (u.x, u.y, list(u.waypoints), u.current_action,
                         u.target_unit_id, u.mission_lock_ticks, u.pursuing)
                  for u in eng.units if u.side == "BLUFOR"}
+        _air_n = len(eng.air_supports)
         try:
             for coa in coas:
                 try:
@@ -159,6 +160,10 @@ def generate_attack_coas(session) -> dict:
                     u.pursuing = pur
             try:
                 eng._blufor_llm_units.clear()
+            except Exception:
+                pass
+            try:
+                del eng.air_supports[_air_n:]
             except Exception:
                 pass
 
@@ -388,8 +393,9 @@ def chat_send(session, message: str, history: list = None) -> dict:
                             idx = k
                             break
                     if 0 <= idx < len(coas):
-                        coas[idx]["plan"] = parsed
-                        coas[idx]["preview"] = build_coa_preview(parsed, eng.get_state())
+                        _plan_m = _convert_latlon_plan_to_meters(parsed)   # LLM은 위경도 반환 → 미터로 변환(생성 경로와 동일)
+                        coas[idx]["plan"] = _plan_m
+                        coas[idx]["preview"] = build_coa_preview(_plan_m, eng.get_state())
                         session.set_pending_coas(coas)
                         updated_coas = coas
                         handled_as_coa_edit = True

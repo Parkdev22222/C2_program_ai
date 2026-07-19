@@ -1,6 +1,6 @@
 """COA 생성(미적용) + 실행."""
 from c2.composition.container import build_session
-from c2.application.simulation.replan import generate_attack_coas, execute_coa
+from c2.application.simulation.replan import generate_attack_coas, execute_coa, chat_send
 
 
 def _session_started():
@@ -73,3 +73,25 @@ def test_generate_llm_branch_does_not_mutate_engine():
     generate_attack_coas(s)
     after = {u.id: list(u.waypoints) for u in eng.units if u.side == "BLUFOR"}
     assert before == after, "생성 단계에서 엔진 변경은 스냅샷 복원으로 되돌려져야 함"
+
+
+def test_chat_coa_edit_converts_latlon_to_meters():
+    s = build_session()
+    s.ensure_engine()
+    if s.planner is None:
+        from c2.application.agent.mission_planner import MissionPlanner
+        s.planner = MissionPlanner()
+    s.set_pending_coas([{"id": "COA1", "label": "COA1", "summary": "s",
+                         "plan": {"mission_plans": [{"company_id": "보병1중대", "mission_type": "attack", "waypoints": [[9000, 9000]]}]}}])
+    # 위경도 waypoints를 반환하는 가짜 에이전트 (LLM이 위경도로 답하는 상황)
+    class _A:
+        def run(self, q, reset=False):
+            return 'COA1 수정: ```json\n{"mission_plans":[{"company_id":"보병1중대","mission_type":"attack","waypoints":[[38.10,127.12]]}]}\n```'
+        def reset_memory(self): pass
+
+    s.agent = _A()
+    res = chat_send(s, "COA1을 우측으로 이동")
+    assert "coas" in res, "COA 수정이 반영되어 coas가 반환돼야 함"
+    wp = res["coas"][0]["plan"]["mission_plans"][0]["waypoints"][0]
+    # 위경도(38,127)가 아니라 미터(수천~수만)로 변환됐는지
+    assert wp[0] > 1000 and wp[1] > 1000, f"위경도가 미터로 변환돼야 함: {wp}"
