@@ -95,3 +95,27 @@ def test_chat_coa_edit_converts_latlon_to_meters():
     wp = res["coas"][0]["plan"]["mission_plans"][0]["waypoints"][0]
     # 위경도(38,127)가 아니라 미터(수천~수만)로 변환됐는지
     assert wp[0] > 1000 and wp[1] > 1000, f"위경도가 미터로 변환돼야 함: {wp}"
+
+
+def test_generate_llm_timeout_falls_back_to_rulebased(monkeypatch):
+    import time as _t
+    from c2.composition.container import build_session
+    from c2.application.simulation import replan
+    from c2.application.agent.mission_planner import MissionPlanner
+    monkeypatch.setattr(replan, "_COA_LLM_TIMEOUT", 0.3)   # 짧은 타임아웃
+    s = build_session()
+    s.ensure_engine()
+    if s.planner is None:
+        s.planner = MissionPlanner()
+    class _Hang:
+        def run(self, q, reset=True):
+            _t.sleep(2.0); return "{}"   # 타임아웃보다 오래 대기
+    class _A:
+        agent = _Hang()
+        def reset_memory(self): pass
+    s.agent = _A()
+    t0 = _t.time()
+    res = replan.generate_attack_coas(s)
+    # 타임아웃돼도 규칙기반 3개 COA 반환, 무한 대기 안 함
+    assert len(res["coas"]) == 3
+    assert _t.time() - t0 < 5.0, "타임아웃으로 조기 반환해야 함(무한 대기 금지)"

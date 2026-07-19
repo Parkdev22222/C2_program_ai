@@ -22,3 +22,14 @@ def test_detection_event_generates_coas_without_applying():
     assert before == after, "이벤트 COA 생성 단계에서 엔진 미적용"
     # 시뮬 정지 유지
     assert eng.running is False
+
+
+def test_reset_clears_auto_plan_coas():
+    from c2.composition.container import build_session
+    from c2.application.simulation.replan import execute_auto_attack_plan
+    s = build_session()
+    eng = s.ensure_engine(); eng.full_recon = True; eng._update_intelligence()
+    execute_auto_attack_plan(s, "detection", "적보병1중대", "기계화보병", 20000, 19000)
+    assert s.auto_plan_status.get("coas"), "이벤트 후 coas 존재"
+    s.reset()
+    assert s.auto_plan_status.get("coas") == [], "reset 시 auto_plan_status coas 비워짐"

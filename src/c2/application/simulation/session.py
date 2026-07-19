@@ -291,6 +291,8 @@ class WargameSession:
         engine = self.engine
         engine.reset(units)
         self._pending_coas = []
+        self.auto_plan_status["coas"] = []
+        self.auto_plan_status["coa_gen_id"] = self.auto_plan_status.get("coa_gen_id", 0) + 1
 
         self._ensure_planner()
         # 엔진 틱이 0으로 초기화되므로 재계획 쿨다운 기준도 초기화

@@ -33,6 +33,29 @@ from c2.domain.wargame.coordinates import (
 
 logger = logging.getLogger(__name__)
 
+_COA_LLM_TIMEOUT = 120.0   # COA당 LLM 생성 최대 대기(초) — 초과 시 규칙기반 유지
+
+
+def _run_with_timeout(fn, timeout: float):
+    """fn()을 데몬 스레드에서 실행. timeout 내 완료 시 결과 반환, 아니면 TimeoutError.
+    타임아웃 시 스레드는 데몬으로 남아 프로세스 종료 시 정리되므로 워커/락이 영구 블록되지 않는다."""
+    import threading as _th
+    box = {}
+    def _target():
+        try:
+            box["r"] = fn()
+        except Exception as _e:
+            box["e"] = _e
+    t = _th.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"LLM 생성 {timeout:.0f}s 초과")
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
 # ── 임무계획 적용 실패 시 LLM 피드백 루프 ──────────────────────────
 _PLAN_REPAIR_MAX_RETRIES = 2
 
@@ -140,14 +163,16 @@ def generate_attack_coas(session, context_hint: str = "") -> dict:
                              + "\n\n" + _COA_DOCTRINE_HINT.get(coa["doctrine"], "")
                              + "\n\n⚠️ 계획(mission_plans/air_support_plans) JSON만 출력하라. "
                                "apply/적용 툴을 호출하지 말 것(엔진 적용 금지, 생성만).")
-                    agent.reset_memory()
-                    raw = agent.agent.run(query, reset=True)
-                    p = planner._parse_json(str(raw))
+                    def _gen_one(_query=query):
+                        agent.reset_memory()
+                        raw = agent.agent.run(_query, reset=True)
+                        return planner._parse_json(str(raw))
+                    p = _run_with_timeout(_gen_one, _COA_LLM_TIMEOUT)
                     if p and p.get("mission_plans"):
                         # LLM이 lat/lon 반환 가능 → 미터로 변환 후 대체(미적용)
                         coa["plan"] = _convert_latlon_plan_to_meters(p)
                 except Exception as _e:
-                    logger.warning("[COA] LLM 생성 실패(%s) → 규칙기반 유지: %s", coa["id"], _e)
+                    logger.warning("[COA] LLM 생성 실패/타임아웃(%s) → 규칙기반 유지: %s", coa["id"], _e)
         finally:
             # 생성 단계 엔진 미적용 보장 — 스냅샷 복원
             for u in eng.units:
@@ -1072,6 +1097,8 @@ def execute_auto_attack_plan(session, event_type: str, *args):
     try:
         res = generate_attack_coas(session, context_hint=trigger_desc)
         coas = res.get("coas", [])
+        if not coas and was_running:
+            eng.start()   # 생성 실패(빈 COA) → 시뮬 재개(정지 방치 방지)
         _auto_plan_status["coas"] = coas
         _auto_plan_status["coa_gen_id"] = _auto_plan_status.get("coa_gen_id", 0) + 1
         _auto_plan_status["message"] = f"{log_tag} — COA 선택 대기"
