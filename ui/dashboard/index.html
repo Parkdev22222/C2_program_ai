@@ -940,6 +940,7 @@ const EVENT_LABELS = {
 
 let _autoplanActive = false;
 let _manualPlanActive = false;  // 수동 임무계획 버튼 실행 중 여부
+let _lastCoaGenId = 0;   // 마지막으로 렌더한 이벤트 COA 세대 id
 
 async function pollAutoPlan() {
   try {
@@ -947,6 +948,13 @@ async function pollAutoPlan() {
     const d = await r.json();
     const banner = document.getElementById('autoplan-banner');
     const textEl = document.getElementById('autoplan-text');
+
+    // 이벤트 재계획으로 생성된 COA가 있으면 버튼 렌더(세대 id로 1회만)
+    if (d.coas && d.coas.length && (d.coa_gen_id || 0) !== _lastCoaGenId) {
+      _lastCoaGenId = d.coa_gen_id || 0;
+      addChatMessage('sys', `⚠️ [이벤트 재계획] ${d.message || ''} — COA를 선택하세요.`);
+      renderCoaButtons(d.coas);
+    }
 
     if (d.active) {
       // 트리거 종류에 따라 라벨 선택

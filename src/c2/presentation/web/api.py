@@ -513,9 +513,13 @@ def create_app(agent: Any = None) -> Any:
             return JSONResponse({
                 "active": s.get("active", False),
                 "message": s.get("message", ""),
+                "started_at": s.get("started_at", 0.0),
+                "coas": s.get("coas", []),
+                "coa_gen_id": s.get("coa_gen_id", 0),
             })
-        except Exception:
-            return JSONResponse({"active": False, "message": ""})
+        except Exception as e:
+            logger.exception("api_auto_plan_status 오류")
+            return JSONResponse({"active": False, "message": "", "coas": [], "coa_gen_id": 0})
 
     @app.get("/api/scenario/unit_types")
     async def api_scenario_unit_types():
