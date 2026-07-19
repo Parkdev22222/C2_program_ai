@@ -401,7 +401,7 @@ class WargameEngine:
             # CP 임계값은 부대별로 유지 (같은 CP 레벨에서 재발동 방지)
             # — 단, 유닛이 완전히 재초기화되지 않는 한 동일 임계값 재발동은 없음
 
-    def apply_mission_plan(self, plan: dict):
+    def apply_mission_plan(self, plan: dict, stealth_expand: bool = True):
         with self._lock:
             id_map = {u.id: u for u in self.units}
             for mp in plan.get("mission_plans", []):
@@ -421,7 +421,7 @@ class WargameEngine:
                 raw_wp_count = len(wps)
                 # 임무 오버레이용 최종 목표(은밀경로 확장 전 원본 마지막 WP) 저장
                 _objective = list(wps[-1]) if wps else None
-                if u.side == "BLUFOR" and wps:
+                if stealth_expand and u.side == "BLUFOR" and wps:
                     wps = self._stealth_expand_waypoints(u, wps)
                 u.waypoints       = wps
                 u.current_action  = mp.get("mission_type", "move")
@@ -454,6 +454,26 @@ class WargameEngine:
                     self.tick, self.game_time, "ORDER",
                     f"{uid} 임무부여: {u.current_action} → {_wp_note}",
                 )
+
+    def expand_plan_waypoints(self, plan: dict) -> dict:
+        """plan의 BLUFOR mission_plans waypoint를 은밀기동 확장한 새 plan을 반환한다(엔진 상태 불변).
+        COA 프리뷰=실행 경로 일치용: 이 결과를 저장해 apply_mission_plan(stealth_expand=False)로 적용하면
+        재확장 없이 프리뷰와 동일 경로가 실행된다."""
+        import copy
+        out = copy.deepcopy(plan)
+        with self._lock:
+            id_map = {u.id: u for u in self.units}
+            for mp in out.get("mission_plans", []):
+                u = id_map.get(mp.get("company_id"))
+                if u is None or u.side != "BLUFOR":
+                    continue
+                try:
+                    wps = [[float(p[0]), float(p[1])] for p in mp.get("waypoints", [])]
+                except Exception:
+                    continue
+                if wps:
+                    mp["waypoints"] = self._stealth_expand_waypoints(u, wps)
+        return out
 
     # ── FOW 인텔 ─────────────────────────────────────────────────────
 
