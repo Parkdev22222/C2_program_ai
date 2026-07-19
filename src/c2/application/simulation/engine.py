@@ -67,6 +67,8 @@ _SPG_CLOSE_MULT     =      1.8   # 근거리 교전 시 자주포 피해 배율 
 _COMBAT_REPOS_RADIUS = 300.0   # 교전 중 고지 후보 평가 반경 (m)
 _COMBAT_MOVE_MULT    = 0.4     # 교전 기동 속도 배율 (전투 속보)
 _COMBAT_COVER_WEIGHT = 150.0   # 지형 점수 엄폐 가중치
+_CHARGE_CP_THRESHOLD = 50.0   # 이 CP 이상이면 돌입(반격), 미만이면 이탈(엄폐/후방)
+_ESCAPE_MOVE_MULT    = 0.8     # 돌입/이탈 기동 속도 배율 (긴급 기동)
 _SPG_FIRE_BUDGET       = 300.0   # 자주포 연속사격 가능 게임초 (소진 시 재보급)
 _SPG_RESUPPLY_COOLDOWN = 240.0   # 재보급 대기 게임초 (이 동안 사격 불가)
 _CB_EXPOSURE_DELAY = 120.0   # 정적 사격 후 대포병 개시 게임초
@@ -877,6 +879,46 @@ class WargameEngine:
         u.x += dx / dist * step
         u.y += dy / dist * step
 
+    def _combat_out_of_range_response(self, u: "Unit", enemy: "Unit", dt: float):
+        """사거리 밖 일방 피격 시(양측): CP 건전하면 적 사거리로 돌입, 손상되면 엄폐·후방 이탈.
+        돌입=적에 접근(거리 감소), 이탈=적에서 이격(거리 증가)하는 후보 중 엄폐 좋은 방향으로 이동."""
+        charging = u.combat_power >= _CHARGE_CP_THRESHOLD
+        cur_d = u.distance_to(enemy)
+        best = None
+        best_cover = -1.0
+        for i in range(8):
+            ang = math.radians(i * 45)
+            cx = max(0.0, min(29_999.0, u.x + math.cos(ang) * _COMBAT_REPOS_RADIUS))
+            cy = max(0.0, min(29_999.0, u.y + math.sin(ang) * _COMBAT_REPOS_RADIUS))
+            nd = math.hypot(cx - enemy.x, cy - enemy.y)
+            # 돌입=거리 감소 후보만 / 이탈=거리 증가 후보만
+            if charging and nd >= cur_d:
+                continue
+            if not charging and nd <= cur_d:
+                continue
+            cov = terrain.cover_factor(cx, cy)
+            if cov > best_cover:
+                best_cover = cov
+                best = (cx, cy)
+        if best is None:
+            # 후보 없음(경계 등) → 돌입=적 방향, 이탈=적 반대 방향 직진
+            if charging:
+                bx, by = enemy.x, enemy.y
+            else:
+                bx, by = 2.0 * u.x - enemy.x, 2.0 * u.y - enemy.y
+            best = (max(0.0, min(29_999.0, bx)), max(0.0, min(29_999.0, by)))
+        tx, ty = best
+        dx, dy = tx - u.x, ty - u.y
+        dist = math.hypot(dx, dy)
+        if dist <= 0:
+            return
+        step = min(
+            u.max_speed * _ESCAPE_MOVE_MULT * terrain.movement_speed_factor(u.x, u.y) * dt,
+            dist,
+        )
+        u.x += dx / dist * step
+        u.y += dy / dist * step
+
     def _move_units(self, dt: float):
         for u in self.units:
             if not u.is_active():
@@ -888,9 +930,12 @@ class WargameEngine:
             # ── 기동 중 직사 교전 접촉 → 정지·교전 (waypoint 보존, 종료 시 자동 재개) ──
             _contact = self._in_direct_combat(u)
             if _contact is not None:
-                if u.side == "BLUFOR":
-                    self._blufor_combat_reposition(u, _contact, dt)  # 고지 기동하며 교전
-                # OPFOR: 그 자리 정지·교전 (이동 없음)
+                if _engagement_factor(u.unit_type, u.distance_to(_contact)) <= 0:
+                    # 적 사거리 밖 일방 피격 → CP 기준 돌입/이탈 (양측)
+                    self._combat_out_of_range_response(u, _contact, dt)
+                elif u.side == "BLUFOR":
+                    self._blufor_combat_reposition(u, _contact, dt)  # 사거리 내 → 고지 기동
+                # else OPFOR 사거리 내 → 그 자리 정지·교전
                 continue
 
             # 추격 중: 매 틱 표적 현재 인지 위치로 경로를 갱신하여 지속 추종
