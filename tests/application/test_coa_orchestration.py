@@ -28,11 +28,16 @@ def test_execute_coa_applies_selected():
     eng = s.ensure_engine()
     generate_attack_coas(s)
     res = execute_coa(s, 0)
-    assert res["ok"] is True
-    # 실행 후 최소 1개 BLUFOR 부대가 waypoints/attack 갱신
-    changed = [u for u in eng.units if u.side == "BLUFOR" and (u.waypoints or u.current_action == "attack")]
-    assert changed, "COA 실행 시 엔진에 적용돼야 함"
-    assert s.pending_coas == [], "실행 후 pending 비움"
+    try:
+        assert res["ok"] is True
+        # 실행 후 최소 1개 BLUFOR 부대가 waypoints/attack 갱신
+        changed = [u for u in eng.units if u.side == "BLUFOR" and (u.waypoints or u.current_action == "attack")]
+        assert changed, "COA 실행 시 엔진에 적용돼야 함"
+        assert s.pending_coas == [], "실행 후 pending 비움"
+    finally:
+        # execute_coa가 eng.start()로 시뮬 스레드를 띄우므로 반드시 정지 —
+        # 백그라운드 틱이 전역 random을 소비해 결정성 테스트를 오염시키는 것 방지.
+        eng.stop()
 
 
 def test_execute_coa_bad_index():
