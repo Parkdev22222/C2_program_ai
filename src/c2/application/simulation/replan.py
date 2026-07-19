@@ -217,6 +217,11 @@ def execute_coa(session, index: int) -> dict:
         if plan.get("air_support_plans"):
             eng.apply_air_support_plan(plan)
         eng.start()   # 시뮬 재개
+        # COA 대응 완료 → 자동 재계획 트리거 플래그 해제(같은 적/이벤트가 이후 재트리거 가능)
+        try:
+            eng.clear_detection_triggers()
+        except Exception:
+            pass
         label = coas[index].get("id", f"COA{index+1}")
         session.clear_pending_coas()
         try:
