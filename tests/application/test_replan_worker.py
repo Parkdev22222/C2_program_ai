@@ -146,10 +146,15 @@ class TestExecuteAutoAttackPlanDetection:
         _orig = engine.apply_mission_plan
         engine.apply_mission_plan = lambda plan: applied.append(plan) or _orig(plan)
 
+        gid0 = session.auto_plan_status.get("coa_gen_id", 0)
         replan.execute_auto_attack_plan(session, "detection", "Red1", "전차", 20000, 20000)
 
         assert agent.agent.calls, "mock agent.run 가 호출되지 않음"
-        assert applied, "엔진 apply_mission_plan 이 호출되지 않음 (plan-apply 경로 미실행)"
+        # 이벤트 재계획은 즉시 적용이 아니라 COA 3개 생성(엔진 미적용) — 버튼 클릭 시 실행
+        assert not applied, "이벤트 재계획은 즉시 apply하면 안 됨 (COA 생성만)"
+        assert len(session.pending_coas) == 3, "이벤트 시 COA 3개 생성"
+        assert session.auto_plan_status.get("coas"), "auto_plan_status에 coas 노출"
+        assert session.auto_plan_status.get("coa_gen_id", 0) == gid0 + 1, "coa_gen_id 증가"
 
 
 # ── (c) 4개 이벤트 브랜치 모두 도달 가능 ────────────────────────
