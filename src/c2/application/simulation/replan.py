@@ -27,6 +27,7 @@ from c2.domain.wargame.coordinates import (
     is_latlon_coords as _is_latlon_coords,
     latlon_to_xy as _latlon_to_xy,
     waypoints_latlon_to_xy as _waypoints_latlon_to_xy,
+    xy_to_latlon,
     xy_to_latlon as _xy_to_latlon,
 )
 
@@ -61,6 +62,44 @@ def _convert_latlon_plan_to_meters(plan: dict) -> dict:
         converted_air.append(asp)
     plan["air_support_plans"] = converted_air
     return plan
+
+
+def build_coa_preview(plan: dict, state: dict) -> dict:
+    """COA plan(미터 좌표) → 지도 프리뷰용 위경도 데이터.
+    routes: 각 부대 현재위치+waypoints, air_support: 공중지원 목표/반경. 순수 함수."""
+    units_by_id = {u["id"]: u for u in state.get("units", [])}
+    routes = []
+    for mp in plan.get("mission_plans", []):
+        uid = mp.get("company_id")
+        u = units_by_id.get(uid)
+        latlon = []
+        if u is not None:
+            latlon.append(list(xy_to_latlon(u.get("x", 0), u.get("y", 0))))
+        for wp in mp.get("waypoints", []):
+            if isinstance(wp, (list, tuple)) and len(wp) >= 2:
+                latlon.append(list(xy_to_latlon(wp[0], wp[1])))
+            elif isinstance(wp, dict):
+                latlon.append(list(xy_to_latlon(wp.get("x", 0), wp.get("y", 0))))
+        routes.append({
+            "unit_id": uid,
+            "color": (u.get("color") if u else None) or "#40aaff",
+            "latlon": latlon,
+        })
+    air = []
+    for sp in plan.get("air_support_plans", []):
+        tgt = sp.get("target", [0, 0])
+        if isinstance(tgt, dict):
+            tx, ty = tgt.get("x", 0), tgt.get("y", 0)
+        else:
+            tx, ty = tgt[0], tgt[1]
+        alat, alon = xy_to_latlon(tx, ty)
+        air.append({
+            "call_sign": sp.get("call_sign", ""),
+            "support_type": sp.get("support_type", "cas"),
+            "target": [alat, alon],
+            "radius": sp.get("radius", 1500),
+        })
+    return {"routes": routes, "air_support": air}
 
 
 def _apply_plan_to_engine(eng, plan: dict) -> dict:
