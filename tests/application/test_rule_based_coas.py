@@ -32,7 +32,8 @@ def test_three_distinct_valid_coas():
     assert ids == ["COA1", "COA2", "COA3"]
     # 각 plan validate 통과
     for c in coas:
-        validate_mission_plan(c["plan"])
+        vr = validate_mission_plan(c["plan"])
+        assert vr["ok"], f"{c['id']} invalid: {vr['errors']}"
         assert c["plan"]["mission_plans"], f"{c['id']} 비어있음"
     # 서로 다른 계획(최소 waypoint 목표가 다름)
     sig = [str(c["plan"]["mission_plans"]) for c in coas]
@@ -43,3 +44,15 @@ def test_coas_have_labels_and_summary():
     coas = build_rule_based_coas(_state())
     for c in coas:
         assert c["label"] and c["doctrine"] and c["summary"]
+
+
+def test_three_distinct_when_all_units_damaged():
+    st = _state()
+    for u in st["units"]:
+        if u["side"] == "BLUFOR":
+            u["combat_power"] = 20.0   # 5 < cp < 30 → all defend
+    coas = build_rule_based_coas(st)
+    sigs = [str(c["plan"]["mission_plans"]) for c in coas]
+    assert len(set(sigs)) == 3, "손상 부대 전원 defend 시에도 3개 COA가 달라야 함"
+    for c in coas:
+        assert validate_mission_plan(c["plan"])["ok"]

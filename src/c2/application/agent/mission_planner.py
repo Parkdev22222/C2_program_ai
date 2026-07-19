@@ -690,24 +690,25 @@ def build_rule_based_coas(state: dict) -> list:
     targets = _coa_targets(state)          # [알파, 브라보, 찰리]
     alpha, bravo, charlie = targets[0], targets[1], targets[2]
 
-    def _attack_plan(u, dst, mid_offset=0.0):
+    def _attack_plan(u, dst, mid_offset=0.0, tag=""):
         """부대 u가 dst로 진격하는 mission_plan(중간 waypoint 1 + 목표)."""
         mx = round(u["x"] + (dst[0] - u["x"]) * 0.55)
         my = round(u["y"] + (dst[1] - u["y"]) * 0.55 + mid_offset)
         return {"company_id": u["id"], "mission_type": "attack",
                 "waypoints": [[mx, my], [round(dst[0]), round(dst[1])]],
-                "objective": f"통제구역 확보 ({int(dst[0])},{int(dst[1])})"}
+                "objective": f"통제구역 확보 ({int(dst[0])},{int(dst[1])}) [{tag}]"}
 
-    def _mk(u, dst, off):
+    def _mk(u, dst, off, tag=""):
         cp = u["combat_power"]
         if cp < 30:
             return {"company_id": u["id"], "mission_type": "defend",
-                    "waypoints": [[round(u["x"]), round(u["y"])]], "objective": "현위치 방어"}
-        return _attack_plan(u, dst, off)
+                    "waypoints": [[round(u["x"]), round(u["y"])]],
+                    "objective": f"현위치 방어 [{tag}]"}
+        return _attack_plan(u, dst, off, tag)
 
     # COA1 정면 집중: 전원 중앙(브라보)로
     coa1 = {"reasoning": "정면 집중 — 통제구역 중앙(브라보) 확보 우선, 기동부대 밀집 진격.",
-            "mission_plans": [_mk(u, bravo, 0.0) for u in blufor if u["combat_power"] > 5],
+            "mission_plans": [_mk(u, bravo, 0.0, "COA1") for u in blufor if u["combat_power"] > 5],
             "air_support_plans": _coa_air_plans(state, 2)}
     # COA2 측방 기동: 절반은 알파(좌), 절반은 찰리(우) — 측방 우회 offset
     plans2 = []
@@ -715,17 +716,17 @@ def build_rule_based_coas(state: dict) -> list:
         if u["combat_power"] <= 5:
             continue
         dst = alpha if i % 2 == 0 else charlie
-        plans2.append(_mk(u, dst, 600 if i % 2 == 0 else -600))
+        plans2.append(_mk(u, dst, 600 if i % 2 == 0 else -600, "COA2"))
     coa2 = {"reasoning": "측방 기동 — 통제구역 측면(알파·찰리)을 좌우로 나눠 우회 확보.",
             "mission_plans": plans2, "air_support_plans": _coa_air_plans(state, 1)}
     # COA3 화력 우선: 공중지원 최대, 기동부대는 중앙으로(보수적 접근)
-    # COA1과 mission_plans가 동일해질 수 있으므로(둘 다 bravo), 첫 부대 목표에 미세
-    # offset을 주어 서명(signature)이 달라지게 한다.
+    # 각 부대 objective에 COA 태그를 붙여, 전원 defend(cp<30)인 경우에도
+    # COA1/COA2/COA3의 mission_plans가 서로 달라지도록 보장한다.
     coa3_plans = []
     for i, u in enumerate(blufor):
         if u["combat_power"] <= 5:
             continue
-        coa3_plans.append(_mk(u, bravo, 100.0 if i == 0 else 0.0))
+        coa3_plans.append(_mk(u, bravo, 100.0 if i == 0 else 0.0, "COA3"))
     coa3 = {"reasoning": "화력 우선 — 공중지원·포병 최대 투사 후 통제구역 진격.",
             "mission_plans": coa3_plans, "air_support_plans": _coa_air_plans(state, 5)}
 
