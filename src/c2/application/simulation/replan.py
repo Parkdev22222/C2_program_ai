@@ -171,6 +171,25 @@ def generate_attack_coas(session) -> dict:
     return {"coas": coas, "history": history}
 
 
+def _coa_chat_context(coas: list) -> str:
+    """pending COA를 채팅 컨텍스트로 직렬화(수정 지시 포함). 없으면 빈 문자열."""
+    if not coas:
+        return ""
+    import json as _j
+    lines = []
+    for c in coas:
+        lines.append(f"- {c.get('id')} ({c.get('label','')}): {c.get('summary','')}\n"
+                     f"  plan={_j.dumps(c.get('plan', {}), ensure_ascii=False)}")
+    body = "\n".join(lines)
+    return (
+        "\n\n[현재 생성된 공격 COA 3개 — 사용자가 수정 요청 가능]\n"
+        f"{body}\n"
+        "사용자가 특정 COA(COA1/COA2/COA3) 수정을 요청하면, 수정된 전체 mission_plans/"
+        "air_support_plans JSON을 코드블록으로 출력하고 어느 COA인지 명시하라. "
+        "수정이 아니면 일반 전술 답변만 하라.\n"
+    )
+
+
 def execute_coa(session, index: int) -> dict:
     """선택 COA를 엔진에 적용(실행). 성공 시 pending 비움·시뮬 재개."""
     coas = session.pending_coas
@@ -345,23 +364,51 @@ def chat_send(session, message: str, history: list = None) -> dict:
             '형식: ```json\n{"air_support_plans":[{"call_sign":"ARTY-1","support_type":"artillery",'
             '"target":[위도,경도],"radius":2500,"delay":30}]}\n```\n\n'
         )
+    context += _coa_chat_context(session.pending_coas)
     history.append((message, "처리 중..."))
     if agent is None:
         history[-1] = (message, "에이전트가 초기화되지 않았습니다. main.py를 통해 실행해주세요.")
         return {"history": history}
+    updated_coas = None
     try:
         full_query = context + message if context else message
         response = agent.run(full_query, reset=False)
         resp_str = str(response)
-        # 채팅으로 화력지원/임무를 지시한 경우 → 응답 속 계획을 실제 워게임에 적용
-        applied_note = apply_chat_plan_if_any(eng, session.planner, resp_str)
-        if applied_note:
-            resp_str = resp_str + "\n\n" + applied_note
+        # pending COA가 있고 응답에 mission_plans JSON이 있으면 → COA 수정(엔진 미적용)
+        coas = session.pending_coas
+        handled_as_coa_edit = False
+        if coas:
+            try:
+                from c2.application.agent.mission_planner import MissionPlanner as _MP
+                parsed = _MP()._parse_json(resp_str)
+                if parsed and parsed.get("mission_plans"):
+                    idx = 0
+                    for k, tag in enumerate(("COA1", "COA2", "COA3")):
+                        if tag in resp_str:
+                            idx = k
+                            break
+                    if 0 <= idx < len(coas):
+                        coas[idx]["plan"] = parsed
+                        coas[idx]["preview"] = build_coa_preview(parsed, eng.get_state())
+                        session.set_pending_coas(coas)
+                        updated_coas = coas
+                        handled_as_coa_edit = True
+                        resp_str = resp_str + f"\n\n✏️ {coas[idx]['id']} 수정 반영됨 (버튼 클릭 시 실행)"
+            except Exception as _e:
+                logger.warning("[COA채팅수정] 파싱 실패(무시): %s", _e)
+        # COA 수정이 아니면 기존대로 채팅 계획 즉시 적용
+        if not handled_as_coa_edit:
+            applied_note = apply_chat_plan_if_any(eng, session.planner, resp_str)
+            if applied_note:
+                resp_str = resp_str + "\n\n" + applied_note
         history[-1] = (message, resp_str)
     except Exception as e:
         logger.error(f"WG chat error: {e}", exc_info=True)
         history[-1] = (message, f"오류: {e}")
-    return {"history": history}
+    result = {"history": history}
+    if updated_coas is not None:
+        result["coas"] = updated_coas
+    return result
 
 
 def request_recon_plan(session, history: list = None) -> dict:

@@ -407,7 +407,10 @@ def create_app(agent: Any = None) -> Any:
             result = _get_session().chat_send(req.message, [])
             history = result.get("history", [])
             response = history[-1][1] if history else ""
-            return JSONResponse({"response": response})
+            resp = {"response": response}
+            if result.get("coas") is not None:
+                resp["coas"] = result["coas"]
+            return JSONResponse(resp)
         except Exception as e:
             logger.exception("api_chat 오류")
             return JSONResponse({"error": str(e), "response": f"오류: {e}"}, status_code=500)
