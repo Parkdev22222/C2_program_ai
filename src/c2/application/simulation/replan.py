@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import queue
 
-from c2.application.agent.mission_planner import build_mission_query
+from c2.application.agent.mission_planner import build_mission_query, build_rule_based_coas
 from c2.domain.wargame.coordinates import (
     is_latlon_coords as _is_latlon_coords,
     latlon_to_xy as _latlon_to_xy,
@@ -100,6 +100,75 @@ def build_coa_preview(plan: dict, state: dict) -> dict:
             "radius": sp.get("radius", 1500),
         })
     return {"routes": routes, "air_support": air}
+
+
+_COA_DOCTRINE_HINT = {
+    "frontal": "이 COA는 '정면 집중' 교리다. 통제구역 중앙을 최단·집중 확보하도록 공격부대 waypoint를 중앙 통제구역으로 지향하라.",
+    "flank":   "이 COA는 '측방 기동' 교리다. 통제구역 좌우 측면을 우회로 나눠 확보하도록 부대를 좌/우로 분리해 측방 waypoint를 구성하라.",
+    "fires":   "이 COA는 '화력 우선' 교리다. 공중지원·포병을 최대한 활용하고, 기동부대는 화력 투사 후 통제구역으로 진격하라.",
+}
+
+
+def generate_attack_coas(session) -> dict:
+    """공격 COA 3개 생성(엔진 미적용). 규칙기반 백본 + (에이전트 있으면) LLM 대체.
+    반환: {"coas": [...], "history": [...]}."""
+    history = []
+    eng = session.ensure_engine()
+    if eng is None:
+        return {"coas": [], "history": [("⚔️ COA 생성", "엔진 없음")]}
+    # 생성 중 시뮬 일시정지(적용은 안 함)
+    was_running = eng.running
+    if was_running:
+        eng.stop()
+    state = eng.get_state()
+    coas = build_rule_based_coas(state)   # 결정적 백본
+
+    agent = session.agent
+    planner = session.planner
+    if agent is not None and planner is not None:
+        for coa in coas:
+            try:
+                query = (build_mission_query(state)
+                         + "\n\n" + _COA_DOCTRINE_HINT.get(coa["doctrine"], "")
+                         + "\n\n⚠️ 계획(mission_plans/air_support_plans) JSON만 출력하라. "
+                           "apply/적용 툴을 호출하지 말 것(엔진 적용 금지, 생성만).")
+                agent.reset_memory()
+                raw = agent.agent.run(query, reset=True)
+                p = planner._parse_json(str(raw))
+                if p and p.get("mission_plans"):
+                    coa["plan"] = p   # LLM 결과로 대체(미적용)
+            except Exception as _e:
+                logger.warning("[COA] LLM 생성 실패(%s) → 규칙기반 유지: %s", coa["id"], _e)
+
+    # 프리뷰 부착
+    for coa in coas:
+        coa["preview"] = build_coa_preview(coa["plan"], state)
+
+    session.set_pending_coas(coas)
+    history.append(("⚔️ 공격 COA 3개 생성", f"COA1~3 생성 완료 (엔진 미적용, 버튼 클릭 시 실행)"))
+    return {"coas": coas, "history": history}
+
+
+def execute_coa(session, index: int) -> dict:
+    """선택 COA를 엔진에 적용(실행). 성공 시 pending 비움·시뮬 재개."""
+    coas = session.pending_coas
+    if not coas or index < 0 or index >= len(coas):
+        return {"ok": False, "error": "유효하지 않은 COA 인덱스"}
+    eng = session.ensure_engine()
+    if eng is None:
+        return {"ok": False, "error": "엔진 없음"}
+    plan = coas[index].get("plan", {})
+    try:
+        eng.apply_mission_plan(plan)
+        if plan.get("air_support_plans"):
+            eng.apply_air_support_plan(plan)
+        eng.start()   # 시뮬 재개
+        label = coas[index].get("id", f"COA{index+1}")
+        session.clear_pending_coas()
+        return {"ok": True, "executed": label}
+    except Exception as e:
+        logger.exception("execute_coa 오류")
+        return {"ok": False, "error": str(e)}
 
 
 def _apply_plan_to_engine(eng, plan: dict) -> dict:
