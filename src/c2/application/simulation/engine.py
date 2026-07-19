@@ -883,18 +883,23 @@ class WargameEngine:
         """사거리 밖 일방 피격 시(양측): CP 건전하면 적 사거리로 돌입, 손상되면 엄폐·후방 이탈.
         돌입=적에 접근(거리 감소), 이탈=적에서 이격(거리 증가)하는 후보 중 엄폐 좋은 방향으로 이동."""
         charging = u.combat_power >= _CHARGE_CP_THRESHOLD
-        cur_d = u.distance_to(enemy)
+        # 적 방위 벡터(유닛→적)를 루프 밖에서 1회 계산 — 각 후보의 이동방향과 내적 비교
+        ex, ey = enemy.x - u.x, enemy.y - u.y
         best = None
         best_cover = -1.0
         for i in range(8):
             ang = math.radians(i * 45)
             cx = max(0.0, min(29_999.0, u.x + math.cos(ang) * _COMBAT_REPOS_RADIUS))
             cy = max(0.0, min(29_999.0, u.y + math.sin(ang) * _COMBAT_REPOS_RADIUS))
-            nd = math.hypot(cx - enemy.x, cy - enemy.y)
-            # 돌입=거리 감소 후보만 / 이탈=거리 증가 후보만
-            if charging and nd >= cur_d:
+            # 이동방향(내적) 기준 필터: 종단거리 대신 방향을 보면 캡된 부분 스텝 전체에서
+            # 거리제곱의 1차 도함수 부호가 t=0부터 유지되어 매 틱 단조성이 보장된다
+            # (이탈 중 후보가 거의 수직 방향일 때 종단거리 비교로는 순간적으로 더 가까워질 수 있었음).
+            mvx, mvy = cx - u.x, cy - u.y
+            dot = mvx * ex + mvy * ey
+            # 돌입=적 방향 성분(+) 후보만 / 이탈=적 반대 방향 성분(-) 후보만
+            if charging and dot <= 0:
                 continue
-            if not charging and nd <= cur_d:
+            if not charging and dot >= 0:
                 continue
             cov = terrain.cover_factor(cx, cy)
             if cov > best_cover:
