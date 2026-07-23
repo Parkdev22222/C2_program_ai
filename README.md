@@ -316,6 +316,13 @@ serve_kernel_port_as_window(7860)
 - **모델 다운로드 지연**: HuggingFace에서 32B 가중치를 받으므로 시간이 걸립니다. 필요 시 `huggingface-cli login`으로 토큰을 등록하세요.
 - **서버 종료**: `vllm_proc.terminate()` 또는 `!pkill -f "vllm serve"` 후 `!nvidia-smi`로 GPU 메모리 반환을 확인하세요.
 
+### 브랜치 안내
+
+- `main`: 안정 버전(배포/데모 기준)
+- `work`: 기능 개발 브랜치
+
+최신 기능 검증 후 `work`에서 `main`으로 병합한 뒤 README 변경사항을 함께 반영하세요.
+
 ---
 
 ## 워게임 시뮬레이터
